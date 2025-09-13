@@ -83,3 +83,8 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`server listening on ${PORT}`);
 });
+
+//Privacy Policy
+app.get("/privacy", (_req, res) => {
+  res.type("text").send("Privacy Policy: This GPT is for personal educational use only. No personal data is shared.");
+});
