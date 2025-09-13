@@ -76,6 +76,24 @@ app.post("/reset", async (req, res) => {
   }
 });
 
+app.get("/debug", async (_req, res) => {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const meta = {
+    hasUrl: !!url,
+    hasTok: !!token,
+    urlPrefix: url ? url.slice(0, 24) : null,
+    tokLen: token ? token.length : 0,
+  };
+  try {
+    const pong = await redis.ping();
+    res.json({ env: meta, redis: { ping: pong } });
+  } catch (e) {
+    res.status(500).json({ env: meta, error: String(e) });
+  }
+});
+
+
 // health
 app.get("/", (_req, res) => res.type("text").send("ok"));
 
