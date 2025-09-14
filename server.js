@@ -156,9 +156,7 @@ async function getSessionItems(sessionId) {
     if (typeof r === "string") {
       const t = r.trim();
       if (t.startsWith("{") || t.startsWith("[")) {
-        try { items.push(JSON.parse(t)); } catch { /* skip bad item */ }
-      } else {
-        // skip entries like "[object Object]"
+        try { items.push(JSON.parse(t)); } catch {}
       }
     }
   }
@@ -176,20 +174,15 @@ async function pushSessionItem(sessionId, item) {
 async function updateLastSessionItem(sessionId, patch) {
   const len = await redis.llen(kSessItems(sessionId));
   if (len === 0) return;
-
   const raw = await redis.lindex(kSessItems(sessionId), len - 1);
   let last = null;
   if (typeof raw === "string") {
     const t = raw.trim();
     if (t.startsWith("{") || t.startsWith("[")) {
-      try { last = JSON.parse(t); } catch { /* leave null */ }
+      try { last = JSON.parse(t); } catch {}
     }
   }
-  if (!last) {
-    // If the last entry is corrupt, just bail safely
-    return;
-  }
-
+  if (!last) return; // don't crash on corrupt data
   const updated = { ...last, ...patch };
   await redis.lset(kSessItems(sessionId), len - 1, JSON.stringify(updated));
 }
