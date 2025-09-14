@@ -228,6 +228,7 @@ Return ONLY JSON:
         { role: "user", content: JSON.stringify(userPayload) }
       ]
     });
+    debugResp("grade", resp);
     parsed = parseResponsesJSON(resp);
   } catch (e) {
     // If OpenAI itself errors (429/500/etc), fall back gracefully
