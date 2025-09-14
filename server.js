@@ -255,7 +255,7 @@ Return ONLY JSON like: {"question":"..."}.
 Question must be answerable in ONE word or ONE short sentence.
 The questions should be difficult questions designed to mimic questions an attending physician would as (or "pimp") a medical student or resident.
 Ensure you take into account the appropriate difficulty and topic. The questions should be primarily clinical and related to medicine. 
-The questions should be considered very challenging/difficult for that particular difficulty level. For example, if the difficulty is R1, the question should be considered very challenging for a first year resident. 
+The questions should be considered very challenging/difficult for that particular difficulty level. For example, if the difficulty is R1, the question should be considered challenging but doable for the top 20% of first year residents. 
 Avoid duplicates / near-duplicates of provided examples.`;
 
   const userPayload = { topic: topic || "random", difficulty: difficulty || "MSI3", avoid_examples: avoid };
