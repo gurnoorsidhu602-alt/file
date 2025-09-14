@@ -89,6 +89,23 @@ function debugResp(tag, resp) {
   } catch {}
 }
 
+// Peek at a session's stored items
+app.get("/admin/peek-session", async (req, res) => {
+  try {
+    const { sessionId } = req.query;
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+    const meta = await getSessionMeta(String(sessionId));
+    const items = await getSessionItems(String(sessionId));
+    res.json({
+      meta,
+      items_count: items.length,
+      last_item: items[items.length - 1] || null
+    });
+  } catch (e) {
+    res.status(500).json({ error: "peek failed", detail: String(e) });
+  }
+});
 
 // Helpers
 async function userExists(username) {
