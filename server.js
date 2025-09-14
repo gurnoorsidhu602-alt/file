@@ -155,7 +155,7 @@ Avoid duplicates / near-duplicates of provided examples.`;
   const resp = await openai.responses.create({
     model: "gpt-4.1-mini",
     temperature: 0.7,
-    response_format: { type: "json_object" },
+    text: { format: "json" },
     input: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
@@ -192,7 +192,7 @@ Return ONLY JSON:
   const resp = await openai.responses.create({
     model: "gpt-4.1-mini",
     temperature: 0,
-    response_format: { type: "json_object" },
+    text: { format: "json" },
     input: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
