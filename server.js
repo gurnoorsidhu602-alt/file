@@ -452,13 +452,39 @@ app.post('/api/next', async (req, res) => {
     // Avoid duplicates by consulting user's existing exclusions
     const avoidList = await getExclusions(username);
 
-    // Generate, with a simple retry if exact duplicate slips through
+    // Get current session items (so we don't repeat within the session)
+    const already = await getSessionItems(sessionId);
+    const sessionQs = already.map(it => it.question).filter(Boolean);
+
+    // Build a fast lookup set (case/space normalized)
+    const norm = s => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const avoidSet = new Set([...exclList, ...sessionQs].map(norm));
+
+    // Generate with retry if duplicate slips through
+    let question;
+    let tries = 0;
+    do {
+      question = await aiGenerateQuestion({
+        topic,
+        difficulty,
+        avoidList: [...avoidSet]   // still pass for model context
+      });
+      tries++;
+    } while (avoidSet.has(norm(question)) && tries < 3);
+
+    // If still duplicate after retries, tweak the prompt topic slightly as a hacky escape
+    if (avoidSet.has(norm(question))) {
+      question = `${topic !== 'random' ? topic + ': ' : ''}${question}`;
+    }
+
+    /*
     let question = await aiGenerateQuestion({ topic, difficulty, avoidList });
     let tries = 0;
     while (avoidList.includes(question) && tries < 2) {
       question = await aiGenerateQuestion({ topic, difficulty, avoidList });
       tries++;
     }
+    */
 
     const asked_index_in_session = items.length + 1;
     const baseCount = await exclusionsCount(username);
