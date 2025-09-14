@@ -190,6 +190,9 @@ async function getSessionItems(sessionId) {
       if (t.startsWith("{") || t.startsWith("[")) {
         try { items.push(JSON.parse(t)); } catch {}
       }
+    } else if (r && typeof r === "object" && !Array.isArray(r)) {
+      // Upstash client may already deserialize JSON -> object
+      items.push(r);
     }
   }
   return items;
@@ -197,26 +200,33 @@ async function getSessionItems(sessionId) {
 
 
 async function pushSessionItem(sessionId, item) {
-  // item shape:
-  // { question, topic, starting_difficulty, final_difficulty, asked_index_in_session,
-  //   user_answer, is_correct, explanation, asked_at }
-  await redis.rpush(kSessItems(sessionId), JSON.stringify(item));
+  await redis.rpush(kSessItems(sessionId), item);
 }
 
+// UPDATE last
 async function updateLastSessionItem(sessionId, patch) {
   const len = await redis.llen(kSessItems(sessionId));
   if (len === 0) return;
+
   const raw = await redis.lindex(kSessItems(sessionId), len - 1);
   let last = null;
+
   if (typeof raw === "string") {
     const t = raw.trim();
     if (t.startsWith("{") || t.startsWith("[")) {
       try { last = JSON.parse(t); } catch {}
     }
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    last = raw;
   }
-  if (!last) return; // don't crash on corrupt data
+
+  if (!last) return;
+
   const updated = { ...last, ...patch };
-  await redis.lset(kSessItems(sessionId), len - 1, JSON.stringify(updated));
+
+  // Write back using the same style as push (see below)
+  // If your push writes objects, write object. If it writes strings, JSON.stringify here too.
+  await redis.lset(kSessItems(sessionId), len - 1, updated);
 }
 
 
