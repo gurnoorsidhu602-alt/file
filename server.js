@@ -37,6 +37,38 @@ const kExcl = (u) => `excl:${u}`; // Redis LIST of question strings (ordered)
 const kSess = (s) => `sess:${s}`; // Redis HASH for session meta
 const kSessItems = (s) => `sess:${s}:items`; // Redis LIST of JSON strings (one per Q&A)
 
+//DEBUGGERS
+app.get("/admin/raw-items", async (req, res) => {
+  try {
+    const { sessionId } = req.query;
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+    const key = kSessItems(String(sessionId));
+    const raw = await redis.lrange(key, 0, -1);
+    res.json({
+      key,
+      length: raw.length,
+      items: raw.map((x, i) => ({ idx: i, typeof: typeof x, preview: String(x).slice(0, 120) }))
+    });
+  } catch (e) {
+    res.status(500).json({ error: "raw-items failed", detail: String(e) });
+  }
+});
+
+app.post("/admin/append-dummy", async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+    const key = kSessItems(String(sessionId));
+    const dummy = { question: "DUMMY?", final_difficulty: "MSI3", asked_at: Date.now() };
+    const newLen = await redis.rpush(key, JSON.stringify(dummy));
+    res.json({ ok: true, key, newLen });
+  } catch (e) {
+    res.status(500).json({ error: "append failed", detail: String(e) });
+  }
+});
+
+
+
 // put this helper near your other helpers
 // SAFE: never throws, only parses when a string clearly looks like JSON.
 function parseResponsesJSON(resp) {
