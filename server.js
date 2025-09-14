@@ -451,6 +451,7 @@ app.post('/api/next', async (req, res) => {
 
     // Avoid duplicates by consulting user's existing exclusions
     const avoidList = await getExclusions(username);
+    const exclList = await getExclusions(username);
 
     // Get current session items (so we don't repeat within the session)
     const already = await getSessionItems(sessionId);
