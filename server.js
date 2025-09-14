@@ -1,269 +1,399 @@
-// server.js
-import express from "express";
-import cors from "cors";
-import { Redis } from "@upstash/redis";
-import crypto from "crypto";
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import { Redis } from '@upstash/redis';
+import OpenAI from 'openai';
+import { v4 as uuid } from 'uuid';
+
+////////////////////////////////////////////////////////////////////////////////
+// CONFIG & INIT
+////////////////////////////////////////////////////////////////////////////////
 
 const app = express();
-app.use(express.json());
 app.use(cors());
+app.use(express.json());
 
-// -------- Upstash client (uses REST creds from env) --------
 const redis = new Redis({
-  url: (process.env.UPSTASH_REDIS_REST_URL || "").trim(),
-  token: (process.env.UPSTASH_REDIS_REST_TOKEN || "").trim(),
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN
 });
 
-// -------- Utils --------
-const log = (...a) => console.log(new Date().toISOString(), ...a);
-const norm = (s) => String(s || "").trim().toLowerCase();
-const key  = (user_id) => `user:${norm(user_id)}:topics`;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function getTopics(user_id) {
-  const k = key(user_id);
-  const raw = await redis.get(k);
-  log("GET_FROM_REDIS", { key: k, type: typeof raw, raw });
-  if (!raw) return [];
-  try {
-    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-async function putTopics(user_id, topics) {
-  const k = key(user_id);
-  await redis.set(k, JSON.stringify(topics));
-  log("SET_IN_REDIS", { key: k, value: topics });
-}
-
-// -------- Health --------
-app.get("/", (_req, res) => res.type("text").send("ok"));
-
-// Debug: verify env + Redis connectivity (safe: no secrets leaked)
-app.get("/debug", async (_req, res) => {
-  const url = process.env.UPSTASH_REDIS_REST_URL || "";
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN || "";
-  const meta = {
-    hasUrl: !!url,
-    hasTok: !!token,
-    urlPrefix: url.slice(0, 28),
-    tokLen: token.length,
-  };
-  try {
-    const pong = await redis.ping();
-    res.json({ env: meta, redis: { ping: pong } });
-  } catch (e) {
-    res.status(500).json({ env: meta, error: String(e) });
-  }
-});
-
-// Dump raw stored value for the user (handy for debugging)
-app.get("/dump", async (req, res) => {
-  const user_id = norm(req.query.user_id);
-  if (!user_id) return res.status(400).json({ error: "user_id is required" });
-  const k = key(user_id);
-  const raw = await redis.get(k);
-  res.json({ user_id, key: k, raw });
-});
-
-// -------- API --------
-app.get("/topics", async (req, res) => {
-  try {
-    const user_id = norm(req.query.user_id);
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
-    log("GET /topics", { user_id, key: key(user_id) });
-    const topics = await getTopics(user_id);
-    res.json({ user_id, topics });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-app.post("/topics", async (req, res) => {
-  try {
-    const user_id = norm((req.body || {}).user_id);
-    const topic   = (req.body || {}).topic;
-    if (!user_id || !topic) return res.status(400).json({ error: "user_id and topic are required" });
-    log("POST /topics", { user_id, topic, key: key(user_id) });
-
-    const topics = await getTopics(user_id);
-    const exists = topics.some((t) => t.toLowerCase() === String(topic).toLowerCase());
-    if (!exists) topics.push(topic);
-    await putTopics(user_id, topics);
-
-    res.json({ user_id, topics, added: topic });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-app.delete("/topics", async (req, res) => {
-  try {
-    const user_id = norm((req.body || {}).user_id);
-    const topic   = (req.body || {}).topic;
-    if (!user_id || !topic) return res.status(400).json({ error: "user_id and topic are required" });
-    log("DELETE /topics", { user_id, topic, key: key(user_id) });
-
-    const topics   = await getTopics(user_id);
-    const filtered = topics.filter((t) => t.toLowerCase() !== String(topic).toLowerCase());
-    await putTopics(user_id, filtered);
-
-    res.json({ user_id, topics: filtered, removed: topic });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-app.post("/reset", async (req, res) => {
-  try {
-    const user_id = norm((req.body || {}).user_id);
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
-    log("POST /reset", { user_id, key: key(user_id) });
-    await putTopics(user_id, []);
-    res.json({ user_id, topics: [] });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// ---------- Exclusions helpers ----------
-const qNorm = (s) => String(s || "").trim();             // keep case/punct (used for display)
-const qHash = (s) => crypto.createHash("sha256").update(qNorm(s).toLowerCase()).digest("hex");
-
-const renderExclusionTxt = (list) => list.map((q, i) => `${i + 1}. ${qNorm(q)}`).join("\n");
-
-const exKey = (user_id) => `user:${norm(user_id)}:exclusions:v1`;  // single JSON blob
-
-async function loadExclusions(user_id) {
-  const raw = await redis.get(exKey(user_id));
-  if (!raw) return { list: [], hashes: {} };
-  const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-  return {
-    list: Array.isArray(obj.list) ? obj.list : [],
-    hashes: obj.hashes && typeof obj.hashes === "object" ? obj.hashes : {},
-  };
-}
-
-async function saveExclusions(user_id, data) {
-  // data: { list: [...strings...], hashes: { sha256: true } }
-  await redis.set(exKey(user_id), JSON.stringify(data));
-}
-
-function renderExclusionTxt(list) {
-  // "1. First question\n2. Second question\n..."
-  return list.map((q, i) => `${i + 1}. ${q}`).join("\n");
-}
-
-// GET /exclusions/count?user_id=...
-app.get("/exclusions/count", async (req, res) => {
-  try {
-    const user_id = norm(req.query.user_id);
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
-    const { list } = await loadExclusions(user_id);
-    res.json({ user_id, count: list.length, next_number: list.length + 1 });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// GET /exclusions?user_id=...  → text/plain
-// Always returns the ENTIRE exclusion list as numbered lines.
-app.get("/exclusions", async (req, res) => {
-  try {
-    const user_id = norm(req.query.user_id);
-    if (!user_id) return res.status(400).type("text/plain").send("error: user_id is required");
-
-    const { list } = await loadExclusions(user_id);
-    const body = renderExclusionTxt(list); // "1. ...\n2. ...\n"
-    res.type("text/plain").send(body);
-  } catch (e) {
-    res.status(500).type("text/plain").send(`error: ${String(e)}`);
-  }
-});
-
-// POST /exclusions/merge  { user_id, new_questions: [string] }
-// Appends unique questions (exact-text dedup; case-insensitive).
-app.post("/exclusions/merge", async (req, res) => {
-  try {
-    const { user_id: uidRaw, new_questions } = req.body || {};
-    const user_id = norm(uidRaw);
-    if (!user_id || !Array.isArray(new_questions))
-      return res.status(400).json({ error: "user_id and new_questions[] are required" });
-
-    const MAX_TOPIC_LEN = 300; // prevent huge blobs
-    const src = new_questions
-      .map(qNorm)
-      .filter(Boolean)
-      .filter((q) => q.length <= MAX_TOPIC_LEN);
-
-    const data = await loadExclusions(user_id);
-    let added = 0;
-    for (const q of src) {
-      const h = qHash(q);
-      if (!data.hashes[h]) {
-        data.hashes[h] = true;
-        data.list.push(q);
-        added++;
-      }
-    }
-    await saveExclusions(user_id, data);
-
-    res.json({
-      user_id,
-      added,
-      new_count: data.list.length,
-      next_number: data.list.length + 1,
-      exclusion_text: renderExclusionTxt(data.list),
-    });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// POST /exclusions/import { user_id, text }   (optional one-time initializer)
-// Accepts the legacy TXT (numbered or not), replaces existing list.
-app.post("/exclusions/import", async (req, res) => {
-  try {
-    const { user_id: uidRaw, text } = req.body || {};
-    const user_id = norm(uidRaw);
-    if (!user_id || typeof text !== "string")
-      return res.status(400).json({ error: "user_id and text are required" });
-
-    const lines = text.split(/\r?\n/).map((ln) => ln.replace(/^\s*\d+\.\s*/, "").trim()).filter(Boolean);
-    const MAX_TOPIC_LEN = 300;
-    const list = [];
-    const hashes = {};
-    for (const q of lines) {
-      if (q.length > MAX_TOPIC_LEN) continue;
-      const h = qHash(q);
-      if (!hashes[h]) {
-        hashes[h] = true;
-        list.push(q);
-      }
-    }
-    await saveExclusions(user_id, { list, hashes });
-    res.json({ user_id, count: list.length, next_number: list.length + 1 });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// POST /exclusions/reset { user_id }   (nuke list)
-app.post("/exclusions/reset", async (req, res) => {
-  try {
-    const user_id = norm((req.body || {}).user_id);
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
-    await saveExclusions(user_id, { list: [], hashes: {} });
-    res.json({ user_id, count: 0, next_number: 1 });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-
-
-// -------- Start --------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => log(`server listening on ${PORT}`));
+
+// Difficulty ladder
+const DIFF = ["MSI1","MSI2","MSI3","MSI4","R1","R2","R3","R4","R5","Attending"];
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+const bumpDifficulty = (label, delta) => {
+  const i = DIFF.indexOf(label);
+  const next = i < 0 ? 2 : clamp(i + delta, 0, DIFF.length - 1);
+  return DIFF[next];
+};
+
+// Redis keys (per-username / per-session)
+const kUser = (u) => `user:${u}`;
+const kExcl = (u) => `excl:${u}`; // Redis LIST of question strings (ordered)
+const kSess = (s) => `sess:${s}`; // Redis HASH for session meta
+const kSessItems = (s) => `sess:${s}:items`; // Redis LIST of JSON strings (one per Q&A)
+
+// Helpers
+async function userExists(username) {
+  return Boolean(await redis.exists(kUser(username)));
+}
+
+async function createUser(username) {
+  // Simple marker key; hash allows future fields
+  await redis.hset(kUser(username), { created_at: Date.now() });
+}
+
+async function exclusionsCount(username) {
+  return await redis.llen(kExcl(username));
+}
+
+async function getExclusions(username) {
+  // full list (as strings)
+  return await redis.lrange(kExcl(username), 0, -1);
+}
+
+async function pushExclusions(username, questions) {
+  if (!questions?.length) return 0;
+  // RPUSH preserves order of session
+  return await redis.rpush(kExcl(username), ...questions);
+}
+
+async function createSession({ username, topic, startingDifficulty }) {
+  const id = uuid();
+  await redis.hset(kSess(id), {
+    username,
+    topic: topic || 'random',
+    start_diff: startingDifficulty || 'MSI3',
+    created_at: Date.now()
+  });
+  return id;
+}
+
+async function getSessionMeta(sessionId) {
+  const data = await redis.hgetall(kSess(sessionId));
+  if (!data || Object.keys(data).length === 0) return null;
+  return data;
+}
+
+async function getSessionItems(sessionId) {
+  const raw = await redis.lrange(kSessItems(sessionId), 0, -1);
+  return raw.map((r) => JSON.parse(r));
+}
+
+async function pushSessionItem(sessionId, item) {
+  // item shape:
+  // { question, topic, starting_difficulty, final_difficulty, asked_index_in_session,
+  //   user_answer, is_correct, explanation, asked_at }
+  await redis.rpush(kSessItems(sessionId), JSON.stringify(item));
+}
+
+async function updateLastSessionItem(sessionId, patch) {
+  // read last, patch, write back at same index
+  const len = await redis.llen(kSessItems(sessionId));
+  if (len === 0) return;
+  const last = JSON.parse(await redis.lindex(kSessItems(sessionId), len - 1));
+  const updated = { ...last, ...patch };
+  await redis.lset(kSessItems(sessionId), len - 1, JSON.stringify(updated));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// OPENAI HELPERS
+////////////////////////////////////////////////////////////////////////////////
+
+async function aiGenerateQuestion({ topic, difficulty, avoidList }) {
+  // Limit avoid list size to keep prompt lean
+  const avoid = Array.isArray(avoidList) ? avoidList.slice(-200) : [];
+
+  const system = `You are the question engine for "One Line Pimp Simulator".
+- Output JSON ONLY like: {"question":"..."}.
+- The question must be answerable in ONE word or ONE short sentence.
+- Make it clinically relevant (next step/drug/dose/diagnostic/criteria) or tightly clinically-relevant basic science.
+- Avoid duplicates and near-duplicates of the provided examples.
+- Do not include numbering; just the question text.`;
+
+  const userPayload = {
+    topic: topic || "random",
+    difficulty: difficulty || "MSI3",
+    avoid_examples: avoid
+  };
+
+  const resp = await openai.responses.create({
+    model: "gpt-4.1-mini",
+    temperature: 0.7,
+    input: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(userPayload) }
+    ]
+  });
+
+  const txt = resp.output_text?.trim() || resp.output?.[0]?.content?.[0]?.text || "{}";
+  let parsed;
+  try { parsed = JSON.parse(txt); } catch { parsed = {}; }
+  if (!parsed.question || typeof parsed.question !== "string") {
+    throw new Error("Bad question JSON from model.");
+  }
+  return parsed.question.trim();
+}
+
+async function aiGradeAnswer({ question, userAnswer, difficulty }) {
+  const system = `You grade medical answers tersely.
+Return JSON ONLY:
+{"is_correct": true|false, "explanation": "1-3 sentences if incorrect, else empty string", "difficulty_delta": -1|0|1}
+
+Rules:
+- If correct: is_correct=true, explanation="" (empty), difficulty_delta=+1.
+- If incorrect but close: is_correct=false, short explanation, difficulty_delta=+1 or 0 (your call).
+- If very wrong: is_correct=false, short explanation, difficulty_delta=-1.`;
+
+  const userPayload = {
+    question,
+    userAnswer,
+    difficulty
+  };
+
+  const resp = await openai.responses.create({
+    model: "gpt-4.1-mini",
+    temperature: 0,
+    input: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(userPayload) }
+    ]
+  });
+
+  const txt = resp.output_text?.trim() || resp.output?.[0]?.content?.[0]?.text || "{}";
+  let parsed;
+  try { parsed = JSON.parse(txt); } catch { parsed = {}; }
+
+  const is_correct = Boolean(parsed.is_correct);
+  const explanation = typeof parsed.explanation === "string" ? parsed.explanation : "";
+  let delta = Number(parsed.difficulty_delta);
+  if (![ -1, 0, 1 ].includes(delta)) delta = is_correct ? 1 : 0;
+
+  return { is_correct, explanation, difficulty_delta: delta };
+}
+
+async function aiSummarizeSession({ transcript, startDifficulty }) {
+  const system = `You are a strict medical educator. Summarize performance briefly and assign a single rating.
+Return JSON ONLY:
+{"feedback": "short feedback", "rating": "MSI1|MSI2|MSI3|MSI4|R1|R2|R3|R4|R5|Attending"}`;
+
+  const userPayload = {
+    startDifficulty: startDifficulty || "MSI3",
+    items: transcript.map(t => ({
+      question: t.question,
+      userAnswer: t.user_answer ?? "",
+      correct: !!t.is_correct,
+      explanation: t.explanation ?? ""
+    }))
+  };
+
+  const resp = await openai.responses.create({
+    model: "gpt-4.1",
+    temperature: 0,
+    input: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(userPayload) }
+    ]
+  });
+
+  const txt = resp.output_text?.trim() || resp.output?.[0]?.content?.[0]?.text || "{}";
+  let parsed;
+  try { parsed = JSON.parse(txt); } catch { parsed = {}; }
+
+  const feedback = typeof parsed.feedback === "string" ? parsed.feedback : "Good effort.";
+  const rating = DIFF.includes(parsed.rating) ? parsed.rating : "MSI3";
+  return { feedback, rating };
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ROUTES
+////////////////////////////////////////////////////////////////////////////////
+
+// Health check
+app.get('/health', async (_req, res) => {
+  try {
+    await redis.ping();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Create user
+app.post('/api/users', async (req, res) => {
+  try {
+    const { username } = req.body || {};
+    if (!username || typeof username !== 'string') {
+      return res.status(400).json({ error: "username required" });
+    }
+    if (await userExists(username)) {
+      return res.status(409).json({ error: "Username taken" });
+    }
+    await createUser(username);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to create user", detail: String(e) });
+  }
+});
+
+// Exclusions count
+app.get('/api/exclusions/count', async (req, res) => {
+  try {
+    const { username } = req.query;
+    if (!username) return res.status(400).json({ error: "username required" });
+    const count = await exclusionsCount(String(username));
+    res.json({ count });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to get count", detail: String(e) });
+  }
+});
+
+// Full exclusions list
+app.get('/api/exclusions', async (req, res) => {
+  try {
+    const { username } = req.query;
+    if (!username) return res.status(400).json({ error: "username required" });
+    const list = await getExclusions(String(username));
+    res.json({ questions: list });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to get exclusions", detail: String(e) });
+  }
+});
+
+// Start session
+app.post('/api/sessions', async (req, res) => {
+  try {
+    const { username, topic, startingDifficulty } = req.body || {};
+    if (!username) return res.status(400).json({ error: "username required" });
+    if (!(await userExists(username))) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const id = await createSession({ username, topic, startingDifficulty });
+    res.json({ sessionId: id, topic: topic || 'random', difficulty: startingDifficulty || 'MSI3' });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to create session", detail: String(e) });
+  }
+});
+
+// Next question
+app.post('/api/next', async (req, res) => {
+  try {
+    const { sessionId, topic: overrideTopic, difficulty: overrideDiff } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+    const meta = await getSessionMeta(sessionId);
+    if (!meta) return res.status(404).json({ error: "Session not found" });
+
+    const username = meta.username;
+    const topic = overrideTopic || meta.topic || 'random';
+
+    // Determine current difficulty: last session item or session start
+    const items = await getSessionItems(sessionId);
+    const lastDiff = items.length
+      ? items[items.length - 1].final_difficulty
+      : (overrideDiff || meta.start_diff || "MSI3");
+    const difficulty = lastDiff;
+
+    // Avoid duplicates by consulting user's existing exclusions
+    const avoidList = await getExclusions(username);
+
+    // Generate, with a simple retry if exact duplicate slips through
+    let question = await aiGenerateQuestion({ topic, difficulty, avoidList });
+    let tries = 0;
+    while (avoidList.includes(question) && tries < 2) {
+      question = await aiGenerateQuestion({ topic, difficulty, avoidList });
+      tries++;
+    }
+
+    const asked_index_in_session = items.length + 1;
+    const baseCount = await exclusionsCount(username);
+    const q_number = baseCount + asked_index_in_session;
+
+    await pushSessionItem(sessionId, {
+      question,
+      topic,
+      starting_difficulty: difficulty,
+      final_difficulty: difficulty,
+      asked_index_in_session,
+      asked_at: Date.now()
+    });
+
+    res.json({ q_number, question, difficulty });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to get next question", detail: String(e) });
+  }
+});
+
+// Grade answer
+app.post('/api/answer', async (req, res) => {
+  try {
+    const { sessionId, answer } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+    if (typeof answer !== "string") return res.status(400).json({ error: "answer required" });
+
+    const items = await getSessionItems(sessionId);
+    if (items.length === 0) return res.status(400).json({ error: "No question to grade" });
+    const last = items[items.length - 1];
+
+    const { is_correct, explanation, difficulty_delta } = await aiGradeAnswer({
+      question: last.question,
+      userAnswer: answer,
+      difficulty: last.final_difficulty
+    });
+
+    const nextDiff = bumpDifficulty(last.final_difficulty, difficulty_delta);
+
+    await updateLastSessionItem(sessionId, {
+      user_answer: answer,
+      is_correct,
+      explanation,
+      final_difficulty: nextDiff
+    });
+
+    res.json({ correct: is_correct, explanation, nextDifficulty: nextDiff });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to grade answer", detail: String(e) });
+  }
+});
+
+// Conclude session (merge to exclusions, return new_count, next_number, feedback, rating)
+app.post('/api/conclude', async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+    const meta = await getSessionMeta(sessionId);
+    if (!meta) return res.status(404).json({ error: "Session not found" });
+
+    const username = meta.username;
+    const transcript = await getSessionItems(sessionId);
+
+    // Merge all session questions into user's exclusions
+    const newQs = transcript.map(t => t.question);
+    await pushExclusions(username, newQs);
+
+    const new_count = await exclusionsCount(username);
+    const next_number = new_count + 1;
+
+    const { feedback, rating } = await aiSummarizeSession({
+      transcript,
+      startDifficulty: meta.start_diff
+    });
+
+    res.json({ new_count, next_number, feedback, rating });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to conclude session", detail: String(e) });
+  }
+});
+
+////////////////////////////////////////////////////////////////////////////////
+// START
+////////////////////////////////////////////////////////////////////////////////
+
+app.listen(PORT, () => {
+  console.log(`Server listening on :${PORT}`);
+});
