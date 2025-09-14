@@ -132,6 +132,8 @@ app.post("/reset", async (req, res) => {
 const qNorm = (s) => String(s || "").trim();             // keep case/punct (used for display)
 const qHash = (s) => crypto.createHash("sha256").update(qNorm(s).toLowerCase()).digest("hex");
 
+const renderExclusionTxt = (list) => list.map((q, i) => `${i + 1}. ${qNorm(q)}`).join("\n");
+
 const exKey = (user_id) => `user:${norm(user_id)}:exclusions:v1`;  // single JSON blob
 
 async function loadExclusions(user_id) {
@@ -166,22 +168,18 @@ app.get("/exclusions/count", async (req, res) => {
   }
 });
 
-// GET /exclusions?user_id=...&limit=50&offset=0   (paginated)
+// GET /exclusions?user_id=...  → text/plain
+// Always returns the ENTIRE exclusion list as numbered lines.
 app.get("/exclusions", async (req, res) => {
   try {
     const user_id = norm(req.query.user_id);
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
-    const limit  = Math.max(1, Math.min(parseInt(req.query.limit ?? "50", 10) || 50, 200));
-    const offset = Math.max(0, parseInt(req.query.offset ?? "0", 10) || 0);
+    if (!user_id) return res.status(400).type("text/plain").send("error: user_id is required");
 
     const { list } = await loadExclusions(user_id);
-    const total = list.length;
-    const slice = list.slice(offset, offset + limit);
-    const next_offset = offset + limit < total ? offset + limit : null;
-
-    res.json({ user_id, total, limit, offset, next_offset, questions: slice });
+    const body = renderExclusionTxt(list); // "1. ...\n2. ...\n"
+    res.type("text/plain").send(body);
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    res.status(500).type("text/plain").send(`error: ${String(e)}`);
   }
 });
 
