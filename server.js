@@ -38,37 +38,56 @@ const kSess = (s) => `sess:${s}`; // Redis HASH for session meta
 const kSessItems = (s) => `sess:${s}:items`; // Redis LIST of JSON strings (one per Q&A)
 
 // put this helper near your other helpers
+// SAFE: never throws, only parses when a string clearly looks like JSON.
 function parseResponsesJSON(resp) {
-  // 1) Best case: aggregated text
-  if (typeof resp?.output_text === "string") {
-    const t = resp.output_text.trim();
-    if (t.startsWith("{") || t.startsWith("[")) {
-      try { return JSON.parse(t); } catch {}
+  try {
+    // A) Aggregated text
+    const t1 = typeof resp?.output_text === "string" ? resp.output_text.trim() : "";
+    if (t1 && (t1.startsWith("{") || t1.startsWith("["))) {
+      return JSON.parse(t1);
     }
-  }
 
-  // 2) Inspect first part
-  const part = resp?.output?.[0]?.content?.[0];
-  if (!part) return null;
+    // B) First content part
+    const part = resp?.output?.[0]?.content?.[0];
+    if (!part) return null;
 
-  if (typeof part.text === "string") {
-    const t = part.text.trim();
-    if (t.startsWith("{") || t.startsWith("[")) {
-      try { return JSON.parse(t); } catch {}
+    // text field (string)
+    const t2 = typeof part?.text === "string" ? part.text.trim() : "";
+    if (t2 && (t2.startsWith("{") || t2.startsWith("["))) {
+      return JSON.parse(t2);
     }
-  }
 
-  if (part && typeof part.json === "object" && part.json !== null) {
-    return part.json;
-  }
+    // explicit json field (already parsed)
+    if (part && typeof part.json === "object" && part.json !== null) {
+      return part.json;
+    }
 
-  if (typeof part === "object" && part !== null && !Array.isArray(part)) {
-    return part;
-  }
+    // the part itself might already be a JSON object
+    if (part && typeof part === "object" && !Array.isArray(part)) {
+      return part;
+    }
 
-  return null;
+    return null;
+  } catch {
+    // never throw
+    return null;
+  }
 }
 
+//DEBUG
+function debugResp(tag, resp) {
+  try {
+    console.log(`[${tag}] typeof output_text=`, typeof resp?.output_text);
+    if (typeof resp?.output_text === "string") {
+      console.log(`[${tag}] output_text (first 200):`, resp.output_text.slice(0, 200));
+    }
+    const part = resp?.output?.[0]?.content?.[0];
+    console.log(`[${tag}] part keys:`, part ? Object.keys(part) : null);
+    if (typeof part?.text === "string") {
+      console.log(`[${tag}] part.text (first 200):`, part.text.slice(0, 200));
+    }
+  } catch {}
+}
 
 
 // Helpers
@@ -178,7 +197,8 @@ Avoid duplicates / near-duplicates of provided examples.`;
 
 
 async function aiGradeAnswer({ question, userAnswer, difficulty }) {
-  if (process.env.MOCK_AI === '1') {
+  // Mock path to keep you unblocked if quota/rate-limit/whatever:
+  if (process.env.MOCK_AI === "1") {
     const golds = {
       "First-line treatment for status asthmaticus?": "nebulized saba and ipratropium",
       "Antidote for organophosphate poisoning?": "atropine and pralidoxime",
@@ -187,7 +207,7 @@ async function aiGradeAnswer({ question, userAnswer, difficulty }) {
       "Target INR for mechanical mitral valve?": "3.0"
     };
     const gold = (golds[question] || "").toLowerCase().trim();
-    const ans = String(userAnswer || "").toLowerCase().trim();
+    const ans  = String(userAnswer || "").toLowerCase().trim();
     const is_correct = gold && (ans === gold || gold.includes(ans) || ans.includes(gold));
     return { is_correct, explanation: is_correct ? "" : (gold ? `Correct: ${gold}.` : "Reviewed."), difficulty_delta: is_correct ? 1 : 0 };
   }
@@ -198,22 +218,35 @@ Return ONLY JSON:
 
   const userPayload = { question, userAnswer, difficulty };
 
-  const resp = await openai.responses.create({
-    model: "gpt-4.1-mini",
-    temperature: 0,
-    input: [
-      { role: "system", content: system },
-      { role: "user", content: JSON.stringify(userPayload) }
-    ]
-  });
+  let parsed = null;
+  try {
+    const resp = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      temperature: 0,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: JSON.stringify(userPayload) }
+      ]
+    });
+    parsed = parseResponsesJSON(resp);
+  } catch (e) {
+    // If OpenAI itself errors (429/500/etc), fall back gracefully
+    return { is_correct: false, explanation: "Grader unavailable; keeping same difficulty.", difficulty_delta: 0 };
+  }
 
-  const parsed = parseResponsesJSON(resp) || {};
+  // If parsing failed or fields missing, also fail gracefully
+  if (!parsed || (parsed.is_correct === undefined && parsed.explanation === undefined)) {
+    return { is_correct: false, explanation: "Grader returned unexpected format.", difficulty_delta: 0 };
+  }
+
   const is_correct = !!parsed.is_correct;
   const explanation = typeof parsed.explanation === "string" ? parsed.explanation : "";
   let delta = Number(parsed.difficulty_delta);
   if (![ -1, 0, 1 ].includes(delta)) delta = is_correct ? 1 : 0;
+
   return { is_correct, explanation, difficulty_delta: delta };
 }
+
 
 
 async function aiSummarizeSession({ transcript, startDifficulty }) {
