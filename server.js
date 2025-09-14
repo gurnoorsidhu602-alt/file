@@ -37,6 +37,30 @@ const kExcl = (u) => `excl:${u}`; // Redis LIST of question strings (ordered)
 const kSess = (s) => `sess:${s}`; // Redis HASH for session meta
 const kSessItems = (s) => `sess:${s}:items`; // Redis LIST of JSON strings (one per Q&A)
 
+// put this helper near your other helpers
+function parseResponsesJSON(resp) {
+  // 1) Best case: OpenAI aggregates valid JSON here
+  if (typeof resp.output_text === 'string' && resp.output_text.trim().startsWith('{')) {
+    try { return JSON.parse(resp.output_text); } catch {}
+  }
+
+  // 2) Raw parts
+  const part = resp?.output?.[0]?.content?.[0];
+  if (!part) return null;
+
+  // a) Some SDKs return { type: 'output_text', text: '..."' }
+  if (typeof part.text === 'string' && part.text.trim().startsWith('{')) {
+    try { return JSON.parse(part.text); } catch {}
+  }
+
+  // b) Some SDKs return a parsed object under "json" or as the part itself
+  if (part.json && typeof part.json === 'object') return part.json;
+  if (typeof part === 'object' && !Array.isArray(part)) return part;
+
+  return null;
+}
+
+
 // Helpers
 async function userExists(username) {
   return Boolean(await redis.exists(kUser(username)));
@@ -105,76 +129,84 @@ async function updateLastSessionItem(sessionId, patch) {
 ////////////////////////////////////////////////////////////////////////////////
 
 async function aiGenerateQuestion({ topic, difficulty, avoidList }) {
-  // Limit avoid list size to keep prompt lean
+  if (process.env.MOCK_AI === '1') {
+    const pool = (Array.isArray(avoidList) ? avoidList : []);
+    const bank = [
+      "First-line treatment for status asthmaticus?",
+      "Antidote for organophosphate poisoning?",
+      "Next step for suspected PE in a hemodynamically stable patient?",
+      "Diagnostic test of choice for C. difficile infection?",
+      "Target INR for mechanical mitral valve?"
+    ];
+    const q = bank.find(b => !pool.includes(b)) || "Dose of epinephrine IM for anaphylaxis in adults?";
+    return q;
+  }
+
   const avoid = Array.isArray(avoidList) ? avoidList.slice(-200) : [];
 
   const system = `You are the question engine for "One Line Pimp Simulator".
-- Output JSON ONLY like: {"question":"..."}.
-- The question must be answerable in ONE word or ONE short sentence.
-- Make it clinically relevant (next step/drug/dose/diagnostic/criteria) or tightly clinically-relevant basic science.
-- Avoid duplicates and near-duplicates of the provided examples.
-- Do not include numbering; just the question text.`;
+Return ONLY JSON like: {"question":"..."}.
+Question must be answerable in ONE word or ONE short sentence.
+Keep it clinical or tightly clinically-relevant basic science.
+Avoid duplicates / near-duplicates of provided examples.`;
 
-  const userPayload = {
-    topic: topic || "random",
-    difficulty: difficulty || "MSI3",
-    avoid_examples: avoid
-  };
+  const userPayload = { topic: topic || "random", difficulty: difficulty || "MSI3", avoid_examples: avoid };
 
   const resp = await openai.responses.create({
     model: "gpt-4.1-mini",
     temperature: 0.7,
+    response_format: { type: "json_object" },
     input: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
     ]
   });
 
-  const txt = resp.output_text?.trim() || resp.output?.[0]?.content?.[0]?.text || "{}";
-  let parsed;
-  try { parsed = JSON.parse(txt); } catch { parsed = {}; }
-  if (!parsed.question || typeof parsed.question !== "string") {
-    throw new Error("Bad question JSON from model.");
-  }
+  const parsed = parseResponsesJSON(resp) || {};
+  if (!parsed.question || typeof parsed.question !== "string") throw new Error("Bad question JSON");
   return parsed.question.trim();
 }
 
+
 async function aiGradeAnswer({ question, userAnswer, difficulty }) {
-  const system = `You grade medical answers tersely.
-Return JSON ONLY:
-{"is_correct": true|false, "explanation": "1-3 sentences if incorrect, else empty string", "difficulty_delta": -1|0|1}
+  if (process.env.MOCK_AI === '1') {
+    const golds = {
+      "First-line treatment for status asthmaticus?": "nebulized saba and ipratropium",
+      "Antidote for organophosphate poisoning?": "atropine and pralidoxime",
+      "Next step for suspected PE in a hemodynamically stable patient?": "ctpa",
+      "Diagnostic test of choice for C. difficile infection?": "stool pcr",
+      "Target INR for mechanical mitral valve?": "3.0"
+    };
+    const gold = (golds[question] || "").toLowerCase().trim();
+    const ans = String(userAnswer || "").toLowerCase().trim();
+    const is_correct = gold && (ans === gold || gold.includes(ans) || ans.includes(gold));
+    return { is_correct, explanation: is_correct ? "" : (gold ? `Correct: ${gold}.` : "Reviewed."), difficulty_delta: is_correct ? 1 : 0 };
+  }
 
-Rules:
-- If correct: is_correct=true, explanation="" (empty), difficulty_delta=+1.
-- If incorrect but close: is_correct=false, short explanation, difficulty_delta=+1 or 0 (your call).
-- If very wrong: is_correct=false, short explanation, difficulty_delta=-1.`;
+  const system = `Grade medical answers tersely.
+Return ONLY JSON:
+{"is_correct": true|false, "explanation": "1-3 sentences if incorrect else empty", "difficulty_delta": -1|0|1}`;
 
-  const userPayload = {
-    question,
-    userAnswer,
-    difficulty
-  };
+  const userPayload = { question, userAnswer, difficulty };
 
   const resp = await openai.responses.create({
     model: "gpt-4.1-mini",
     temperature: 0,
+    response_format: { type: "json_object" },
     input: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
     ]
   });
 
-  const txt = resp.output_text?.trim() || resp.output?.[0]?.content?.[0]?.text || "{}";
-  let parsed;
-  try { parsed = JSON.parse(txt); } catch { parsed = {}; }
-
-  const is_correct = Boolean(parsed.is_correct);
+  const parsed = parseResponsesJSON(resp) || {};
+  const is_correct = !!parsed.is_correct;
   const explanation = typeof parsed.explanation === "string" ? parsed.explanation : "";
   let delta = Number(parsed.difficulty_delta);
   if (![ -1, 0, 1 ].includes(delta)) delta = is_correct ? 1 : 0;
-
   return { is_correct, explanation, difficulty_delta: delta };
 }
+
 
 async function aiSummarizeSession({ transcript, startDifficulty }) {
   const system = `You are a strict medical educator. Summarize performance briefly and assign a single rating.
