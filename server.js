@@ -2,6 +2,7 @@
 import express from "express";
 import cors from "cors";
 import { Redis } from "@upstash/redis";
+import crypto from "crypto";
 
 const app = express();
 app.use(express.json());
@@ -126,6 +127,144 @@ app.post("/reset", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
+
+// ---------- Exclusions helpers ----------
+const qNorm = (s) => String(s || "").trim();             // keep case/punct (used for display)
+const qHash = (s) => crypto.createHash("sha256").update(qNorm(s).toLowerCase()).digest("hex");
+
+const exKey = (user_id) => `user:${norm(user_id)}:exclusions:v1`;  // single JSON blob
+
+async function loadExclusions(user_id) {
+  const raw = await redis.get(exKey(user_id));
+  if (!raw) return { list: [], hashes: {} };
+  const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+  return {
+    list: Array.isArray(obj.list) ? obj.list : [],
+    hashes: obj.hashes && typeof obj.hashes === "object" ? obj.hashes : {},
+  };
+}
+
+async function saveExclusions(user_id, data) {
+  // data: { list: [...strings...], hashes: { sha256: true } }
+  await redis.set(exKey(user_id), JSON.stringify(data));
+}
+
+function renderExclusionTxt(list) {
+  // "1. First question\n2. Second question\n..."
+  return list.map((q, i) => `${i + 1}. ${q}`).join("\n");
+}
+
+// GET /exclusions/count?user_id=...
+app.get("/exclusions/count", async (req, res) => {
+  try {
+    const user_id = norm(req.query.user_id);
+    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+    const { list } = await loadExclusions(user_id);
+    res.json({ user_id, count: list.length, next_number: list.length + 1 });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// GET /exclusions?user_id=...&limit=50&offset=0   (paginated)
+app.get("/exclusions", async (req, res) => {
+  try {
+    const user_id = norm(req.query.user_id);
+    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+    const limit  = Math.max(1, Math.min(parseInt(req.query.limit ?? "50", 10) || 50, 200));
+    const offset = Math.max(0, parseInt(req.query.offset ?? "0", 10) || 0);
+
+    const { list } = await loadExclusions(user_id);
+    const total = list.length;
+    const slice = list.slice(offset, offset + limit);
+    const next_offset = offset + limit < total ? offset + limit : null;
+
+    res.json({ user_id, total, limit, offset, next_offset, questions: slice });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /exclusions/merge  { user_id, new_questions: [string] }
+// Appends unique questions (exact-text dedup; case-insensitive).
+app.post("/exclusions/merge", async (req, res) => {
+  try {
+    const { user_id: uidRaw, new_questions } = req.body || {};
+    const user_id = norm(uidRaw);
+    if (!user_id || !Array.isArray(new_questions))
+      return res.status(400).json({ error: "user_id and new_questions[] are required" });
+
+    const MAX_TOPIC_LEN = 300; // prevent huge blobs
+    const src = new_questions
+      .map(qNorm)
+      .filter(Boolean)
+      .filter((q) => q.length <= MAX_TOPIC_LEN);
+
+    const data = await loadExclusions(user_id);
+    let added = 0;
+    for (const q of src) {
+      const h = qHash(q);
+      if (!data.hashes[h]) {
+        data.hashes[h] = true;
+        data.list.push(q);
+        added++;
+      }
+    }
+    await saveExclusions(user_id, data);
+
+    res.json({
+      user_id,
+      added,
+      new_count: data.list.length,
+      next_number: data.list.length + 1,
+      exclusion_text: renderExclusionTxt(data.list),
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /exclusions/import { user_id, text }   (optional one-time initializer)
+// Accepts the legacy TXT (numbered or not), replaces existing list.
+app.post("/exclusions/import", async (req, res) => {
+  try {
+    const { user_id: uidRaw, text } = req.body || {};
+    const user_id = norm(uidRaw);
+    if (!user_id || typeof text !== "string")
+      return res.status(400).json({ error: "user_id and text are required" });
+
+    const lines = text.split(/\r?\n/).map((ln) => ln.replace(/^\s*\d+\.\s*/, "").trim()).filter(Boolean);
+    const MAX_TOPIC_LEN = 300;
+    const list = [];
+    const hashes = {};
+    for (const q of lines) {
+      if (q.length > MAX_TOPIC_LEN) continue;
+      const h = qHash(q);
+      if (!hashes[h]) {
+        hashes[h] = true;
+        list.push(q);
+      }
+    }
+    await saveExclusions(user_id, { list, hashes });
+    res.json({ user_id, count: list.length, next_number: list.length + 1 });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /exclusions/reset { user_id }   (nuke list)
+app.post("/exclusions/reset", async (req, res) => {
+  try {
+    const user_id = norm((req.body || {}).user_id);
+    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+    await saveExclusions(user_id, { list: [], hashes: {} });
+    res.json({ user_id, count: 0, next_number: 1 });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+
 
 // -------- Start --------
 const PORT = process.env.PORT || 3000;
