@@ -39,26 +39,36 @@ const kSessItems = (s) => `sess:${s}:items`; // Redis LIST of JSON strings (one 
 
 // put this helper near your other helpers
 function parseResponsesJSON(resp) {
-  // 1) Best case: OpenAI aggregates valid JSON here
-  if (typeof resp.output_text === 'string' && resp.output_text.trim().startsWith('{')) {
-    try { return JSON.parse(resp.output_text); } catch {}
+  // 1) Best case: aggregated text
+  if (typeof resp?.output_text === "string") {
+    const t = resp.output_text.trim();
+    if (t.startsWith("{") || t.startsWith("[")) {
+      try { return JSON.parse(t); } catch {}
+    }
   }
 
-  // 2) Raw parts
+  // 2) Inspect first part
   const part = resp?.output?.[0]?.content?.[0];
   if (!part) return null;
 
-  // a) Some SDKs return { type: 'output_text', text: '..."' }
-  if (typeof part.text === 'string' && part.text.trim().startsWith('{')) {
-    try { return JSON.parse(part.text); } catch {}
+  if (typeof part.text === "string") {
+    const t = part.text.trim();
+    if (t.startsWith("{") || t.startsWith("[")) {
+      try { return JSON.parse(t); } catch {}
+    }
   }
 
-  // b) Some SDKs return a parsed object under "json" or as the part itself
-  if (part.json && typeof part.json === 'object') return part.json;
-  if (typeof part === 'object' && !Array.isArray(part)) return part;
+  if (part && typeof part.json === "object" && part.json !== null) {
+    return part.json;
+  }
+
+  if (typeof part === "object" && part !== null && !Array.isArray(part)) {
+    return part;
+  }
 
   return null;
 }
+
 
 
 // Helpers
