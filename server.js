@@ -134,8 +134,20 @@ async function getSessionMeta(sessionId) {
 
 async function getSessionItems(sessionId) {
   const raw = await redis.lrange(kSessItems(sessionId), 0, -1);
-  return raw.map((r) => JSON.parse(r));
+  const items = [];
+  for (const r of raw) {
+    if (typeof r === "string") {
+      const t = r.trim();
+      if (t.startsWith("{") || t.startsWith("[")) {
+        try { items.push(JSON.parse(t)); } catch { /* skip bad item */ }
+      } else {
+        // skip entries like "[object Object]"
+      }
+    }
+  }
+  return items;
 }
+
 
 async function pushSessionItem(sessionId, item) {
   // item shape:
@@ -145,13 +157,26 @@ async function pushSessionItem(sessionId, item) {
 }
 
 async function updateLastSessionItem(sessionId, patch) {
-  // read last, patch, write back at same index
   const len = await redis.llen(kSessItems(sessionId));
   if (len === 0) return;
-  const last = JSON.parse(await redis.lindex(kSessItems(sessionId), len - 1));
+
+  const raw = await redis.lindex(kSessItems(sessionId), len - 1);
+  let last = null;
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    if (t.startsWith("{") || t.startsWith("[")) {
+      try { last = JSON.parse(t); } catch { /* leave null */ }
+    }
+  }
+  if (!last) {
+    // If the last entry is corrupt, just bail safely
+    return;
+  }
+
   const updated = { ...last, ...patch };
   await redis.lset(kSessItems(sessionId), len - 1, JSON.stringify(updated));
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // OPENAI HELPERS
