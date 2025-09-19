@@ -31,6 +31,62 @@ const bumpDifficulty = (label, delta) => {
   return DIFF[next];
 };
 
+// --- AI username moderation (keeps usernames case-sensitive) ---
+const OPENAI_MOD_URL = "https://api.openai.com/v1/moderations";
+// Optional: set behavior if the moderation call fails (true = allow; false = block)
+const ALLOW_ON_MOD_FAIL = true;
+
+/**
+ * Returns true if the username is acceptable, false if it's over the line.
+ * Uses OpenAI's moderation model (text-only here).
+ */
+async function isUsernameAllowedAI(username) {
+  try {
+    const resp = await fetch(OPENAI_MOD_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "omni-moderation-latest",
+        input: username, // keep original casing; judgment is case-insensitive internally
+      }),
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data?.error?.message || resp.statusText);
+
+    // Normalized access across possible shapes
+    const r = Array.isArray(data.results) ? data.results[0] : data;
+    const c = r.categories || {};
+    const s = r.category_scores || r.scores || {};
+    const flagged = r.flagged === true;
+
+    // We block only the clearly over-the-top categories.
+    // "Edgy jokes" will usually not trip these thresholds.
+    const blockHardFlags =
+      c.hate === true || c.hate_threatening === true ||
+      c.harassment_threats === true || // explicit threats
+      c.sexual_minors === true ||
+      c.violence_graphic === true;
+
+    // For softer categories, use higher probability thresholds so borderline stuff passes.
+    const blockByScore =
+      (s.hate || 0) > 0.50 ||
+      (s.hate_threatening || 0) > 0.40 ||
+      (s.harassment_threats || 0) > 0.50 ||
+      (s.sexual_minors || 0) > 0.20 ||
+      (s.violence_graphic || 0) > 0.40;
+
+    return !(flagged || blockHardFlags || blockByScore);
+  } catch (e) {
+    console.error("Moderation check failed:", e);
+    return ALLOW_ON_MOD_FAIL; // choose fail-open by default; flip to false to be stricter
+  }
+}
+
+
 // Redis keys (per-username / per-session)
 const kUser = (u) => `user:${u}`;
 const kExcl = (u) => `excl:${u}`; // Redis LIST of question strings (ordered)
@@ -428,6 +484,14 @@ app.post('/api/users', async (req, res) => {
     if (!username || typeof username !== 'string') {
       return res.status(400).json({ error: "username required" });
     }
+    
+    // AI moderation gate (case-sensitive username preserved)
+    const ok = await isUsernameAllowedAI(username);
+    if (!ok) {
+      return res.status(400).json({ error: 'That username isn’t allowed. Please choose something else.' });
+    }
+    
+    
     if (await userExists(username)) {
       return res.status(409).json({ error: "Username taken" });
     }
