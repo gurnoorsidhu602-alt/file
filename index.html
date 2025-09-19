@@ -6,40 +6,109 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <style>
     :root{
-      --bg:#0b0f14;--panel:#121822;--muted:#9fb0c3;--text:#e9f1f7;
-      --accent:#6ae3ff;--ok:#3bd280;--bad:#ff6b6b;--border:#243245
+      /* Dark purple-blue palette */
+      --bg:#0b0a14;
+      --panel:#121228;
+      --panel2:#17173a;
+      --muted:#9aa3c7;
+      --text:#edf0ff;
+      --accent:#7c7cff;
+      --accent2:#8ee1ff;
+      --ok:#3ee089;
+      --bad:#ff6e86;
+      --border:#2a2a5a;
+      --chip:#1c1c3b;
+      --pill:#23235a;
+      --gold:#ffda6b;
     }
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,Segoe UI,Roboto,sans-serif}
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;background:radial-gradient(1200px 800px at 20% -10%,rgba(124,124,255,.12),transparent),
+                      radial-gradient(1200px 800px at 120% 10%,rgba(142,225,255,.08),transparent),
+                      var(--bg);
+      color:var(--text);
+      font:16px/1.5 system-ui, Segoe UI, Roboto, sans-serif;
+      letter-spacing:.2px;
+    }
+
     header{
-      position:sticky;top:0;z-index:5;background:rgba(11,15,20,.85);backdrop-filter:blur(8px);
+      position:sticky;top:0;z-index:5;
+      background:linear-gradient(180deg, rgba(18,18,40,.92), rgba(18,18,40,.75));
+      backdrop-filter:blur(10px);
       border-bottom:1px solid var(--border)
     }
-    .nav{max-width:1000px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:10px}
-    .title{font-weight:700}
+    .nav{max-width:1100px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:12px}
+    .title{font-weight:700;opacity:.9}
     .spacer{flex:1}
-    .bubble{width:10px;height:10px;border-radius:50%;background:#777;border:1px solid #555;display:inline-block;margin-left:6px;vertical-align:middle}
-    .bubble.ok{background:var(--ok);box-shadow:0 0 0 2px rgba(59,210,128,.15)}
+    .bubble{width:10px;height:10px;border-radius:50%;background:#6a6a9c;border:1px solid #4a4a86;display:inline-block}
+    .bubble.ok{background:var(--ok);box-shadow:0 0 0 2px rgba(62,224,137,.15)}
+    .chip{
+      padding:6px 10px;border-radius:12px;background:var(--chip);border:1px solid var(--border);
+      display:flex;align-items:center;gap:8px;color:var(--muted)
+    }
+    .chip strong{color:var(--text)}
+
     .btn{
-      background:#182233;border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:12px;cursor:pointer
+      background:linear-gradient(180deg,#252559,#1d1d49);
+      border:1px solid var(--border);
+      color:var(--text);padding:10px 14px;border-radius:12px;cursor:pointer;
+      box-shadow:0 8px 20px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.02);
+      transition:transform .04s ease, background .2s ease;
     }
-    .btn:hover{background:#1f2c42}
+    .btn:hover{background:linear-gradient(180deg,#2b2b66,#232356)}
+    .btn:active{transform:translateY(1px)}
     .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn.ghost{background:transparent}
+    .btn.accent{background:linear-gradient(180deg,#6a6aff,#5858ff);border-color:#5a5aff}
+    .btn.ok{background:linear-gradient(180deg,#25b56a,#1ea45f);border-color:#1b8a52}
+    .btn.warn{background:linear-gradient(180deg,#f45d7b,#e44d6c);border-color:#d24662}
+
     select,input,textarea{
-      width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:#0c121a;color:var(--text)
+      width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);
+      background:#0f0f27;color:var(--text);outline:none
     }
-    .wrap{max-width:1000px;margin:22px auto;padding:0 14px}
-    .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:18px;margin-bottom:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    select:focus,input:focus,textarea:focus{box-shadow:0 0 0 2px rgba(124,124,255,.25)}
+    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+
+    .wrap{max-width:1100px;margin:22px auto;padding:0 14px}
+    .card{
+      background:linear-gradient(180deg,var(--panel),var(--panel2));
+      border:1px solid var(--border);border-radius:18px;padding:18px;margin-bottom:16px;
+      box-shadow:0 12px 40px rgba(0,0,0,.35)
+    }
     .muted{color:var(--muted)} .mono{font-family:ui-monospace,Menlo,monospace}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .qnum{font-weight:700}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted);margin-left:8px}
-    .result{margin-top:10px;padding:12px;border-radius:12px;border:1px solid var(--border)}
-    .result.ok{background:rgba(59,210,128,.12);border-color:rgba(59,210,128,.4)}
-    .result.bad{background:rgba(255,107,107,.08);border-color:rgba(255,107,107,.35)}
+    .qnum{font-weight:800;font-size:24px}
+    .pill{
+      display:inline-flex;align-items:center;gap:8px;padding:4px 10px;border-radius:999px;
+      border:1px solid var(--border);color:#bfc6ff;background:var(--pill)
+    }
+    .result{margin-top:12px;padding:12px;border-radius:12px;border:1px solid var(--border)}
+    .result.ok{background:rgba(62,224,137,.10);border-color:rgba(62,224,137,.45)}
+    .result.bad{background:rgba(255,110,134,.08);border-color:rgba(255,110,134,.40)}
     .rating{font-size:28px;font-weight:900;margin-top:6px}
     .hidden{display:none}
-    .right{float:right}
     .center{text-align:center}
+    .delta{font-weight:800}
+    .delta.pos{color:var(--ok)}
+    .delta.neg{color:var(--bad)}
+    .leaderboard table{
+      width:100%;border-collapse:separate;border-spacing:0 8px
+    }
+    .leaderboard th{font-weight:600;color:#cfd6ff;text-align:left;font-size:14px;padding:6px 10px}
+    .leaderboard td{
+      background:#111134;border:1px solid var(--border);
+      padding:10px;border-left:none;border-right:none
+    }
+    .leaderboard tr{border-radius:12px;overflow:hidden}
+    .leaderboard .rank{
+      width:56px;text-align:center;background:#16164a;border-radius:12px;border:1px solid var(--border)
+    }
+    .section-title{display:flex;align-items:center;gap:10px}
+    .section-title .em{color:var(--accent)}
+    .list{max-height:280px;overflow:auto;background:#0f0f27;border:1px solid var(--border);border-radius:12px;padding:10px}
+    .tag{display:inline-block;padding:2px 6px;border-radius:999px;background:#24245a;border:1px solid var(--border);font-size:12px;color:#c8cdff}
   </style>
 </head>
 <body>
@@ -51,25 +120,45 @@
       <option value="pimp">One Line Pimp Simulator</option>
     </select>
     <span id="conn" class="bubble" title="connection status"></span>
-    <div id="connTxt" class="muted small"></div>
+    <div class="chip" id="scoreChip" title="Your current score" style="margin-left:8px;display:none;">
+      <span class="muted">Score</span> <strong id="scoreVal">0</strong>
+    </div>
     <div class="spacer"></div>
-    <button id="btnConclude" class="btn" disabled>Update & Conclude</button>
+    <!-- (Moved conclude actions into QA pane per request) -->
   </div>
 </header>
 
 <div class="wrap">
-  <!-- Step A: AI selection triggers connection & flow boot -->
+  <!-- Landing: Connection + Global Leaderboard -->
   <div id="paneConnect" class="card">
-    <h2>Connect</h2>
-    <div class="muted">Choose the AI (server is preconfigured). The app will check the connection automatically.</div>
-    <div id="connectMsg" class="muted" style="margin-top:8px;"></div>
+    <div class="section-title">
+      <h2 style="margin:0">Welcome</h2>
+      <span class="tag">v1.2</span>
+    </div>
+    <div class="muted" id="connectMsg" style="margin-top:6px;">Choose the AI (server preconfigured). We’ll auto-check the connection.</div>
+
+    <div class="leaderboard" style="margin-top:16px">
+      <div class="section-title" style="margin-bottom:6px">
+        <h3 style="margin:0">Global Leaderboard</h3>
+        <span class="em">Top 10</span>
+      </div>
+      <div id="lbEmpty" class="muted">Fetching leaderboard…</div>
+      <table id="lbTable" class="hidden">
+        <thead>
+          <tr>
+            <th>#</th><th>User</th><th>Points</th><th>Answered</th>
+          </tr>
+        </thead>
+        <tbody id="lbBody"></tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Step B: choose new / existing user -->
   <div id="paneUserType" class="card hidden">
     <h2>User</h2>
     <div class="row">
-      <button class="btn" id="btnNewUser">New user</button>
+      <button class="btn accent" id="btnNewUser">New user</button>
       <button class="btn" id="btnExistingUser">Existing user</button>
     </div>
   </div>
@@ -79,79 +168,111 @@
     <h2>Create new user</h2>
     <label>Username (case sensitive)</label>
     <input id="newUsername" placeholder="e.g., Gurnoor"/>
-    <div style="margin-top:10px">
-      <button class="btn" id="createUser">Create</button>
+    <div style="margin-top:10px;display:flex;gap:10px">
+      <button class="btn accent" id="createUser">Create</button>
+      <button class="btn ghost" id="cancelNew">Cancel</button>
     </div>
     <div id="newUserMsg" class="muted" style="margin-top:8px;"></div>
   </div>
 
   <!-- Step C2: existing user form -->
   <div id="paneExistingUser" class="card hidden">
-    <h2>Sign in existing user</h2>
+    <h2>Sign in</h2>
     <label>Username (case sensitive)</label>
     <input id="existingUsername" placeholder="Your exact username"/>
-    <div style="margin-top:10px">
-      <button class="btn" id="useExisting">Continue</button>
+    <div style="margin-top:10px;display:flex;gap:10px">
+      <button class="btn accent" id="useExisting">Continue</button>
+      <button class="btn ghost" id="cancelExisting">Cancel</button>
     </div>
     <div id="existingMsg" class="muted" style="margin-top:8px;"></div>
   </div>
 
-  <!-- Step D: show exclusion count + session settings -->
-  <div id="paneSettings" class="card hidden">
-    <h2>Session Settings</h2>
-    <div id="exclInfo" class="muted" style="margin-bottom:8px;"></div>
-    <div class="row">
-      <div>
-        <label>Topic</label>
-        <input id="topic" value="random" placeholder="random or e.g., cardiology"/>
-      </div>
-      <div>
-        <label>Starting difficulty</label>
-        <select id="difficulty">
-          <option>MSI1</option><option>MSI2</option><option selected>MSI3</option><option>MSI4</option>
-          <option>R1</option><option>R2</option><option>R3</option><option>R4</option><option>R5</option><option>Attending</option>
-        </select>
+  <!-- Profile + quick links -->
+  <div id="paneProfile" class="card hidden">
+    <div class="section-title" style="justify-content:space-between;">
+      <h2 style="margin:0">Your Dashboard</h2>
+      <div class="chip">
+        <span class="muted">Answered</span> <strong id="answeredVal">0</strong>
+        <span class="muted">· Correct</span> <strong id="correctVal">0</strong>
+        <span class="muted">· Acc</span> <strong id="accVal">0%</strong>
       </div>
     </div>
-    <div style="margin-top:10px">
-      <button class="btn" id="startSession">Launch session</button>
+    <div class="row" style="margin-top:10px">
+      <div>
+        <div class="muted" id="exclInfo" style="margin-bottom:8px;"></div>
+        <div class="row">
+          <div>
+            <label>Topic</label>
+            <input id="topic" value="random" placeholder="random or e.g., cardiology"/>
+          </div>
+          <div>
+            <label>Starting difficulty</label>
+            <select id="difficulty">
+              <option>MSI1</option><option>MSI2</option><option selected>MSI3</option><option>MSI4</option>
+              <option>R1</option><option>R2</option><option>R3</option><option>R4</option><option>R5</option><option>Attending</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <button class="btn accent" id="startSession">Launch session</button>
+        </div>
+        <div id="settingsMsg" class="muted" style="margin-top:8px;"></div>
+      </div>
+      <div>
+        <label>Previous Questions</label>
+        <div class="list" id="historyList"><span class="muted">Load your history to see previously asked questions.</span></div>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn" id="loadHistory">Load history</button>
+          <button class="btn ghost" id="clearHistoryView">Clear</button>
+        </div>
+        <div id="historyMsg" class="muted" style="margin-top:6px"></div>
+      </div>
     </div>
-    <div id="settingsMsg" class="muted" style="margin-top:8px;"></div>
   </div>
 
-  <!-- Step E: Q/A area -->
+  <!-- Q/A area -->
   <div id="paneQA" class="card hidden">
-    <div>
-      <span class="muted">Question</span>
-      <span id="pillDiff" class="pill">—</span>
+    <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;">
+      <div>
+        <span class="muted">Question</span>
+        <span id="pillDiff" class="pill">—</span>
+      </div>
+      <div class="chip"><span class="muted">Score</span> <strong id="scoreVal2">0</strong></div>
     </div>
+
     <div style="margin-top:4px" class="qnum" id="qNum">#—</div>
     <div id="question" style="font-size:20px;margin-top:6px;"></div>
 
-    <div style="margin-top:12px">
+    <div style="margin-top:14px">
       <label>Your answer</label>
       <input id="answer" placeholder="One word or short sentence…"/>
     </div>
 
-    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn" id="submitAnswer">Submit</button>
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn ok" id="submitAnswer">Submit</button>
+
+      <!-- Requested: two obvious buttons in the answering area -->
+      <button class="btn" id="btnSaveSession" title="Save exclusions & end session">Save session</button>
+      <button class="btn warn" id="btnConcludeFeedback" title="End session and get feedback summary">Get feedback</button>
     </div>
 
-    <div id="resultBox" class="result hidden"></div>
+    <div id="resultBox" class="result hidden">
+      <!-- Filled dynamically -->
+    </div>
 
     <div style="margin-top:10px">
-      <button id="btnProceed" class="btn hidden">Proceed to next question</button>
+      <button id="btnProceed" class="btn accent hidden">Proceed to next question</button>
     </div>
   </div>
 
-  <!-- Step F: Summary (after conclude) -->
+  <!-- Summary (after feedback) -->
   <div id="paneSummary" class="card hidden center">
     <h2>Session Summary</h2>
     <div id="sumStats" class="muted"></div>
     <div id="sumFeedback" style="margin-top:10px"></div>
     <div id="sumRating" class="rating"></div>
     <div style="margin-top:14px">
-      <button class="btn" id="ackSummary">OK</button>
+      <button class="btn accent" id="ackSummary">OK</button>
     </div>
   </div>
 </div>
@@ -170,16 +291,18 @@
     sessionId: "",
     qNumber: null,
     difficulty: "",
-    awaitingProceed: false
+    awaitingProceed: false,
+    score: 0
   };
 
   // ---- Helpers
   const $ = (id)=>document.getElementById(id);
   const show = (el, on)=>el.classList.toggle('hidden', !on);
+  const errMsg = (e)=> e?.detail || e?.error || 'Unexpected error';
   const setConn = (ok)=>{
     state.connected = ok;
     $('conn').classList.toggle('ok', ok);
-    $('connTxt').textContent = ok ? 'connected' : 'disconnected';
+    // no text label in header; keep it clean
   };
   const api = async (path, opts={})=>{
     const url = state.base + path;
@@ -192,7 +315,53 @@
     if(!res.ok){ throw data; }
     return data;
   };
-  const errMsg = (e)=> e?.detail || e?.error || 'Unexpected error';
+
+  function updateScoreChips(val){
+    state.score = Number(val||0);
+    const s = String(state.score);
+    $('scoreVal').textContent = s;
+    $('scoreVal2').textContent = s;
+    $('scoreChip').style.display = 'flex';
+  }
+
+  // ---- Landing: fetch leaderboard
+  async function fetchLeaderboard(){
+    try{
+      const r = await api('/api/leaderboard?limit=10');
+      const rows = r.leaderboard || [];
+      if(!rows.length){
+        $('lbEmpty').textContent = 'No scores yet. Be the first to play!';
+        return;
+      }
+      $('lbEmpty').classList.add('hidden');
+      $('lbTable').classList.remove('hidden');
+
+      const body = $('lbBody');
+      body.innerHTML = '';
+      rows.forEach((row, i)=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="rank">${row.rank ?? (i+1)}</td>
+          <td>${(row.username||'—')}</td>
+          <td><strong>${Number(row.score||0).toLocaleString()}</strong></td>
+          <td id="lb-answered-${i}"><span class="muted">…</span></td>
+        `;
+        body.appendChild(tr);
+      });
+
+      // Try to enrich with answered counts (best-effort; ignore failures)
+      rows.slice(0,10).forEach(async (row, i)=>{
+        try{
+          const s = await api('/api/score?username=' + encodeURIComponent(row.username));
+          $('lb-answered-'+i).innerHTML = `<strong>${Number(s.answered||0)}</strong>`;
+        }catch(e){
+          $('lb-answered-'+i).innerHTML = `<span class="muted">n/a</span>`;
+        }
+      });
+    }catch(e){
+      $('lbEmpty').textContent = 'Failed to load leaderboard: ' + errMsg(e);
+    }
+  }
 
   // ---- Flow boot on AI select
   async function connectAndBoot(){
@@ -204,9 +373,10 @@
       const r = await api('/health');
       setConn(!!r.ok);
       $('connectMsg').textContent = r.ok ? 'Connection established.' : 'Server responded but not healthy.';
-      // reveal user type chooser
       if (r.ok){
         show($('paneUserType'), true);
+        // fetch leaderboard on landing
+        fetchLeaderboard();
       }
     }catch(e){
       setConn(false);
@@ -215,15 +385,54 @@
   }
 
   // ---- User create / existing
-  async function showExclusionCountAndSettings(){
-    // fetch count
+  async function showDashboard(){
+    // Exclusion count
     try{
       const r = await api('/api/exclusions/count?username=' + encodeURIComponent(state.username));
       $('exclInfo').textContent = `You have ${r.count} question(s) in your exclusion list.`;
-      show($('paneSettings'), true);
     }catch(e){
       $('exclInfo').textContent = 'Could not fetch exclusions: ' + errMsg(e);
-      show($('paneSettings'), true); // still allow a session start for visibility
+    }
+
+    // Score + stats
+    try{
+      const s = await api('/api/score?username=' + encodeURIComponent(state.username));
+      updateScoreChips(s.score||0);
+      $('answeredVal').textContent = Number(s.answered||0);
+      $('correctVal').textContent = Number(s.correct||0);
+      $('accVal').textContent = (s.accuracy ? Math.round(s.accuracy*100) : 0) + '%';
+    }catch(e){
+      // non-fatal
+    }
+
+    // Show profile pane
+    show($('paneProfile'), true);
+  }
+
+  // ---- History
+  async function loadHistory(){
+    $('historyMsg').textContent = 'Loading…';
+    try{
+      // Expecting /api/history?username=... returning { items: [{q, a, correct, difficulty, asked_at, points_delta}, ...] }
+      const r = await api('/api/history?username=' + encodeURIComponent(state.username));
+      const items = r.items || [];
+      const box = $('historyList');
+      if(!items.length){
+        box.innerHTML = '<span class="muted">No history yet.</span>';
+      }else{
+        const ul = document.createElement('ul');
+        ul.style.margin='0'; ul.style.paddingLeft='18px';
+        items.forEach(it=>{
+          const li = document.createElement('li');
+          const d = it.difficulty ? `<span class="tag" style="margin-left:6px">${it.difficulty}</span>` : '';
+          li.innerHTML = `<div>${(it.q || it.question || '—')}${d}</div>`;
+        });
+        box.innerHTML = '';
+        box.appendChild(ul);
+      }
+      $('historyMsg').textContent = '';
+    }catch(e){
+      $('historyMsg').textContent = 'Failed to load history: ' + errMsg(e) + ' (ensure /api/history is implemented)';
     }
   }
 
@@ -246,14 +455,30 @@
       $('answer').focus();
     }catch(e){
       const msg = 'Failed to get next question: ' + errMsg(e);
-      $('resultBox').className = 'result bad';
-      $('resultBox').textContent = msg;
-      show($('resultBox'), true);
+      const box = $('resultBox');
+      box.className = 'result bad';
+      box.textContent = msg;
+      show(box, true);
     }
   }
 
+  function renderResult(correct, explanation, pointsDelta, nextDifficulty){
+    const box = $('resultBox');
+    const pos = Number(pointsDelta||0) >= 0;
+    const deltaHtml = `<div class="delta ${pos?'pos':'neg'}">${pos?'+':''}${pointsDelta||0} pts</div>`;
+    if (correct){
+      box.className = 'result ok';
+      box.innerHTML = `<div><strong>Correct.</strong></div>${deltaHtml}`;
+    } else {
+      box.className = 'result bad';
+      box.innerHTML = `<div><strong>Incorrect.</strong> ${explanation ? ('<span class="muted">'+explanation+'</span>') : ''}</div>${deltaHtml}`;
+    }
+    if (nextDifficulty) $('pillDiff').textContent = nextDifficulty;
+    show(box, true);
+  }
+
   async function submitAnswer(){
-    if(state.awaitingProceed) return; // wait for user to proceed
+    if(state.awaitingProceed) return;
     const answer = $('answer').value.trim();
     if(!answer){ $('answer').focus(); return; }
     try{
@@ -261,17 +486,11 @@
         method:'POST',
         body: JSON.stringify({ sessionId: state.sessionId, answer })
       });
-      const box = $('resultBox');
-      if (r.correct){
-        box.className = 'result ok';
-        box.textContent = 'Correct.';
-      } else {
-        box.className = 'result bad';
-        box.textContent = 'Incorrect. ' + (r.explanation || '');
-      }
-      show(box, true);
-      $('pillDiff').textContent = r.nextDifficulty || $('pillDiff').textContent;
-      // require user click to proceed
+      // render result with score delta
+      renderResult(r.correct, r.explanation, r.points_delta, r.nextDifficulty);
+      // update score chips
+      if (typeof r.score !== 'undefined') updateScoreChips(r.score);
+      // require explicit proceed
       state.awaitingProceed = true;
       show($('btnProceed'), true);
     }catch(e){
@@ -282,32 +501,48 @@
     }
   }
 
-  // ---- Conclude
-  async function conclude(){
+  // ---- Conclude helpers (two buttons inside QA pane)
+  async function concludeCore(showFeedback){
     if(!state.sessionId) return;
-    $('btnConclude').disabled = true;
     try{
       const r = await api('/api/conclude', {
         method:'POST',
         body: JSON.stringify({ sessionId: state.sessionId })
       });
-      $('sumStats').innerHTML = `New exclusion count: <strong>${r.new_count}</strong> · Next number: <strong>${r.next_number}</strong>`;
-      $('sumFeedback').textContent = r.feedback || '';
-      $('sumRating').textContent = r.rating || '';
-      // lock QA pane and show summary until acknowledged
-      show($('paneQA'), false);
-      show($('paneSummary'), true);
+
+      if (typeof r.session_points !== 'undefined') {
+        // If backend returns session_points (optional)
+        // light toast replacement:
+        console.log('Session points:', r.session_points);
+      }
+
+      if (showFeedback){
+        $('sumStats').innerHTML = `New exclusion count: <strong>${r.new_count}</strong> · Next number: <strong>${r.next_number}</strong>`;
+        $('sumFeedback').textContent = r.feedback || '';
+        $('sumRating').textContent = r.rating || '';
+        // move to summary pane
+        show($('paneQA'), false);
+        show($('paneSummary'), true);
+      } else {
+        // Silent save -> back to dashboard
+        alert(`Session saved.\nNew exclusions: ${r.new_count}\nNext number: ${r.next_number}`);
+        resetToDashboard();
+      }
     }catch(e){
-      alert('Conclude failed: ' + errMsg(e));
-      $('btnConclude').disabled = false;
+      alert('Action failed: ' + errMsg(e));
     }
   }
 
-  function resetToSession(){
-    // after acknowledging summary, keep user on settings pane to start again if desired
-    $('btnConclude').disabled = false;
+  function resetToDashboard(){
+    state.sessionId = "";
+    show($('paneQA'), false);
     show($('paneSummary'), false);
-    show($('paneSettings'), true);
+    show($('paneProfile'), true);
+  }
+
+  function resetToSession(){
+    // After acknowledging summary, return to profile/settings
+    resetToDashboard();
   }
 
   // ---- Event wiring
@@ -322,6 +557,12 @@
     show($('paneExistingUser'), true);
     show($('paneNewUser'), false);
   });
+  $('cancelNew').addEventListener('click', ()=>{
+    show($('paneNewUser'), false);
+  });
+  $('cancelExisting').addEventListener('click', ()=>{
+    show($('paneExistingUser'), false);
+  });
 
   $('createUser').addEventListener('click', async ()=>{
     const u = $('newUsername').value.trim();
@@ -332,7 +573,7 @@
       $('newUserMsg').textContent = `User "${u}" created.`;
       show($('paneUserType'), false);
       show($('paneNewUser'), false);
-      await showExclusionCountAndSettings();
+      await showDashboard();
     }catch(e){
       $('newUserMsg').textContent = errMsg(e);
     }
@@ -342,13 +583,13 @@
     const u = $('existingUsername').value.trim();
     if(!u){ $('existingMsg').textContent = 'Please enter your username.'; return; }
     try{
-      // simple existence check: exclusions/count will work even if 0
+      // quick existence check via exclusions or score
       await api('/api/exclusions/count?username=' + encodeURIComponent(u));
       state.username = u;
       $('existingMsg').textContent = `Welcome back, ${u}.`;
       show($('paneUserType'), false);
       show($('paneExistingUser'), false);
-      await showExclusionCountAndSettings();
+      await showDashboard();
     }catch(e){
       $('existingMsg').textContent = errMsg(e);
     }
@@ -365,10 +606,11 @@
       state.sessionId = r.sessionId;
       state.difficulty = r.difficulty;
       $('pillDiff').textContent = state.difficulty;
-      // show QA pane, make conclude button available
-      show($('paneSettings'), false);
+
+      // show QA pane
+      show($('paneProfile'), false);
       show($('paneQA'), true);
-      $('btnConclude').disabled = false;
+
       // fetch first question
       await getNextQuestion();
     }catch(e){
@@ -378,8 +620,18 @@
 
   $('submitAnswer').addEventListener('click', submitAnswer);
   $('btnProceed').addEventListener('click', getNextQuestion);
-  $('btnConclude').addEventListener('click', conclude);
+
+  // Save session (quiet conclude)
+  $('btnSaveSession').addEventListener('click', ()=>concludeCore(false));
+  // Conclude and show feedback summary
+  $('btnConcludeFeedback').addEventListener('click', ()=>concludeCore(true));
   $('ackSummary').addEventListener('click', resetToSession);
+
+  // History actions
+  $('loadHistory').addEventListener('click', loadHistory);
+  $('clearHistoryView').addEventListener('click', ()=>{
+    $('historyList').innerHTML = '<span class="muted">Cleared view.</span>';
+  });
 </script>
 </body>
 </html>
