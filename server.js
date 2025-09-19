@@ -67,6 +67,47 @@ app.post("/admin/append-dummy", async (req, res) => {
   }
 });
 
+// Points map: harder tiers are worth more.
+// Correct = +10 * tierIndex, Wrong = -5 * tierIndex (never lets score drop below 0).
+// Tier index: MSI1=1 ... Attending=10
+const kLB = () => `leaderboard:global`;
+
+function tierIndex(label) {
+  const i = DIFF.indexOf(label);
+  return (i >= 0 ? i : 0) + 1; // 1..10
+}
+function pointsFor(label) {
+  const t = tierIndex(label);
+  return { correct: 10 * t, wrong: 5 * t };
+}
+
+async function getUserScore(username) {
+  const h = await redis.hgetall(kUser(username));
+  const score = Number(h?.score || 0);
+  const answered = Number(h?.answered || 0);
+  const correct = Number(h?.correct || 0);
+  return { score, answered, correct, accuracy: answered ? correct / answered : 0 };
+}
+
+// Atomically bump score/stats and the leaderboard.
+// Floors score at 0 if it would go negative.
+async function applyScoreDelta(username, delta, wasCorrect) {
+  // increment counters
+  await redis.hincrby(kUser(username), "answered", 1);
+  if (wasCorrect) await redis.hincrby(kUser(username), "correct", 1);
+
+  // bump score in user hash and leaderboard ZSET
+  let newScore = await redis.hincrby(kUser(username), "score", delta);
+  await redis.zincrby(kLB(), delta, username);
+
+  if (newScore < 0) {
+    // clamp both back to 0
+    await redis.hincrby(kUser(username), "score", -newScore);      // add positive to bring to 0
+    await redis.zincrby(kLB(), -newScore, username);
+    newScore = 0;
+  }
+  return newScore;
+}
 
 
 // put this helper near your other helpers
@@ -147,6 +188,9 @@ async function userExists(username) {
 async function createUser(username) {
   // Simple marker key; hash allows future fields
   await redis.hset(kUser(username), { created_at: Date.now() });
+  // after: await createUser(username);
+  await redis.hset(kUser(username), { score: 0, answered: 0, correct: 0 });
+  await redis.zadd(kLB(), { score: 0, member: username });
 }
 
 async function exclusionsCount(username) {
@@ -515,6 +559,10 @@ app.post('/api/answer', async (req, res) => {
     if (!sessionId) return res.status(400).json({ error: "sessionId required" });
     if (typeof answer !== "string") return res.status(400).json({ error: "answer required" });
 
+    const meta = await getSessionMeta(sessionId);
+    if (!meta) return res.status(404).json({ error: "Session not found" });
+    const username = meta.username;
+
     const items = await getSessionItems(sessionId);
     if (items.length === 0) return res.status(400).json({ error: "No question to grade" });
     const last = items[items.length - 1];
@@ -527,18 +575,69 @@ app.post('/api/answer', async (req, res) => {
 
     const nextDiff = bumpDifficulty(last.final_difficulty, difficulty_delta);
 
+    // compute points for THIS item using the difficulty at the time of asking
+    const { correct, wrong } = pointsFor(last.final_difficulty);
+    const points_delta = is_correct ? correct : -wrong;
+
+    // apply score change + counters
+    const score_after = await applyScoreDelta(username, points_delta, is_correct);
+
+    // persist back to last item
     await updateLastSessionItem(sessionId, {
       user_answer: answer,
       is_correct,
       explanation,
-      final_difficulty: nextDiff
+      final_difficulty: nextDiff,
+      points_delta,
+      score_after
     });
 
-    res.json({ correct: is_correct, explanation, nextDifficulty: nextDiff });
+    res.json({
+      correct: is_correct,
+      explanation,
+      nextDifficulty: nextDiff,
+      points_delta,
+      score: score_after
+    });
   } catch (e) {
     res.status(500).json({ error: "Failed to grade answer", detail: String(e) });
   }
 });
+
+// Get a user's score + stats
+app.get('/api/score', async (req, res) => {
+  try {
+    const { username } = req.query;
+    if (!username) return res.status(400).json({ error: "username required" });
+    if (!(await userExists(String(username)))) return res.status(404).json({ error: "User not found" });
+
+    const stats = await getUserScore(String(username));
+    res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to get score", detail: String(e) });
+  }
+});
+
+// Leaderboard (global). Defaults to top 20.
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 20)));
+    // Upstash client supports ZRANGE with {rev:true, withScores:true}
+    const rows = await redis.zrange(kLB(), 0, limit - 1, { rev: true, withScores: true });
+
+    // rows is [{member, score}, ...] in modern client
+    const board = rows.map((r, i) => ({
+      rank: i + 1,
+      username: r.member || r.member?.toString?.() || r[0],
+      score: Number(r.score ?? r[1] ?? 0)
+    }));
+
+    res.json({ leaderboard: board });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to get leaderboard", detail: String(e) });
+  }
+});
+
 
 // Conclude session (merge to exclusions, return new_count, next_number, feedback, rating)
 app.post('/api/conclude', async (req, res) => {
@@ -559,12 +658,19 @@ app.post('/api/conclude', async (req, res) => {
     const new_count = await exclusionsCount(username);
     const next_number = new_count + 1;
 
+    const session_points = transcript.reduce((sum, t) => {
+      if (typeof t.points_delta === "number") return sum + t.points_delta;
+      // fallback if older items predate scoring: estimate by starting_difficulty
+      const { correct, wrong } = pointsFor(t.starting_difficulty || t.final_difficulty || "MSI3");
+      return sum + (t.is_correct ? correct : -wrong);
+    }, 0);
+
     const { feedback, rating } = await aiSummarizeSession({
       transcript,
       startDifficulty: meta.start_diff
     });
 
-    res.json({ new_count, next_number, feedback, rating });
+    res.json({ new_count, next_number, feedback, rating, session_points });
   } catch (e) {
     res.status(500).json({ error: "Failed to conclude session", detail: String(e) });
   }
