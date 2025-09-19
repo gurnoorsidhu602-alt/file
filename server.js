@@ -300,7 +300,7 @@ Return ONLY JSON like: {"question":"..."}.
 Question must be answerable in ONE word or ONE short sentence.
 The questions should be difficult questions designed to mimic questions an attending physician would as (or "pimp") a medical student or resident.
 Ensure you take into account the appropriate difficulty and topic. The questions should be primarily clinical and related to medicine. Questions should not be excessively basic sceince questions, and should always be relevant to clincal practice. Things like MOA of drugs is fair game but the details of an obscure second messenger cascade for example are not.  
-The questions should be considered very challenging/difficult for that particular difficulty level. For example, if the difficulty is R1, the question should be considered challenging but doable for the top 20% of first year residents. 
+The questions should be considered very challenging/difficult for that particular difficulty level. For example, if the difficulty is R1, the question should be considered challenging but doable for the top 5% of first year residents. Ensure that the difficuly is actually scaling, in other words ensure that there is actually a noticeable change in difficulty between the levels. 
 Avoid duplicates / near-duplicates of provided examples.`;
 
   const userPayload = { topic: topic || "random", difficulty: difficulty || "MSI3", avoid_examples: avoid };
