@@ -31,6 +31,18 @@ const bumpDifficulty = (label, delta) => {
   return DIFF[next];
 };
 
+// ---- History helpers ----
+const kHistory = (u) => `history:${u}`;
+
+// Append one history item, keep only most recent N
+async function pushHistory(username, item, keep = 1000) {
+  // store as JSON lines
+  await redis.lpush(kHistory(username), JSON.stringify(item));
+  await redis.ltrim(kHistory(username), 0, keep - 1);
+}
+
+
+
 // ADMIN NUKE: delete all app data (guarded)
 // ADMIN NUKE: delete all app data (guarded)
 // Usage: DELETE /admin/wipe?secret=YOUR_SECRET  (add &dry=1 to dry-run)
@@ -699,6 +711,22 @@ app.post('/api/answer', async (req, res) => {
     // apply score change + counters
     const score_after = await applyScoreDelta(username, points_delta, is_correct);
 
+    // compute points_delta above…
+    const askedAt = Date.now();
+
+    // record to history
+    await pushHistory(username, {
+      question: last.question,
+      difficulty: last.final_difficulty,   // difficulty when asked
+      user_answer: answer,
+      is_correct,
+      explanation,
+      points_delta,
+      score_after,                         // optional: current score after grading
+      asked_at: askedAt,
+    });
+
+
     // persist back to last item
     await updateLastSessionItem(sessionId, {
       user_answer: answer,
@@ -776,6 +804,24 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
+// GET /api/history?username=alice&limit=200
+app.get('/api/history', async (req, res) => {
+  try {
+    const username = String(req.query.username || "");
+    if (!username) return res.status(400).json({ error: "username required" });
+
+    const limit = Math.max(1, Math.min(1000, Number(req.query.limit || 200)));
+    const rows = await redis.lrange(kHistory(username), 0, limit - 1);
+
+    const items = (rows || []).map((s) => {
+      try { return JSON.parse(s); } catch { return { raw: s }; }
+    });
+
+    res.json({ items });
+  } catch (e) {
+    res.status(500).json({ error: "history failed", detail: String(e) });
+  }
+});
 
 
 // Conclude session (merge to exclusions, return new_count, next_number, feedback, rating)
