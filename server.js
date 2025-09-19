@@ -32,6 +32,7 @@ const bumpDifficulty = (label, delta) => {
 };
 
 // ADMIN NUKE: delete all app data (guarded)
+// ADMIN NUKE: delete all app data (guarded)
 // Usage: DELETE /admin/wipe?secret=YOUR_SECRET  (add &dry=1 to dry-run)
 app.delete('/admin/wipe', async (req, res) => {
   try {
@@ -41,21 +42,33 @@ app.delete('/admin/wipe', async (req, res) => {
     }
     const dry = String(req.query.dry || "0") === "1";
 
-    // Adjust patterns to your actual key scheme if different
+    // Adjust to your actual key prefixes if different
     const patterns = [
-      "user:*",          // per-user hash: score/answered/correct
-      "session:*",       // active sessions
-      "sessionitem:*",   // session items (if you store them separately)
-      "exclusions:*",    // per-user exclusion lists
-      "history:*",       // per-user history (if present)
+      "user:*",        // user stats hash
+      "session:*",     // live sessions
+      "sessionitem:*", // per-question items (if applicable)
+      "exclusions:*",  // exclusion lists
+      "history:*",     // question history (if applicable)
     ];
 
     let deleted = 0;
+
+    // Helper: delete in chunks to avoid huge payloads
+    async function delChunked(keys) {
+      const CHUNK = 100;
+      for (let i = 0; i < keys.length; i += CHUNK) {
+        const slice = keys.slice(i, i + CHUNK);
+        if (!dry && slice.length) {
+          await redis.del(...slice);
+        }
+        deleted += slice.length;
+      }
+    }
+
     for (const pattern of patterns) {
-      // Upstash client supports async scan iterator
-      for await (const key of redis.scanIterator({ match: pattern, count: 1000 })) {
-        if (!dry) await redis.del(key);
-        deleted++;
+      const keys = await redis.keys(pattern);   // works on all clients
+      if (keys && keys.length) {
+        await delChunked(keys);
       }
     }
 
@@ -67,6 +80,7 @@ app.delete('/admin/wipe', async (req, res) => {
     res.status(500).json({ error: "wipe failed", detail: String(e) });
   }
 });
+
 
 
 // --- AI username moderation (keeps usernames case-sensitive) ---
