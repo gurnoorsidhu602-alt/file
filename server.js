@@ -330,7 +330,7 @@ Return ONLY JSON:
 
 
 async function aiSummarizeSession({ transcript, startDifficulty }) {
-  const system = `You are a strict medical educator. Summarize performance briefly and assign a single rating.
+  const system = `You will summarize the session in detail, explain in detail the strengths and weaknesses of the user in that session with examples. Be a fair but objective rater. Try to use the sandwhich method to provide feedback. Additioanlly, you must return a final rating for that student (what level they are performing at).
 Return JSON ONLY:
 {"feedback": "short feedback", "rating": "MSI1|MSI2|MSI3|MSI4|R1|R2|R3|R4|R5|Attending"}`;
 
