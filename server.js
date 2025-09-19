@@ -31,6 +31,44 @@ const bumpDifficulty = (label, delta) => {
   return DIFF[next];
 };
 
+// ADMIN NUKE: delete all app data (guarded)
+// Usage: DELETE /admin/wipe?secret=YOUR_SECRET  (add &dry=1 to dry-run)
+app.delete('/admin/wipe', async (req, res) => {
+  try {
+    const secret = String(req.query.secret || "");
+    if (secret !== process.env.ADMIN_SECRET) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const dry = String(req.query.dry || "0") === "1";
+
+    // Adjust patterns to your actual key scheme if different
+    const patterns = [
+      "user:*",          // per-user hash: score/answered/correct
+      "session:*",       // active sessions
+      "sessionitem:*",   // session items (if you store them separately)
+      "exclusions:*",    // per-user exclusion lists
+      "history:*",       // per-user history (if present)
+    ];
+
+    let deleted = 0;
+    for (const pattern of patterns) {
+      // Upstash client supports async scan iterator
+      for await (const key of redis.scanIterator({ match: pattern, count: 1000 })) {
+        if (!dry) await redis.del(key);
+        deleted++;
+      }
+    }
+
+    // Leaderboard ZSET
+    if (!dry) await redis.del("leaderboard:global");
+
+    res.json({ ok: true, dry, deleted_keys_estimate: deleted });
+  } catch (e) {
+    res.status(500).json({ error: "wipe failed", detail: String(e) });
+  }
+});
+
+
 // --- AI username moderation (keeps usernames case-sensitive) ---
 const OPENAI_MOD_URL = "https://api.openai.com/v1/moderations";
 // Optional: set behavior if the moderation call fails (true = allow; false = block)
