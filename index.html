@@ -2,16 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>One Line Pimp Simulator — UI</title>
+  <title>One Line Pimp Simulator</title>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
+
   <style>
+    /* ====== THEME ====== */
     :root{
-      /* Dark purple-blue palette */
-      --bg:#0b0a14;
-      --panel:#121228;
-      --panel2:#17173a;
+      --bg:#0a0a14;
+      --grad1:#12122a;
+      --grad2:#19194a;
+      --ink:#eef0ff;
       --muted:#9aa3c7;
-      --text:#edf0ff;
       --accent:#7c7cff;
       --accent2:#8ee1ff;
       --ok:#3ee089;
@@ -21,78 +22,85 @@
       --pill:#23235a;
       --gold:#ffda6b;
     }
-
     *{box-sizing:border-box}
+    html,body{height:100%}
     body{
-      margin:0;background:radial-gradient(1200px 800px at 20% -10%,rgba(124,124,255,.12),transparent),
-                      radial-gradient(1200px 800px at 120% 10%,rgba(142,225,255,.08),transparent),
-                      var(--bg);
-      color:var(--text);
+      margin:0;
+      color:var(--ink);
+      background:
+        radial-gradient(900px 600px at 20% -10%,rgba(124,124,255,.12),transparent),
+        radial-gradient(900px 600px at 120% 10%,rgba(142,225,255,.08),transparent),
+        var(--bg);
       font:16px/1.5 system-ui, Segoe UI, Roboto, sans-serif;
       letter-spacing:.2px;
     }
 
+    /* ====== LAYOUT ====== */
     header{
-      position:sticky;top:0;z-index:5;
+      position:sticky;top:0;z-index:20;
       background:linear-gradient(180deg, rgba(18,18,40,.92), rgba(18,18,40,.75));
       backdrop-filter:blur(10px);
-      border-bottom:1px solid var(--border)
+      border-bottom:1px solid var(--border);
     }
-    .nav{max-width:1100px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:12px}
-    .title{font-weight:700;opacity:.9}
+    .nav{max-width:1200px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:12px}
     .spacer{flex:1}
-    .bubble{width:10px;height:10px;border-radius:50%;background:#6a6a9c;border:1px solid #4a4a86;display:inline-block}
+    .bubble{width:10px;height:10px;border-radius:50%;background:#6a6a9c;border:1px solid #4a4a86}
     .bubble.ok{background:var(--ok);box-shadow:0 0 0 2px rgba(62,224,137,.15)}
     .chip{
       padding:6px 10px;border-radius:12px;background:var(--chip);border:1px solid var(--border);
       display:flex;align-items:center;gap:8px;color:var(--muted)
     }
-    .chip strong{color:var(--text)}
+    .chip strong{color:var(--ink)}
+
+    .app{
+      max-width:1200px;margin:18px auto;padding:0 14px;
+      display:grid;grid-template-columns:300px 1fr;gap:16px;
+    }
+    .sidebar{
+      position:sticky;top:64px;align-self:start;
+      transition:opacity .25s ease, transform .25s ease;
+    }
+    .sidebar.hidden{opacity:0;transform:translateX(-8px);pointer-events:none}
+
+    .card{
+      background:linear-gradient(180deg,var(--grad1),var(--grad2));
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:16px;
+      box-shadow:0 12px 40px rgba(0,0,0,.35);
+    }
+    .main{display:flex;flex-direction:column;gap:16px}
+
+    @media (max-width: 980px){
+      .app{grid-template-columns:1fr}
+      .sidebar{position:relative;top:auto}
+    }
+
+    /* ====== WIDGETS ====== */
+    .title{font-weight:800}
+    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+    input,select,textarea{
+      width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);
+      background:#0f0f27;color:var(--ink);outline:none
+    }
+    input:focus,select:focus,textarea:focus{box-shadow:0 0 0 2px rgba(124,124,255,.25)}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 
     .btn{
       background:linear-gradient(180deg,#252559,#1d1d49);
       border:1px solid var(--border);
-      color:var(--text);padding:10px 14px;border-radius:12px;cursor:pointer;
+      color:var(--ink);padding:10px 14px;border-radius:12px;cursor:pointer;
       box-shadow:0 8px 20px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.02);
-      transition:transform .04s ease, background .2s ease;
+      transition:transform .04s ease, background .2s ease, box-shadow .2s ease;
     }
     .btn:hover{background:linear-gradient(180deg,#2b2b66,#232356)}
     .btn:active{transform:translateY(1px)}
     .btn:disabled{opacity:.6;cursor:not-allowed}
-    .btn.ghost{background:transparent}
     .btn.accent{background:linear-gradient(180deg,#6a6aff,#5858ff);border-color:#5a5aff}
     .btn.ok{background:linear-gradient(180deg,#25b56a,#1ea45f);border-color:#1b8a52}
     .btn.warn{background:linear-gradient(180deg,#f45d7b,#e44d6c);border-color:#d24662}
+    .btn.ghost{background:transparent}
 
-    select,input,textarea{
-      width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);
-      background:#0f0f27;color:var(--text);outline:none
-    }
-    select:focus,input:focus,textarea:focus{box-shadow:0 0 0 2px rgba(124,124,255,.25)}
-    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
-
-    .wrap{max-width:1100px;margin:22px auto;padding:0 14px}
-    .card{
-      background:linear-gradient(180deg,var(--panel),var(--panel2));
-      border:1px solid var(--border);border-radius:18px;padding:18px;margin-bottom:16px;
-      box-shadow:0 12px 40px rgba(0,0,0,.35)
-    }
-    .muted{color:var(--muted)} .mono{font-family:ui-monospace,Menlo,monospace}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .qnum{font-weight:800;font-size:24px}
-    .pill{
-      display:inline-flex;align-items:center;gap:8px;padding:4px 10px;border-radius:999px;
-      border:1px solid var(--border);color:#bfc6ff;background:var(--pill)
-    }
-    .result{margin-top:12px;padding:12px;border-radius:12px;border:1px solid var(--border)}
-    .result.ok{background:rgba(62,224,137,.10);border-color:rgba(62,224,137,.45)}
-    .result.bad{background:rgba(255,110,134,.08);border-color:rgba(255,110,134,.40)}
-    .rating{font-size:28px;font-weight:900;margin-top:6px}
-    .hidden{display:none}
-    .center{text-align:center}
-    .delta{font-weight:800}
-    .delta.pos{color:var(--ok)}
-    .delta.neg{color:var(--bad)}
     .leaderboard table{
       width:100%;border-collapse:separate;border-spacing:0 8px
     }
@@ -101,537 +109,522 @@
       background:#111134;border:1px solid var(--border);
       padding:10px;border-left:none;border-right:none
     }
-    .leaderboard tr{border-radius:12px;overflow:hidden}
-    .leaderboard .rank{
-      width:56px;text-align:center;background:#16164a;border-radius:12px;border:1px solid var(--border)
+    .leaderboard .rank{width:44px;text-align:center;background:#16164a;border-radius:12px;border:1px solid var(--border)}
+    .muted{color:var(--muted)}
+    .pill{
+      display:inline-flex;align-items:center;gap:8px;padding:4px 10px;border-radius:999px;
+      border:1px solid var(--border);color:#bfc6ff;background:var(--pill)
     }
-    .section-title{display:flex;align-items:center;gap:10px}
-    .section-title .em{color:var(--accent)}
+    .qnum{font-weight:900;font-size:24px}
+    .result{margin-top:12px;padding:12px;border-radius:12px;border:1px solid var(--border)}
+    .result.ok{background:rgba(62,224,137,.10);border-color:rgba(62,224,137,.45)}
+    .result.bad{background:rgba(255,110,134,.08);border-color:rgba(255,110,134,.40)}
+    .delta{font-weight:800}
+    .delta.pos{color:var(--ok)}
+    .delta.neg{color:var(--bad)}
     .list{max-height:280px;overflow:auto;background:#0f0f27;border:1px solid var(--border);border-radius:12px;padding:10px}
-    .tag{display:inline-block;padding:2px 6px;border-radius:999px;background:#24245a;border:1px solid var(--border);font-size:12px;color:#c8cdff}
+
+    /* ====== ANIMATIONS ====== */
+    .fadeInUp{
+      animation:fadeInUp .35s ease both;
+    }
+    .popIn{
+      animation:popIn .25s ease both;
+    }
+    .fadeSwap-enter{opacity:0;transform:translateY(8px)}
+    .fadeSwap-enter-active{opacity:1;transform:none;transition:opacity .25s, transform .25s}
+    @keyframes fadeInUp{
+      from{opacity:0;transform:translateY(8px)}
+      to{opacity:1;transform:none}
+    }
+    @keyframes popIn{
+      from{opacity:0;transform:scale(.985)}
+      to{opacity:1;transform:scale(1)}
+    }
   </style>
 </head>
+
 <body>
+  <!-- ====== TOP BAR ====== -->
+  <header>
+    <div class="nav">
+      <div class="title">AI:</div>
+      <select id="aiSelect">
+        <option value="pimp">One Line Pimp Simulator</option>
+      </select>
+      <span id="conn" class="bubble" title="connection status"></span>
 
-<header>
-  <div class="nav">
-    <div class="title">AI:</div>
-    <select id="aiSelect">
-      <option value="pimp">One Line Pimp Simulator</option>
-    </select>
-    <span id="conn" class="bubble" title="connection status"></span>
-    <div class="chip" id="scoreChip" title="Your current score" style="margin-left:8px;display:none;">
-      <span class="muted">Score</span> <strong id="scoreVal">0</strong>
-    </div>
-    <div class="spacer"></div>
-    <!-- (Moved conclude actions into QA pane per request) -->
-  </div>
-</header>
-
-<div class="wrap">
-  <!-- Landing: Connection + Global Leaderboard -->
-  <div id="paneConnect" class="card">
-    <div class="section-title">
-      <h2 style="margin:0">Welcome</h2>
-      <span class="tag">v1.2</span>
-    </div>
-    <div class="muted" id="connectMsg" style="margin-top:6px;">Choose the AI (server preconfigured). We’ll auto-check the connection.</div>
-
-    <div class="leaderboard" style="margin-top:16px">
-      <div class="section-title" style="margin-bottom:6px">
-        <h3 style="margin:0">Global Leaderboard</h3>
-        <span class="em">Top 10</span>
+      <div class="chip" id="scoreChip" style="margin-left:8px;display:none;">
+        <span class="muted">Score</span> <strong id="scoreVal">0</strong>
       </div>
-      <div id="lbEmpty" class="muted">Fetching leaderboard…</div>
-      <table id="lbTable" class="hidden">
-        <thead>
-          <tr>
-            <th>#</th><th>User</th><th>Points</th><th>Answered</th>
-          </tr>
-        </thead>
-        <tbody id="lbBody"></tbody>
-      </table>
-    </div>
-  </div>
 
-  <!-- Step B: choose new / existing user -->
-  <div id="paneUserType" class="card hidden">
-    <h2>User</h2>
-    <div class="row">
-      <button class="btn accent" id="btnNewUser">New user</button>
-      <button class="btn" id="btnExistingUser">Existing user</button>
-    </div>
-  </div>
+      <div class="spacer"></div>
 
-  <!-- Step C: new user form -->
-  <div id="paneNewUser" class="card hidden">
-    <h2>Create new user</h2>
-    <label>Username (case sensitive)</label>
-    <input id="newUsername" placeholder="e.g., Gurnoor"/>
-    <div style="margin-top:10px;display:flex;gap:10px">
-      <button class="btn accent" id="createUser">Create</button>
-      <button class="btn ghost" id="cancelNew">Cancel</button>
-    </div>
-    <div id="newUserMsg" class="muted" style="margin-top:8px;"></div>
-  </div>
-
-  <!-- Step C2: existing user form -->
-  <div id="paneExistingUser" class="card hidden">
-    <h2>Sign in</h2>
-    <label>Username (case sensitive)</label>
-    <input id="existingUsername" placeholder="Your exact username"/>
-    <div style="margin-top:10px;display:flex;gap:10px">
-      <button class="btn accent" id="useExisting">Continue</button>
-      <button class="btn ghost" id="cancelExisting">Cancel</button>
-    </div>
-    <div id="existingMsg" class="muted" style="margin-top:8px;"></div>
-  </div>
-
-  <!-- Profile + quick links -->
-  <div id="paneProfile" class="card hidden">
-    <div class="section-title" style="justify-content:space-between;">
-      <h2 style="margin:0">Your Dashboard</h2>
-      <div class="chip">
-        <span class="muted">Answered</span> <strong id="answeredVal">0</strong>
-        <span class="muted">· Correct</span> <strong id="correctVal">0</strong>
-        <span class="muted">· Acc</span> <strong id="accVal">0%</strong>
+      <div class="chip" id="userChip" style="display:none;">
+        <span class="muted">User</span> <strong id="userVal">—</strong>
       </div>
     </div>
-    <div class="row" style="margin-top:10px">
-      <div>
-        <div class="muted" id="exclInfo" style="margin-bottom:8px;"></div>
+  </header>
+
+  <!-- ====== BODY ====== -->
+  <div class="app">
+    <!-- ====== LEFT: GLOBAL LEADERBOARD (hides during Q&A) ====== -->
+    <aside id="sidebar" class="sidebar">
+      <div class="card leaderboard">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <h3 style="margin:0">Global Leaderboard</h3>
+          <span class="pill">Top 10</span>
+        </div>
+        <div id="lbEmpty" class="muted">Fetching leaderboard…</div>
+        <table id="lbTable" class="hidden">
+          <thead>
+            <tr><th>#</th><th>User</th><th>Pts</th><th>Answered</th></tr>
+          </thead>
+          <tbody id="lbBody"></tbody>
+        </table>
+      </div>
+    </aside>
+
+    <!-- ====== RIGHT: MAIN ====== -->
+    <main class="main">
+      <!-- CONNECT / LANDING -->
+      <section id="paneConnect" class="card fadeInUp">
+        <h2 style="margin:0">Welcome</h2>
+        <div id="connectMsg" class="muted" style="margin-top:6px;">
+          Choose the AI above. We’ll auto-check the connection.
+        </div>
+      </section>
+
+      <!-- NEW vs EXISTING -->
+      <section id="paneUserType" class="card hidden">
+        <h2 style="margin:0 0 8px">User</h2>
         <div class="row">
-          <div>
-            <label>Topic</label>
-            <input id="topic" value="random" placeholder="random or e.g., cardiology"/>
-          </div>
-          <div>
-            <label>Starting difficulty</label>
-            <select id="difficulty">
-              <option>MSI1</option><option>MSI2</option><option selected>MSI3</option><option>MSI4</option>
-              <option>R1</option><option>R2</option><option>R3</option><option>R4</option><option>R5</option><option>Attending</option>
-            </select>
+          <button class="btn accent" id="btnNewUser">New user</button>
+          <button class="btn" id="btnExistingUser">Existing user</button>
+        </div>
+      </section>
+
+      <!-- NEW USER -->
+      <section id="paneNewUser" class="card hidden">
+        <h2 style="margin:0 0 8px">Create new user</h2>
+        <label>Username (case sensitive)</label>
+        <input id="newUsername" placeholder="e.g., Gurnoor"/>
+        <div style="margin-top:10px;display:flex;gap:10px">
+          <button class="btn accent" id="createUser">Create</button>
+          <button class="btn ghost" id="cancelNew">Cancel</button>
+        </div>
+        <div id="newUserMsg" class="muted" style="margin-top:8px;"></div>
+      </section>
+
+      <!-- EXISTING USER -->
+      <section id="paneExistingUser" class="card hidden">
+        <h2 style="margin:0 0 8px">Sign in</h2>
+        <label>Username (case sensitive)</label>
+        <input id="existingUsername" placeholder="Your exact username"/>
+        <div style="margin-top:10px;display:flex;gap:10px">
+          <button class="btn accent" id="useExisting">Continue</button>
+          <button class="btn ghost" id="cancelExisting">Cancel</button>
+        </div>
+        <div id="existingMsg" class="muted" style="margin-top:8px;"></div>
+      </section>
+
+      <!-- DASHBOARD -->
+      <section id="paneProfile" class="card hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h2 style="margin:0">Your Dashboard</h2>
+          <div class="chip">
+            <span class="muted">Answered</span> <strong id="answeredVal">0</strong>
+            <span class="muted">· Correct</span> <strong id="correctVal">0</strong>
+            <span class="muted">· Acc</span> <strong id="accVal">0%</strong>
           </div>
         </div>
+
+        <div class="row" style="margin-top:10px">
+          <div>
+            <div class="muted" id="exclInfo" style="margin-bottom:8px;"></div>
+            <div class="row">
+              <div>
+                <label>Topic</label>
+                <input id="topic" value="random" placeholder="random or e.g., cardiology"/>
+              </div>
+              <div>
+                <label>Starting difficulty</label>
+                <select id="difficulty">
+                  <option>MSI1</option><option>MSI2</option><option selected>MSI3</option><option>MSI4</option>
+                  <option>R1</option><option>R2</option><option>R3</option><option>R4</option><option>R5</option><option>Attending</option>
+                </select>
+              </div>
+            </div>
+            <div style="margin-top:10px">
+              <button class="btn accent" id="startSession">Launch session</button>
+            </div>
+            <div id="settingsMsg" class="muted" style="margin-top:8px;"></div>
+          </div>
+
+          <div>
+            <label>Previous Questions</label>
+            <div class="list" id="historyList"><span class="muted">Load your history to see previously asked questions.</span></div>
+            <div style="margin-top:8px;display:flex;gap:8px">
+              <button class="btn" id="loadHistory">Load history</button>
+              <button class="btn ghost" id="clearHistoryView">Clear</button>
+            </div>
+            <div id="historyMsg" class="muted" style="margin-top:6px"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Q&A -->
+      <section id="paneQA" class="card hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="muted">Question</span>
+            <span id="pillDiff" class="pill">—</span>
+          </div>
+          <div class="chip"><span class="muted">Score</span> <strong id="scoreVal2">0</strong></div>
+        </div>
+
+        <div id="qHeader" class="qnum" style="margin-top:4px">#—</div>
+        <div id="question" style="font-size:20px;margin-top:6px;"></div>
+
+        <div style="margin-top:14px">
+          <label>Your answer</label>
+          <input id="answer" placeholder="One word or short sentence…"/>
+        </div>
+
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn ok" id="submitAnswer">Submit</button>
+          <!-- SINGLE BUTTON: save exclusions and show feedback -->
+          <button class="btn warn" id="btnSaveAndFeedback" title="Save session & show feedback summary">Save & Get Feedback</button>
+        </div>
+
+        <div id="resultBox" class="result hidden"></div>
+
         <div style="margin-top:10px">
-          <button class="btn accent" id="startSession">Launch session</button>
+          <button id="btnProceed" class="btn accent hidden">Next question</button>
         </div>
-        <div id="settingsMsg" class="muted" style="margin-top:8px;"></div>
-      </div>
-      <div>
-        <label>Previous Questions</label>
-        <div class="list" id="historyList"><span class="muted">Load your history to see previously asked questions.</span></div>
-        <div style="margin-top:8px;display:flex;gap:8px">
-          <button class="btn" id="loadHistory">Load history</button>
-          <button class="btn ghost" id="clearHistoryView">Clear</button>
+      </section>
+
+      <!-- SUMMARY -->
+      <section id="paneSummary" class="card hidden">
+        <h2 style="margin:0 0 6px">Session Summary</h2>
+        <div id="sumStats" class="muted"></div>
+        <div id="sumFeedback" style="margin-top:10px"></div>
+        <div id="sumRating" style="font-size:28px;font-weight:900;margin-top:6px"></div>
+        <div style="margin-top:14px">
+          <button class="btn accent" id="ackSummary">OK</button>
         </div>
-        <div id="historyMsg" class="muted" style="margin-top:6px"></div>
-      </div>
-    </div>
+      </section>
+    </main>
   </div>
 
-  <!-- Q/A area -->
-  <div id="paneQA" class="card hidden">
-    <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;">
-      <div>
-        <span class="muted">Question</span>
-        <span id="pillDiff" class="pill">—</span>
-      </div>
-      <div class="chip"><span class="muted">Score</span> <strong id="scoreVal2">0</strong></div>
-    </div>
+  <script>
+    /* ====== CONFIG ====== */
+    const SERVERS = {
+      pimp: "https://file-iy1w.onrender.com" // hard-coded server
+    };
 
-    <div style="margin-top:4px" class="qnum" id="qNum">#—</div>
-    <div id="question" style="font-size:20px;margin-top:6px;"></div>
+    /* ====== STATE ====== */
+    const state = {
+      base: "",
+      connected: false,
+      username: "",
+      sessionId: "",
+      qNumber: null,
+      difficulty: "",
+      awaitingProceed: false,
+      score: 0
+    };
 
-    <div style="margin-top:14px">
-      <label>Your answer</label>
-      <input id="answer" placeholder="One word or short sentence…"/>
-    </div>
-
-    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn ok" id="submitAnswer">Submit</button>
-
-      <!-- Requested: two obvious buttons in the answering area -->
-      <button class="btn" id="btnSaveSession" title="Save exclusions & end session">Save session</button>
-      <button class="btn warn" id="btnConcludeFeedback" title="End session and get feedback summary">Get feedback</button>
-    </div>
-
-    <div id="resultBox" class="result hidden">
-      <!-- Filled dynamically -->
-    </div>
-
-    <div style="margin-top:10px">
-      <button id="btnProceed" class="btn accent hidden">Proceed to next question</button>
-    </div>
-  </div>
-
-  <!-- Summary (after feedback) -->
-  <div id="paneSummary" class="card hidden center">
-    <h2>Session Summary</h2>
-    <div id="sumStats" class="muted"></div>
-    <div id="sumFeedback" style="margin-top:10px"></div>
-    <div id="sumRating" class="rating"></div>
-    <div style="margin-top:14px">
-      <button class="btn accent" id="ackSummary">OK</button>
-    </div>
-  </div>
-</div>
-
-<script>
-  // ---- Configuration
-  const SERVERS = {
-    pimp: "https://file-iy1w.onrender.com" // hard-coded server for One Line Pimp Simulator
-  };
-
-  // ---- State
-  const state = {
-    base: "",
-    connected: false,
-    username: "",
-    sessionId: "",
-    qNumber: null,
-    difficulty: "",
-    awaitingProceed: false,
-    score: 0
-  };
-
-  // ---- Helpers
-  const $ = (id)=>document.getElementById(id);
-  const show = (el, on)=>el.classList.toggle('hidden', !on);
-  const errMsg = (e)=> e?.detail || e?.error || 'Unexpected error';
-  const setConn = (ok)=>{
-    state.connected = ok;
-    $('conn').classList.toggle('ok', ok);
-    // no text label in header; keep it clean
-  };
-  const api = async (path, opts={})=>{
-    const url = state.base + path;
-    const res = await fetch(url, {
-      ...opts,
-      headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) }
-    });
-    const text = await res.text();
-    let data; try{ data = JSON.parse(text); }catch{ data = { raw:text }; }
-    if(!res.ok){ throw data; }
-    return data;
-  };
-
-  function updateScoreChips(val){
-    state.score = Number(val||0);
-    const s = String(state.score);
-    $('scoreVal').textContent = s;
-    $('scoreVal2').textContent = s;
-    $('scoreChip').style.display = 'flex';
-  }
-
-  // ---- Landing: fetch leaderboard
-  async function fetchLeaderboard(){
-    try{
-      const r = await api('/api/leaderboard?limit=10');
-      const rows = r.leaderboard || [];
-      if(!rows.length){
-        $('lbEmpty').textContent = 'No scores yet. Be the first to play!';
-        return;
-      }
-      $('lbEmpty').classList.add('hidden');
-      $('lbTable').classList.remove('hidden');
-
-      const body = $('lbBody');
-      body.innerHTML = '';
-      rows.forEach((row, i)=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td class="rank">${row.rank ?? (i+1)}</td>
-          <td>${(row.username||'—')}</td>
-          <td><strong>${Number(row.score||0).toLocaleString()}</strong></td>
-          <td id="lb-answered-${i}"><span class="muted">…</span></td>
-        `;
-        body.appendChild(tr);
-      });
-
-      // Try to enrich with answered counts (best-effort; ignore failures)
-      rows.slice(0,10).forEach(async (row, i)=>{
-        try{
-          const s = await api('/api/score?username=' + encodeURIComponent(row.username));
-          $('lb-answered-'+i).innerHTML = `<strong>${Number(s.answered||0)}</strong>`;
-        }catch(e){
-          $('lb-answered-'+i).innerHTML = `<span class="muted">n/a</span>`;
-        }
-      });
-    }catch(e){
-      $('lbEmpty').textContent = 'Failed to load leaderboard: ' + errMsg(e);
+    /* ====== HELPERS ====== */
+    const $ = (id)=>document.getElementById(id);
+    const show = (el,on)=>el.classList.toggle('hidden', !on);
+    const errMsg = (e)=> e?.detail || e?.error || 'Unexpected error';
+    function setConn(ok){ state.connected = ok; $('conn').classList.toggle('ok', ok); }
+    function setUser(u){
+      state.username = u;
+      $('userVal').textContent = u;
+      $('userChip').style.display = 'flex';
     }
-  }
-
-  // ---- Flow boot on AI select
-  async function connectAndBoot(){
-    const key = $('aiSelect').value;
-    state.base = SERVERS[key];
-    setConn(false);
-    $('connectMsg').textContent = 'Checking connection…';
-    try{
-      const r = await api('/health');
-      setConn(!!r.ok);
-      $('connectMsg').textContent = r.ok ? 'Connection established.' : 'Server responded but not healthy.';
-      if (r.ok){
-        show($('paneUserType'), true);
-        // fetch leaderboard on landing
-        fetchLeaderboard();
-      }
-    }catch(e){
-      setConn(false);
-      $('connectMsg').textContent = 'Connection failed: ' + errMsg(e);
+    function updateScore(val){
+      state.score = Number(val||0);
+      const s = String(state.score);
+      $('scoreVal').textContent = s;
+      $('scoreVal2').textContent = s;
+      $('scoreChip').style.display = 'flex';
     }
-  }
-
-  // ---- User create / existing
-  async function showDashboard(){
-    // Exclusion count
-    try{
-      const r = await api('/api/exclusions/count?username=' + encodeURIComponent(state.username));
-      $('exclInfo').textContent = `You have ${r.count} question(s) in your exclusion list.`;
-    }catch(e){
-      $('exclInfo').textContent = 'Could not fetch exclusions: ' + errMsg(e);
+    async function api(path, opts={}){
+      const url = state.base + path;
+      const res = await fetch(url, { ...opts, headers:{ 'Content-Type':'application/json', ...(opts.headers||{}) }});
+      const text = await res.text();
+      let data; try{ data = JSON.parse(text); }catch{ data = { raw:text }; }
+      if(!res.ok) throw data;
+      return data;
     }
 
-    // Score + stats
-    try{
-      const s = await api('/api/score?username=' + encodeURIComponent(state.username));
-      updateScoreChips(s.score||0);
-      $('answeredVal').textContent = Number(s.answered||0);
-      $('correctVal').textContent = Number(s.correct||0);
-      $('accVal').textContent = (s.accuracy ? Math.round(s.accuracy*100) : 0) + '%';
-    }catch(e){
-      // non-fatal
+    function animateSwap(el){
+      // quick fade/pop for new content
+      el.classList.remove('fadeSwap-enter','fadeSwap-enter-active','popIn');
+      void el.offsetWidth; // reflow
+      el.classList.add('fadeSwap-enter');
+      requestAnimationFrame(()=> el.classList.add('fadeSwap-enter-active'));
     }
 
-    // Show profile pane
-    show($('paneProfile'), true);
-  }
+    /* ====== SIDEBAR (LEADERBOARD) ====== */
+    async function fetchLeaderboard(){
+      try{
+        const r = await api('/api/leaderboard?limit=10');
+        const rows = r.leaderboard || [];
+        if(!rows.length){ $('lbEmpty').textContent = 'No scores yet.'; return; }
+        $('lbEmpty').classList.add('hidden');
+        $('lbTable').classList.remove('hidden');
 
-  // ---- History
-  async function loadHistory(){
-    $('historyMsg').textContent = 'Loading…';
-    try{
-      // Expecting /api/history?username=... returning { items: [{q, a, correct, difficulty, asked_at, points_delta}, ...] }
-      const r = await api('/api/history?username=' + encodeURIComponent(state.username));
-      const items = r.items || [];
-      const box = $('historyList');
-      if(!items.length){
-        box.innerHTML = '<span class="muted">No history yet.</span>';
-      }else{
-        const ul = document.createElement('ul');
-        ul.style.margin='0'; ul.style.paddingLeft='18px';
-        items.forEach(it=>{
-          const li = document.createElement('li');
-          const d = it.difficulty ? `<span class="tag" style="margin-left:6px">${it.difficulty}</span>` : '';
-          li.innerHTML = `<div>${(it.q || it.question || '—')}${d}</div>`;
+        const body = $('lbBody'); body.innerHTML='';
+        rows.forEach((row,i)=>{
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td class="rank">${row.rank ?? (i+1)}</td>
+            <td>${row.username || '—'}</td>
+            <td><strong>${Number(row.score||0).toLocaleString()}</strong></td>
+            <td id="lb-answered-${i}"><span class="muted">…</span></td>
+          `;
+          body.appendChild(tr);
         });
-        box.innerHTML = '';
-        box.appendChild(ul);
+        // enrich with answered count
+        rows.slice(0,10).forEach(async (row,i)=>{
+          try{
+            const s = await api('/api/score?username=' + encodeURIComponent(row.username));
+            $('lb-answered-'+i).innerHTML = `<strong>${Number(s.answered||0)}</strong>`;
+          }catch{ $('lb-answered-'+i).innerHTML = `<span class="muted">n/a</span>`; }
+        });
+      }catch(e){
+        $('lbEmpty').textContent = 'Failed to load leaderboard: ' + errMsg(e);
       }
-      $('historyMsg').textContent = '';
-    }catch(e){
-      $('historyMsg').textContent = 'Failed to load history: ' + errMsg(e) + ' (ensure /api/history is implemented)';
     }
-  }
 
-  // ---- Questions
-  async function getNextQuestion(){
-    try{
-      const r = await api('/api/next', {
-        method:'POST',
-        body: JSON.stringify({ sessionId: state.sessionId })
-      });
-      state.qNumber = r.q_number;
-      state.difficulty = r.difficulty;
-      $('qNum').textContent = `#${state.qNumber}`;
-      $('question').textContent = r.question;
-      $('pillDiff').textContent = r.difficulty;
-      $('answer').value = '';
-      show($('resultBox'), false);
-      show($('btnProceed'), false);
-      state.awaitingProceed = false;
-      $('answer').focus();
-    }catch(e){
-      const msg = 'Failed to get next question: ' + errMsg(e);
-      const box = $('resultBox');
-      box.className = 'result bad';
-      box.textContent = msg;
-      show(box, true);
+    function hideSidebarDuringQA(hide){
+      const sb = $('sidebar');
+      sb.classList.toggle('hidden', !!hide);
     }
-  }
 
-  function renderResult(correct, explanation, pointsDelta, nextDifficulty){
-    const box = $('resultBox');
-    const pos = Number(pointsDelta||0) >= 0;
-    const deltaHtml = `<div class="delta ${pos?'pos':'neg'}">${pos?'+':''}${pointsDelta||0} pts</div>`;
-    if (correct){
-      box.className = 'result ok';
-      box.innerHTML = `<div><strong>Correct.</strong></div>${deltaHtml}`;
-    } else {
-      box.className = 'result bad';
-      box.innerHTML = `<div><strong>Incorrect.</strong> ${explanation ? ('<span class="muted">'+explanation+'</span>') : ''}</div>${deltaHtml}`;
-    }
-    if (nextDifficulty) $('pillDiff').textContent = nextDifficulty;
-    show(box, true);
-  }
-
-  async function submitAnswer(){
-    if(state.awaitingProceed) return;
-    const answer = $('answer').value.trim();
-    if(!answer){ $('answer').focus(); return; }
-    try{
-      const r = await api('/api/answer', {
-        method:'POST',
-        body: JSON.stringify({ sessionId: state.sessionId, answer })
-      });
-      // render result with score delta
-      renderResult(r.correct, r.explanation, r.points_delta, r.nextDifficulty);
-      // update score chips
-      if (typeof r.score !== 'undefined') updateScoreChips(r.score);
-      // require explicit proceed
-      state.awaitingProceed = true;
-      show($('btnProceed'), true);
-    }catch(e){
-      const box = $('resultBox');
-      box.className = 'result bad';
-      box.textContent = 'Grading failed: ' + errMsg(e);
-      show(box, true);
-    }
-  }
-
-  // ---- Conclude helpers (two buttons inside QA pane)
-  async function concludeCore(showFeedback){
-    if(!state.sessionId) return;
-    try{
-      const r = await api('/api/conclude', {
-        method:'POST',
-        body: JSON.stringify({ sessionId: state.sessionId })
-      });
-
-      if (typeof r.session_points !== 'undefined') {
-        // If backend returns session_points (optional)
-        // light toast replacement:
-        console.log('Session points:', r.session_points);
+    /* ====== FLOW BOOT ====== */
+    async function connectAndBoot(){
+      const key = $('aiSelect').value;
+      state.base = SERVERS[key];
+      setConn(false);
+      $('connectMsg').textContent = 'Checking connection…';
+      try{
+        const r = await api('/health');
+        setConn(!!r.ok);
+        $('connectMsg').textContent = r.ok ? 'Connection established.' : 'Server responded but not healthy.';
+        if (r.ok){
+          show($('paneUserType'), true);
+          fetchLeaderboard();
+        }
+      }catch(e){
+        setConn(false);
+        $('connectMsg').textContent = 'Connection failed: ' + errMsg(e);
       }
+    }
 
-      if (showFeedback){
-        $('sumStats').innerHTML = `New exclusion count: <strong>${r.new_count}</strong> · Next number: <strong>${r.next_number}</strong>`;
-        $('sumFeedback').textContent = r.feedback || '';
-        $('sumRating').textContent = r.rating || '';
-        // move to summary pane
-        show($('paneQA'), false);
-        show($('paneSummary'), true);
-      } else {
-        // Silent save -> back to dashboard
-        alert(`Session saved.\nNew exclusions: ${r.new_count}\nNext number: ${r.next_number}`);
-        resetToDashboard();
+    /* ====== USER ====== */
+    async function showDashboard(){
+      // exclusions
+      try{
+        const r = await api('/api/exclusions/count?username='+encodeURIComponent(state.username));
+        $('exclInfo').textContent = `You have ${r.count} question(s) in your exclusion list.`;
+      }catch(e){
+        $('exclInfo').textContent = 'Could not fetch exclusions: ' + errMsg(e);
       }
-    }catch(e){
-      alert('Action failed: ' + errMsg(e));
+      // score
+      try{
+        const s = await api('/api/score?username='+encodeURIComponent(state.username));
+        updateScore(s.score||0);
+        $('answeredVal').textContent = Number(s.answered||0);
+        $('correctVal').textContent = Number(s.correct||0);
+        $('accVal').textContent = (s.accuracy? Math.round(s.accuracy*100):0)+'%';
+      }catch{}
+      show($('paneProfile'), true);
     }
-  }
 
-  function resetToDashboard(){
-    state.sessionId = "";
-    show($('paneQA'), false);
-    show($('paneSummary'), false);
-    show($('paneProfile'), true);
-  }
-
-  function resetToSession(){
-    // After acknowledging summary, return to profile/settings
-    resetToDashboard();
-  }
-
-  // ---- Event wiring
-  $('aiSelect').addEventListener('change', connectAndBoot);
-  window.addEventListener('load', connectAndBoot);
-
-  $('btnNewUser').addEventListener('click', ()=>{
-    show($('paneNewUser'), true);
-    show($('paneExistingUser'), false);
-  });
-  $('btnExistingUser').addEventListener('click', ()=>{
-    show($('paneExistingUser'), true);
-    show($('paneNewUser'), false);
-  });
-  $('cancelNew').addEventListener('click', ()=>{
-    show($('paneNewUser'), false);
-  });
-  $('cancelExisting').addEventListener('click', ()=>{
-    show($('paneExistingUser'), false);
-  });
-
-  $('createUser').addEventListener('click', async ()=>{
-    const u = $('newUsername').value.trim();
-    if(!u){ $('newUserMsg').textContent = 'Please enter a username.'; return; }
-    try{
-      await api('/api/users',{ method:'POST', body: JSON.stringify({ username: u })});
-      state.username = u;
-      $('newUserMsg').textContent = `User "${u}" created.`;
-      show($('paneUserType'), false);
-      show($('paneNewUser'), false);
-      await showDashboard();
-    }catch(e){
-      $('newUserMsg').textContent = errMsg(e);
+    /* ====== HISTORY ====== */
+    async function loadHistory(){
+      $('historyMsg').textContent='Loading…';
+      try{
+        const r = await api('/api/history?username='+encodeURIComponent(state.username));
+        const items = r.items || [];
+        const box = $('historyList');
+        if(!items.length){
+          box.innerHTML = '<span class="muted">No history yet.</span>';
+        }else{
+          const ul = document.createElement('ul');
+          ul.style.margin='0'; ul.style.paddingLeft='18px';
+          items.forEach(it=>{
+            const li = document.createElement('li');
+            const d = it.difficulty ? `<span class="pill" style="margin-left:6px">${it.difficulty}</span>` : '';
+            li.innerHTML = `<div>${(it.q || it.question || '—')}${d}</div>`;
+            ul.appendChild(li);
+          });
+          box.innerHTML=''; box.appendChild(ul);
+        }
+        $('historyMsg').textContent='';
+      }catch(e){
+        $('historyMsg').textContent='Failed to load history: '+errMsg(e)+' (ensure /api/history exists)';
+      }
     }
-  });
 
-  $('useExisting').addEventListener('click', async ()=>{
-    const u = $('existingUsername').value.trim();
-    if(!u){ $('existingMsg').textContent = 'Please enter your username.'; return; }
-    try{
-      // quick existence check via exclusions or score
-      await api('/api/exclusions/count?username=' + encodeURIComponent(u));
-      state.username = u;
-      $('existingMsg').textContent = `Welcome back, ${u}.`;
-      show($('paneUserType'), false);
-      show($('paneExistingUser'), false);
-      await showDashboard();
-    }catch(e){
-      $('existingMsg').textContent = errMsg(e);
-    }
-  });
-
-  $('startSession').addEventListener('click', async ()=>{
-    try{
+    /* ====== SESSION / QUESTIONS ====== */
+    async function startSession(){
       const topic = $('topic').value.trim() || 'random';
       const startingDifficulty = $('difficulty').value;
-      const r = await api('/api/sessions', {
-        method:'POST',
-        body: JSON.stringify({ username: state.username, topic, startingDifficulty })
-      });
-      state.sessionId = r.sessionId;
-      state.difficulty = r.difficulty;
-      $('pillDiff').textContent = state.difficulty;
-
-      // show QA pane
-      show($('paneProfile'), false);
-      show($('paneQA'), true);
-
-      // fetch first question
-      await getNextQuestion();
-    }catch(e){
-      $('settingsMsg').textContent = 'Failed to start session: ' + errMsg(e);
+      try{
+        const r = await api('/api/sessions', {
+          method:'POST',
+          body: JSON.stringify({ username: state.username, topic, startingDifficulty })
+        });
+        state.sessionId = r.sessionId;
+        state.difficulty = r.difficulty;
+        $('pillDiff').textContent = state.difficulty;
+        hideSidebarDuringQA(true);
+        show($('paneProfile'), false);
+        show($('paneQA'), true);
+        await nextQuestion();
+      }catch(e){
+        $('settingsMsg').textContent = 'Failed to start session: ' + errMsg(e);
+      }
     }
-  });
 
-  $('submitAnswer').addEventListener('click', submitAnswer);
-  $('btnProceed').addEventListener('click', getNextQuestion);
+    async function nextQuestion(){
+      try{
+        const r = await api('/api/next', {
+          method:'POST',
+          body: JSON.stringify({ sessionId: state.sessionId })
+        });
+        state.qNumber = r.q_number;
+        state.difficulty = r.difficulty;
+        $('qHeader').textContent = `#${state.qNumber}`;
+        $('pillDiff').textContent = r.difficulty;
+        $('question').textContent = r.question;
+        $('answer').value = '';
+        show($('resultBox'), false);
+        show($('btnProceed'), false);
+        state.awaitingProceed = false;
+        $('answer').focus();
+        // animate new question
+        animateSwap($('question'));
+        animateSwap($('qHeader'));
+      }catch(e){
+        const box = $('resultBox');
+        box.className='result bad';
+        box.textContent='Failed to get next question: '+errMsg(e);
+        show(box,true);
+      }
+    }
 
-  // Save session (quiet conclude)
-  $('btnSaveSession').addEventListener('click', ()=>concludeCore(false));
-  // Conclude and show feedback summary
-  $('btnConcludeFeedback').addEventListener('click', ()=>concludeCore(true));
-  $('ackSummary').addEventListener('click', resetToSession);
+    function renderResult(correct, explanation, pointsDelta, nextDifficulty){
+      const box = $('resultBox');
+      const pos = Number(pointsDelta||0) >= 0;
+      const deltaHtml = `<div class="delta ${pos?'pos':'neg'}">${pos?'+':''}${pointsDelta||0} pts</div>`;
+      if(correct){
+        box.className='result ok popIn';
+        box.innerHTML = `<div><strong>Correct.</strong></div>${deltaHtml}`;
+      }else{
+        box.className='result bad popIn';
+        box.innerHTML = `<div><strong>Incorrect.</strong> ${explanation ? ('<span class="muted">'+explanation+'</span>') : ''}</div>${deltaHtml}`;
+      }
+      if(nextDifficulty) $('pillDiff').textContent = nextDifficulty;
+      show(box,true);
+    }
 
-  // History actions
-  $('loadHistory').addEventListener('click', loadHistory);
-  $('clearHistoryView').addEventListener('click', ()=>{
-    $('historyList').innerHTML = '<span class="muted">Cleared view.</span>';
-  });
-</script>
+    async function submitAnswer(){
+      if(state.awaitingProceed) return;
+      const answer = $('answer').value.trim();
+      if(!answer){ $('answer').focus(); return; }
+      try{
+        const r = await api('/api/answer', {
+          method:'POST',
+          body: JSON.stringify({ sessionId: state.sessionId, answer })
+        });
+        renderResult(r.correct, r.explanation, r.points_delta, r.nextDifficulty);
+        if(typeof r.score!=='undefined') updateScore(r.score);
+        state.awaitingProceed = true;
+        show($('btnProceed'), true);
+      }catch(e){
+        const box = $('resultBox');
+        box.className='result bad';
+        box.textContent='Grading failed: '+errMsg(e);
+        show(box,true);
+      }
+    }
+
+    async function concludeWithFeedback(){
+      if(!state.sessionId) return;
+      try{
+        const r = await api('/api/conclude', {
+          method:'POST',
+          body: JSON.stringify({ sessionId: state.sessionId })
+        });
+        $('sumStats').innerHTML = `New exclusion count: <strong>${r.new_count}</strong> · Next number: <strong>${r.next_number}</strong>` + (typeof r.session_points!=='undefined' ? ` · Session points: <strong>${r.session_points}</strong>` : '');
+        $('sumFeedback').textContent = r.feedback || '';
+        $('sumRating').textContent = r.rating || '';
+        show($('paneQA'), false);
+        show($('paneSummary'), true);
+        animateSwap($('paneSummary'));
+      }catch(e){
+        alert('Failed to save & get feedback: ' + errMsg(e));
+      }
+    }
+
+    function backToDashboard(){
+      state.sessionId = "";
+      show($('paneSummary'), false);
+      show($('paneProfile'), true);
+      hideSidebarDuringQA(false);
+    }
+
+    /* ====== EVENTS ====== */
+    $('aiSelect').addEventListener('change', connectAndBoot);
+    window.addEventListener('load', connectAndBoot);
+
+    $('btnNewUser').addEventListener('click', ()=>{ show($('paneNewUser'), true); show($('paneExistingUser'), false); });
+    $('btnExistingUser').addEventListener('click', ()=>{ show($('paneExistingUser'), true); show($('paneNewUser'), false); });
+    $('cancelNew').addEventListener('click', ()=> show($('paneNewUser'), false));
+    $('cancelExisting').addEventListener('click', ()=> show($('paneExistingUser'), false));
+
+    $('createUser').addEventListener('click', async ()=>{
+      const u = $('newUsername').value.trim();
+      if(!u){ $('newUserMsg').textContent='Please enter a username.'; return; }
+      try{
+        await api('/api/users',{ method:'POST', body: JSON.stringify({ username: u })});
+        setUser(u);
+        $('newUserMsg').textContent = `User "${u}" created.`;
+        show($('paneUserType'), false);
+        show($('paneNewUser'), false);
+        await showDashboard();
+      }catch(e){ $('newUserMsg').textContent = errMsg(e); }
+    });
+
+    $('useExisting').addEventListener('click', async ()=>{
+      const u = $('existingUsername').value.trim();
+      if(!u){ $('existingMsg').textContent = 'Please enter your username.'; return; }
+      try{
+        await api('/api/exclusions/count?username='+encodeURIComponent(u)); // quick existence check
+        setUser(u);
+        $('existingMsg').textContent = `Welcome back, ${u}.`;
+        show($('paneUserType'), false);
+        show($('paneExistingUser'), false);
+        await showDashboard();
+      }catch(e){ $('existingMsg').textContent = errMsg(e); }
+    });
+
+    $('startSession').addEventListener('click', startSession);
+    $('submitAnswer').addEventListener('click', submitAnswer);
+    $('btnProceed').addEventListener('click', nextQuestion);
+    $('btnSaveAndFeedback').addEventListener('click', concludeWithFeedback);
+    $('ackSummary').addEventListener('click', backToDashboard);
+
+    $('loadHistory').addEventListener('click', loadHistory);
+    $('clearHistoryView').addEventListener('click', ()=>{ $('historyList').innerHTML='<span class="muted">Cleared view.</span>'; });
+
+  </script>
 </body>
 </html>
