@@ -191,6 +191,7 @@ async function createUser(username) {
   // after: await createUser(username);
   await redis.hset(kUser(username), { score: 0, answered: 0, correct: 0 });
   await redis.zadd(kLB(), { score: 0, member: username });
+  await redis.zadd('leaderboard:global', { score: 0, member: username }); // NOT empty string
 }
 
 async function exclusionsCount(username) {
@@ -619,24 +620,46 @@ app.get('/api/score', async (req, res) => {
 });
 
 // Leaderboard (global). Defaults to top 20.
+// Replace your current /api/leaderboard with this
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 20)));
-    // Upstash client supports ZRANGE with {rev:true, withScores:true}
-    const rows = await redis.zrange(kLB(), 0, limit - 1, { rev: true, withScores: true });
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 10)));
+    const key = 'leaderboard:global';
 
-    // rows is [{member, score}, ...] in modern client
-    const board = rows.map((r, i) => ({
-      rank: i + 1,
-      username: r.member || r.member?.toString?.() || r[0],
-      score: Number(r.score ?? r[1] ?? 0)
-    }));
+    const raw = await redis.zrange(key, 0, limit - 1, { rev: true, withScores: true });
+
+    // Normalize: supports both object-array and alternating-array formats
+    let pairs = [];
+
+    if (Array.isArray(raw) && raw.length > 0) {
+      if (typeof raw[0] === 'object' && raw[0] !== null && ('member' in raw[0] || 'score' in raw[0])) {
+        // Upstash modern shape: [{member, score}, ...]
+        pairs = raw.map(r => [String(r.member ?? ''), Number(r.score ?? 0)]);
+      } else if (typeof raw[0] === 'string' || typeof raw[0] === 'number') {
+        // Alternating shape: ["member","score","member","score", ...]
+        for (let i = 0; i < raw.length; i += 2) {
+          const m = String(raw[i] ?? '');
+          const s = Number(raw[i + 1] ?? 0);
+          pairs.push([m, s]);
+        }
+      }
+    }
+
+    // Filter out empty members and clamp NaN scores to 0
+    const board = pairs
+      .filter(([m]) => m && m.trim().length > 0)
+      .map(([m, s], i) => ({
+        rank: i + 1,
+        username: m,
+        score: Number.isFinite(s) ? s : 0
+      }));
 
     res.json({ leaderboard: board });
   } catch (e) {
-    res.status(500).json({ error: "Failed to get leaderboard", detail: String(e) });
+    res.status(500).json({ error: 'Failed to get leaderboard', detail: String(e) });
   }
 });
+
 
 
 // Conclude session (merge to exclusions, return new_count, next_number, feedback, rating)
