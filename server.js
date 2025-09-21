@@ -36,6 +36,8 @@ const bumpDifficulty = (label, delta) => {
   return DIFF[next];
 };
 
+
+// ---- TOC helpers (bullet extraction + AI) ----
 medDb.exec(`
   CREATE TABLE IF NOT EXISTS toc_cache (
     label TEXT PRIMARY KEY,
@@ -43,8 +45,6 @@ medDb.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-
-// ---- TOC helpers (bullet extraction + AI) ----
 
 // Build consolidated bullet entries from the indexed PDF text
 function buildBulletEntriesForLabel(label) {
