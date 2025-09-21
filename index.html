@@ -24,12 +24,16 @@
     .muted{color:var(--muted)} .ok{color:var(--ok)} .bad{color:var(--danger)}
     .tag{padding:2px 8px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:12px}
     .quote{background:#0e1530; border:1px solid var(--border); border-left:3px solid var(--accent); padding:10px; border-radius:12px; white-space:pre-wrap; line-height:1.35}
+    .box-title{font-weight:700; margin:0 0 6px 0}
     select[multiple]{min-width:260px; min-height:120px}
     .hidden{display:none !important}
     @media (max-width:980px){ .grid{grid-template-columns:1fr} select[multiple]{min-width:100%} }
     .overlay{position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center}
     .modal{width:min(560px,92vw); background:var(--card); border:1px solid var(--border); border-radius:16px; padding:20px}
     .kbd{background:#0c132c;border:1px solid var(--border);padding:2px 6px;border-radius:6px}
+    .linkbar a{margin-right:10px}
+    .list li{margin:6px 0}
+    .mono{font-family:ui-monospace,SFMono-Regular,Consolas,Monaco,monospace}
   </style>
 </head>
 <body>
@@ -131,25 +135,38 @@
       <!-- LEARN -->
       <div class="card stack hidden" id="modeLearn">
         <div class="section-title">Learn Mode</div>
+
         <div class="row">
           <span class="muted">Current topic:</span>
           <span id="currentTopic" class="tag">—</span>
           <button id="btnChangeTopic" class="ghost">Change</button>
         </div>
 
+        <!-- BOX 1: Guidelines -->
+        <div class="card" style="background:#0f1736;border:1px solid var(--border)">
+          <h3 class="box-title">Clinical Guidelines (Canadian → USA → International)</h3>
+          <div id="guidelinesBox" class="stack"></div>
+        </div>
+
+        <!-- BOX 2: Landmark Trials -->
+        <div class="card" style="background:#0f1736;border:1px solid var(--border)">
+          <h3 class="box-title">Landmark Trials</h3>
+          <div id="trialsBox" class="stack"></div>
+        </div>
+
+        <!-- BOX 3: Learning Objectives -->
+        <div class="card" style="background:#0f1736;border:1px solid var(--border)">
+          <h3 class="box-title">Learning Objectives (with resources)</h3>
+          <div id="objectivesBox" class="stack"></div>
+        </div>
+
         <div class="stack">
           <div class="row">
-            <input id="searchQuery" size="48" placeholder="Search your notes (e.g., 'ACS' OR NSTEMI)" />
+            <input id="searchQuery" size="48" placeholder="Optional: search your notes (e.g., 'ACS' OR NSTEMI)" />
             <button id="btnSearch" class="primary">GET /med/pdfs/search</button>
           </div>
           <div id="searchInfo" class="muted"></div>
           <div id="hits" class="stack"></div>
-        </div>
-
-        <div class="card" style="background:#0f1736;border:1px dashed var(--border)">
-          <div class="section-title">Guideline & Landmark Trial links</div>
-          <div class="linkbar" id="extLinks"></div>
-          <div class="muted" style="margin-top:8px">Canadian first, then American.</div>
         </div>
 
         <div class="footerbar">
@@ -181,12 +198,13 @@
       connected: false,
       completed: new Set(),
 
-      // TOC structures
-      discToSub: new Map(),          // Map<discipline, Set<sub>>
-      subToTopics: new Map(),        // Map<discipline::sub, Set<topic>>
+      // TOC
+      discToSub: new Map(),
+      subToTopics: new Map(),
       allTopics: new Set(),
 
       pickedTopic: null,
+      learnPlan: null, // {guidelines, trials, objectives}
       lastHits: [],
       questions: [],
       qIndex: 0
@@ -233,7 +251,7 @@
         state.connected = false; dot.textContent = 'disconnected'; dot.style.color = 'var(--muted)';
       }
       await loadCompleted();
-      await fetchTOC();        // TOC from /med/toc
+      await fetchTOC();
       selectMode('pick');
     }
 
@@ -267,7 +285,6 @@
         const j = await r.json();
         if(!r.ok) throw new Error(j.error || r.statusText);
 
-        // Build maps
         state.discToSub = new Map();
         state.subToTopics = new Map();
         state.allTopics = new Set();
@@ -281,7 +298,6 @@
           state.allTopics.add(t);
         });
 
-        // Counts
         $('discCount').textContent  = String(state.discToSub.size);
         $('subCount').textContent   = String([...state.subToTopics.keys()].length);
         $('topicCount').textContent = String(state.allTopics.size);
@@ -294,7 +310,6 @@
       }
     }
 
-    // ---------- Populate / selection flow ----------
     function populateDisciplines(){
       selDisc.innerHTML = '';
       const discs = [...state.discToSub.keys()].sort((a,b)=>a.localeCompare(b));
@@ -350,7 +365,7 @@
       renderPickConfirmation(pool[0]);
     };
 
-    // ---------- Randomizers ----------
+    // Randomizers
     function setSingle(selectEl, value){
       [...selectEl.options].forEach(o => o.selected = (o.value === value));
       selectEl.dispatchEvent(new Event('change'));
@@ -390,7 +405,7 @@
       renderPickConfirmation(pick);
     };
 
-    // ---------- High-Yield (IM) via server AI ----------
+    // High-Yield (IM) via server AI (kept)
     $('btnHighYieldIM').onclick = async ()=>{
       const body = { user_id: state.userId, n: 1 };
       try{
@@ -408,7 +423,6 @@
       }
     };
 
-    // ---------- Confirm pick ----------
     function renderPickConfirmation(topic, reason){
       state.pickedTopic = topic;
       const box = $('pickResult'); box.innerHTML='';
@@ -423,33 +437,131 @@
           <button id="btnRejectPick">No</button>
         </div>`;
       box.appendChild(wrap);
-      $('btnConfirmPick').onclick = ()=>{
-        $('currentTopic').textContent = topic;
-        $('testTopic').textContent = topic;
-        buildGuidelineLinks(topic);
-        $('searchQuery').value = topic;
-        $('hits').innerHTML = '';
-        $('markStatus').textContent = '';
-        selectMode('learn');
-      };
+      $('btnConfirmPick').onclick = ()=> startLearn(topic);
       $('btnRejectPick').onclick = ()=>{ box.innerHTML='<span class="muted">Okay. Adjust selections and pick again.</span>'; };
     }
 
-    // ---------- Learn ----------
-    function buildGuidelineLinks(topic){
-      const links = $('extLinks'); links.innerHTML='';
-      const enc = encodeURIComponent(topic);
-      const a = (href, label) => { const el=document.createElement('a'); el.href=href; el.target='_blank'; el.rel='noopener'; el.textContent=label; el.style.marginRight='10px'; return el; };
-      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:cmaj.ca+guideline`, "CMAJ guideline"));
-      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:ccs.ca+guideline`, "CCS (Canada)"));
-      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:cts-sct.ca+guideline`, "CTS (Canada)"));
-      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:acc.org+guideline`, "ACC"));
-      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:ahajournals.org+guideline`, "AHA"));
-      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:chestnet.org+guideline`, "CHEST"));
-      links.appendChild(a(`https://www.google.com/search?q=${enc}+landmark+trial`, "Landmark trials"));
-      links.appendChild(a(`https://scholar.google.com/scholar?q=${enc}+randomized+trial`, "Scholar: RCTs"));
+    // ---------- LEARN MODE ----------
+    async function startLearn(topic){
+      $('currentTopic').textContent = topic;
+      $('testTopic').textContent = topic;
+      $('guidelinesBox').innerHTML = '<span class="muted">Asking AI for guidelines…</span>';
+      $('trialsBox').innerHTML = '<span class="muted">Asking AI for landmark trials…</span>';
+      $('objectivesBox').innerHTML = '<span class="muted">Asking AI for learning objectives…</span>';
+      $('hits').innerHTML = ''; $('searchInfo').textContent = '';
+      state.learnPlan = null;
+      selectMode('learn');
+
+      try{
+        const r = await fetch(`${state.baseUrl}/med/learn-plan`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ topic, user_id: state.userId })
+        });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error || r.statusText);
+        state.learnPlan = j;
+        renderGuidelines(j.guidelines || []);
+        renderTrials(j.trials || []);
+        renderObjectives(j.objectives || [], j.guidelines||[], j.trials||[]);
+      }catch(err){
+        $('guidelinesBox').innerHTML = `<span class="bad">${err.message}</span>`;
+        $('trialsBox').innerHTML = `<span class="bad">${err.message}</span>`;
+        $('objectivesBox').innerHTML = `<span class="bad">${err.message}</span>`;
+      }
     }
 
+    function gSearch(q){ return `https://www.google.com/search?q=${encodeURIComponent(q)}`; }
+    function pmidSearch(q){ return `https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(q)}`; }
+    function scholar(q){ return `https://scholar.google.com/scholar?q=${encodeURIComponent(q)}`; }
+
+    function renderGuidelines(list){
+      const box = $('guidelinesBox'); box.innerHTML='';
+      if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
+      const ul = document.createElement('ul'); ul.className='list';
+      list.forEach(g=>{
+        const li = document.createElement('li');
+        const title = `${g.title || ''}`.trim();
+        const org = g.org ? ` (${g.org})` : '';
+        const meta = [g.region, g.year].filter(Boolean).join(' · ');
+        const link = g.link || gSearch(`${title} ${g.org||''} guideline`);
+        li.innerHTML = `
+          <div><b>${title}</b>${org} — <span class="muted">${meta}</span></div>
+          <div class="linkbar"><a href="${link}" target="_blank">Open</a></div>
+          ${g.why ? `<div class="muted">${g.why}</div>` : ''}`;
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    }
+
+    function renderTrials(list){
+      const box = $('trialsBox'); box.innerHTML='';
+      if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
+      const ul = document.createElement('ul'); ul.className='list';
+      list.forEach(t=>{
+        const link = t.link || scholar(`${t.name||''} ${state.pickedTopic||''}`);
+        const meta = [t.year, t.design, t.n].filter(Boolean).join(' · ');
+        li = document.createElement('li');
+        li.innerHTML = `
+          <div><b>${t.name||'Trial'}</b> — <span class="muted">${meta}</span></div>
+          <div class="muted">${t.one_liner || t.result || ''}</div>
+          <div class="linkbar">
+            <a href="${link}" target="_blank">Open</a>
+            <a href="${pmidSearch(t.name||'')}" target="_blank">PubMed</a>
+            <a href="${scholar(t.name||'')}" target="_blank">Scholar</a>
+          </div>`;
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    }
+
+    function renderObjectives(objs, guidelines, trials){
+      const box = $('objectivesBox'); box.innerHTML='';
+      if(!objs.length){ box.innerHTML='<span class="muted">None produced by AI.</span>'; return; }
+
+      const gIndex = new Map((guidelines||[]).map(g => [String(g.title||'').toLowerCase(), g]));
+      const tIndex = new Map((trials||[]).map(t => [String(t.name||'').toLowerCase(), t]));
+
+      objs.forEach(o=>{
+        const wrap = document.createElement('div');
+        wrap.className = 'stack';
+        const header = document.createElement('div');
+        header.innerHTML = `<b>${o.objective||''}</b>`;
+        wrap.appendChild(header);
+        if(o.rationale){
+          const rat = document.createElement('div');
+          rat.className = 'muted';
+          rat.textContent = o.rationale;
+          wrap.appendChild(rat);
+        }
+
+        const ul = document.createElement('ul'); ul.className='list';
+        (o.resources||[]).forEach(r=>{
+          const li = document.createElement('li');
+          if(r.type === 'guideline'){
+            const key = String(r.ref||'').toLowerCase();
+            const g = gIndex.get(key);
+            const txt = g ? `${g.title} (${g.org||''} ${g.year||''})` : (r.ref||'Guideline');
+            const link = (g && g.link) || gSearch(`${txt} guideline`);
+            li.innerHTML = `📘 ${txt} — <a href="${link}" target="_blank">Open</a>`;
+          } else if(r.type === 'trial'){
+            const key = String(r.ref||'').toLowerCase();
+            const t = tIndex.get(key);
+            const txt = t ? `${t.name} (${t.year||''})` : (r.ref||'Trial');
+            const link = (t && t.link) || scholar(txt);
+            li.innerHTML = `🧪 ${txt} — <a href="${link}" target="_blank">Open</a>`;
+          } else {
+            const title = r.title || 'Resource';
+            const link  = r.link || gSearch(`${title} ${state.pickedTopic||''}`);
+            li.innerHTML = `🔎 ${title} — <a href="${link}" target="_blank">Open</a>`;
+          }
+          ul.appendChild(li);
+        });
+        wrap.appendChild(ul);
+        box.appendChild(wrap);
+      });
+    }
+
+    // Optional: notes search (unchanged)
     $('btnSearch').onclick = async ()=>{
       const q = sanitize($('searchQuery').value) || state.pickedTopic || '';
       if(!q){ alert('Enter a query or pick a topic first.'); return; }
@@ -493,7 +605,7 @@
       }
     };
 
-    // ---------- Test (cloze from hits) ----------
+    // Test mode (unchanged)
     function cloze(text){
       const cands = [...new Set((text.match(/\b([A-Z]{3,}|[A-Za-z]{6,}|\d+(\.\d+)?\s?(mg|mmol\/L|L|g|mcg|units|%))\b/g) || []))].filter(w => w.length>=4 && w.length<=30).slice(0,12);
       if(!cands.length) return null;
@@ -542,7 +654,7 @@
       document.getElementById('btnPrev').onclick = prevQ;
     }
 
-    // ---------- Preconnect (header dot) ----------
+    // Preconnect dot
     (async function preconnect(){
       try{
         const r = await fetch(`https://file-iy1w.onrender.com/med/topics`);
