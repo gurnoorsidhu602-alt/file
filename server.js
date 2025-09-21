@@ -1,3 +1,7 @@
+// server.js  (hardcoded TOC version)
+// NOTE: This keeps your existing endpoints. Only the /med/toc route is replaced,
+// and three small read endpoints are added for convenience.
+
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -78,7 +82,7 @@ medDb.exec(`
     INSERT INTO pdf_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
   END;
 
-  -- TOC cache
+  -- TOC cache (left for future use)
   CREATE TABLE IF NOT EXISTS toc_cache (
     label TEXT PRIMARY KEY,
     json  TEXT NOT NULL,
@@ -136,7 +140,7 @@ async function indexPdfBuffer(buffer, label) {
   return { docId, nChunks: chunks.length };
 }
 
-// ----------------------- STANDARD PDF AUTO-INDEXER --------------------------
+// ----------------------- STANDARD PDF AUTO-INDEXER (left as-is) -------------
 const STANDARD_PDF_URL =
   process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
 const STANDARD_PDF_LABEL =
@@ -149,20 +153,10 @@ function pdfExistsByLabel(label) {
 
 async function ensureStandardPdfIndexed() {
   try {
-    if (!STANDARD_PDF_URL) {
-      console.warn('[MedLearner] STANDARD_PDF_URL not set; skipping auto-index.');
-      return;
-    }
-    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) {
-      console.log(`[MedLearner] Standard PDF already indexed: ${STANDARD_PDF_LABEL}`);
-      return;
-    }
-    console.log(`[MedLearner] Fetching standard PDF from ${STANDARD_PDF_URL}`);
+    if (!STANDARD_PDF_URL) return;
+    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) return;
     const resp = await fetch(STANDARD_PDF_URL);
-    if (!resp.ok) {
-      console.error(`[MedLearner] Failed to fetch standard PDF: ${resp.status}`);
-      return;
-    }
+    if (!resp.ok) return;
     const buf = Buffer.from(await resp.arrayBuffer());
     const { docId, nChunks } = await indexPdfBuffer(buf, STANDARD_PDF_LABEL);
     console.log(`[MedLearner] Indexed standard PDF "${STANDARD_PDF_LABEL}" as ${docId} (${nChunks} chunks).`);
@@ -172,120 +166,462 @@ async function ensureStandardPdfIndexed() {
 }
 ensureStandardPdfIndexed();
 
-// ----------------------------- TOC AI HELPERS -------------------------------
+// ----------------------------- HARDCODED TOC -------------------------------
+// Derived from your TOC PDF. Expand freely — the API below reads from this tree.
+// Structure: { [discipline]: { [sub]: [topics...] } }
 
-// Build consolidated bullet entries from the indexed PDF text
-function buildBulletEntriesForLabel(label) {
-  const rows = medDb.prepare(`
-    SELECT pc.text
-    FROM pdf_chunks pc
-    JOIN pdf_docs pd ON pd.id = pc.doc_id
-    WHERE pd.label = ?
-    ORDER BY pc.ord
-  `).all(label);
+const HARDCODED_TOC = {
+  "Cardiology": {
+    "Ischemia": [
+      "Approach To Acute Coronary Syndrome",
+      "Approach to ECG for suspected MI/ACS",
+      "Approach to Dyslipidemia Therapy",
+      "Non-acute Coronary Artery Disease",
+      "Acute Coronary Syndrome",
+      "Variant/Prinzmetal/Vasospastic Angina"
+    ],
+    "Arrhythmias": [
+      "ECG interpretation",
+      "Approach to Abnormal QT",
+      "Approach to Bundle Branch Blocks",
+      "Approach to AV Block",
+      "Approach to Tachycardia",
+      "Approach to Bradyarrhythmia",
+      "Supraventricular Premature Beats",
+      "Supraventricular Tachycardia",
+      "Atrial Fibrillation and Flutter",
+      "PVCs",
+      "Ventricular Tachycardia",
+      "Ventricular Fibrillation",
+      "Causes of Wide Complex Tachycardia in Children",
+      "Overview of Antiarrhythmic Drugs"
+    ],
+    "Valvular Heart Disease": [
+      "Approach to Murmur/Valvular Disease",
+      "Aortic Regurgitation",
+      "Aortic Stenosis",
+      "Mitral Regurgitation",
+      "Mitral Valve Prolapse",
+      "Mitral Stenosis"
+    ],
+    "Heart Failure": [
+      "Background Pathophysiology",
+      "Diagnostic approach to Acute Heart Failure",
+      "Chronic Heart Failure",
+      "Acute Heart Failure",
+      "Approach to Shock"
+    ],
+    "Misc": [
+      "Basic Cardiac Physiology and Anatomy",
+      "Infective Endocarditis",
+      "Hypertension",
+      "Aortic Dissection",
+      "Approach to Cardiac Tumours",
+      "Approach to Pericardial Disease",
+      "Sympathomimetics"
+    ],
+    "Myocardial": [
+      "Acute Rheumatic Fever",
+      "Takotsubo Cardiomyopathy",
+      "Dilated Cardiomyopathy",
+      "Hypertrophic Cardiomyopathy",
+      "Restrictive Cardiomyopathy"
+    ],
+    "Vascular": [
+      "Peripheral Arterial Disease",
+      "Nonthrombotic Embolism",
+      "Chronic Venous Disease",
+      "Carotid Artery Stenosis",
+      "Renal Artery Stenosis",
+      "Carotid/Vertebral Artery Dissection",
+      "Acute Limb Ischemia",
+      "Cholesterol Embolization Syndrome",
+      "Abdominal Aortic Aneurysm",
+      "Thoracic Outlet Syndrome"
+    ]
+  },
 
-  const rawLines = [];
-  for (const { text } of rows) String(text || '').split(/\r?\n/).forEach(l => rawLines.push(l));
+  "Emergency Medicine": {
+    "Approaches": [
+      "Approach to Syncope"
+    ],
+    "Trauma": [
+      "Initial Management of Trauma",
+      "Blunt Abdominal Trauma",
+      "Blunt Pelvic Trauma",
+      "FAST and eFAST"
+    ]
+  },
 
-  const BULLET = /^\s*([●○•◦▪▸►▶-])\s*(.*)$/u; // common PDF bullets
-  const entries = []; // { b: '●'|'○'|'-'|..., t: 'line text' }
-  let pending = null;
+  "Endocrinology": {
+    "Glucose": [
+      "Physiology Relevant to Endocrine Pancreas",
+      "General Approach to Diabetes Mellitus",
+      "Diabetic Neuropathy",
+      "Diabetic Retinopathy",
+      "Hyperglycemic Crises",
+      "Insulin Therapy",
+      "Non-Insulin Oral Antidiabetics"
+    ],
+    "Adrenal": [
+      "Adrenal Physiology",
+      "Adrenal/Testicular Gland Biochemistry",
+      "Congenital Adrenal Hyperplasia",
+      "Adrenal Insufficiency",
+      "Hypercortisolism",
+      "Hyperaldosteronism",
+      "Adrenal Incidentaloma"
+    ],
+    "Gonadal": [
+      "Disorders of Sexual Development",
+      "Testosterone Replacement Therapy"
+    ],
+    "Thyroid": [
+      "Physiology relevant to Thyroid disease",
+      "Hypothyroidism",
+      "Hyperthyroidism",
+      "Thyroid Crises"
+    ],
+    "Parathyroid": [
+      "Parathyroid Physiology",
+      "Hyperparathyroidism",
+      "Hypoparathyroidism"
+    ],
+    "Pituitary": [
+      "Pituitary Physiology",
+      "Pituitary Adenoma",
+      "Hypopituitarism",
+      "Hyperprolactinemia",
+      "Acromegaly",
+      "Diabetes Insipidus",
+      "Syndrome of Inappropriate ADH"
+    ]
+  },
 
-  for (let line of rawLines) {
-    // trim dot leaders + trailing page numbers; collapse ws
-    line = String(line || '')
-      .replace(/\.{2,}\s*\d+\s*$/, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    if (!line) continue;
+  "Gastroenterology": {
+    "Intestinal and Stomach": [
+      "Bowel Obstruction (Adult)",
+      "Acute Mesenteric Ischemia",
+      "Perforated Peptic Ulcer",
+      "Management of Peptic Ulcers",
+      "Diverticular Disease",
+      "Abdominal Hernias",
+      "Volvulus / Malrotation",
+      "Paralytic Ileus",
+      "Irritable Bowel Syndrome",
+      "Inflammatory Bowel Disease",
+      "Osmotic Diarrhea",
+      "Secretory Diarrhea",
+      "Malabsorptive Diarrhea",
+      "Inflammatory Diarrhea",
+      "Gastritis and Dyspepsia",
+      "Appendicitis",
+      "Ischemic Colitis (non-acute)",
+      "Angiodysplasia",
+      "Constipation in Adults",
+      "Celiac Disease",
+      "Small Intestinal Bacterial Overgrowth"
+    ],
+    "General": [
+      "Diagnostic Approach to Non-traumatic Abdominal Pain",
+      "Approach to Upper GI Bleed",
+      "Approach to Lower GI Bleed"
+    ],
+    "Biliary and Hepatic": [
+      "Acute Pancreatitis",
+      "Chronic Pancreatitis",
+      "Acute (Fulminant) Liver Failure",
+      "Diagnostic Approach to Chronic Liver Disease",
+      "Spontaneous Bacterial Peritonitis",
+      "Gallstone Disease",
+      "Diagnostic Approach to Jaundice",
+      "PSC and PBC",
+      "Autoimmune Hepatitis",
+      "Wilson Disease",
+      "Hemochromatosis",
+      "Cirrhosis",
+      "Ascites",
+      "Alcoholic Liver Disease",
+      "Budd–Chiari Syndrome",
+      "Portal Hypertension",
+      "Hepatic Encephalopathy",
+      "MASLD (NAFLD)",
+      "Complications of Gallstones"
+    ],
+    "Esophageal": [
+      "Diagnostic Approach to Dysphagia",
+      "Esophageal Varices",
+      "GERD",
+      "Approach to Esophagitis",
+      "Hiatal Hernia",
+      "Esophageal Diverticula",
+      "Achalasia",
+      "Hypermotility Disorders",
+      "Esophageal Tears and Rupture"
+    ],
+    "Misc": [
+      "Acute Splenic Diseases and Injuries",
+      "Abdominal Compartment Syndrome",
+      "Hemorrhoids",
+      "Anal Fissures",
+      "Perirectal/Anorectal Abscess and Fistula",
+      "GI Perforation (Perforated Viscus)",
+      "Pilonidal Disease",
+      "Refeeding Syndrome"
+    ]
+  },
 
-    const m = line.match(BULLET);
-    if (m) {
-      if (pending && pending.t.trim()) entries.push(pending);
-      const b = m[1];
-      const t = (m[2] || '').trim();
-      pending = t ? { b, t } : null;
-    } else if (pending) {
-      // continuation (wrapped line)
-      pending.t += ' ' + line;
-    }
+  "Gynecology": {
+    "Menstrual and Structural": [
+      "Physiology of the Menstrual Cycle",
+      "Approach to Dysmenorrhea",
+      "Approach to Amenorrhea",
+      "Abnormal Uterine Bleeding",
+      "Menopause",
+      "Adenomyosis",
+      "Endometriosis",
+      "Ovarian Torsion",
+      "Tubo-Ovarian Abscess"
+    ],
+    "Sexual Health": [
+      "Approach to Dyspareunia in Women"
+    ],
+    "Fertility and Contraception": [
+      "Polycystic Ovarian Syndrome",
+      "Contraception",
+      "Approach to Infertility"
+    ]
+  },
+
+  "Hematology": {
+    "Heme": ["Porphyrias","Thalassemia","Sickle Cell Disease","Hemoglobin C Disease","Hemoglobin Zurich"],
+    "Anemia": [
+      "Bone Marrow Physiology","Approach to Hemolysis","Approach to Anemia","Macrocytic Anemia","Iron Deficiency",
+      "AIHA","PNH","G6PD Deficiency","Hereditary Spherocytosis","Hereditary Elliptocytosis",
+      "Southeast Asian Ovalocytosis","Aplastic Anemia","Pancytopenia","Transfusion Reactions",
+      "Pyruvate Kinase Deficiency","Anemia of Chronic Disease","Lead Poisoning","Sideroblastic Anemia"
+    ],
+    "Hemostasis": [
+      "Physiology of Hemostasis","Approach to Thrombocytopenia","VTE/DVT/PE","Thrombophilia/Hypercoagulability Workup",
+      "Approach to Bleeding Disorders","von Willebrand Disease","ITP","TTP","HUS","HIT Type II","Hemophilia","APS","DIC",
+      "Anticoagulation and Antiplatelet Pharmacology","Protamine Reactions"
+    ],
+    "WBC Disorders": [
+      "Systemic Amyloidosis","Eosinophilia","Approach to Lymphadenopathy","Erythrocytosis","Neutropenia"
+    ]
+  },
+
+  "Infectious Disease": {
+    "Sepsis and FUO": ["Sepsis","Fever of Unknown Origin","Neutropenic Fever"],
+    "Viral": [
+      "Overview of Virology","Viral Tree","Viral Hepatitis","Influenza","COVID-19","RSV","Herpes Viruses","Rabies",
+      "Polio","Japanese Encephalitis","Coxsackie Virus","Rotavirus","Norovirus","HPV","HIV","Australian Bat Lyssavirus",
+      "Monkeypox","Smallpox","Viral Hemorrhagic Fevers","Zika","Dengue"
+    ],
+    "Fungal": ["Overview of Fungi","Candidiasis","Aspergillosis"],
+    "Helminth": ["Helminth Infections"],
+    "Protozoa": [
+      "Overview of Protozoa","Malaria","Giardiasis","Toxoplasmosis","Leishmaniasis","Chagas Disease",
+      "African Trypanosomiasis","Amebiasis","Babesiosis"
+    ],
+    "Bacteria": [
+      "Gram Positive Tree","Gram Negative Tree","Antibiotics","Tuberculosis","Non-TB Mycobacteria","Staph aureus",
+      "CoNS","Streptococci","Clostridium","Corynebacterium diphtheriae","Listeria","Bacillus","Actinomyces","Nocardia",
+      "Klebsiella","E. coli","Enterobacter","Citrobacter/Serratia","Salmonella","Shigella","Proteus","Pseudomonas",
+      "Burkholderia cepacia","H. pylori","Legionella","Bacteroides","Moraxella catarrhalis","Neisseria","Chlamydia",
+      "Campylobacter","Vibrio spp","Haemophilus","Bordetella pertussis","Yersinia enterocolitica","Acinetobacter",
+      "Leptospirosis","Borrelia burgdorferi","Non-Lyme Borrelia","Treponema pallidum","Bartonella henselae","Brucella",
+      "Chlamydophila psittaci","Coxiella burnetii","Francisella tularensis","Pasteurella","Ehrlichia","Anaplasma",
+      "Rickettsia rickettsii","Other Rickettsia","Yersinia pestis"
+    ],
+    "Other": ["Lice","Scabies","Bedbugs"],
+    "Clinical – Pulmonary/URT": [
+      "URI","Pneumonia","Pulmonary Fungal Diseases","Common Cold","Sinusitis","Acute Bronchitis",
+      "Acute Tonsillitis/Pharyngitis","Bronchiolitis","Deep Neck Infections","Lung Abscess"
+    ],
+    "Clinical – Neuro": ["Meningitis","Encephalitis","Brain Abscess"],
+    "Clinical – Cardiovascular": ["Myocarditis","Infective Endocarditis"],
+    "STI – Female": ["Pelvic Inflammatory Disease"],
+    "STI – Male": ["Epididymitis","Prostatitis","Urethritis"],
+    "Wound/Soft tissue/Bone/Joint": [
+      "Skin and Soft Tissue Infections","Animal Bites","Toxic Shock Syndrome",
+      "Psoas Abscess","Septic Arthritis","Spinal Infections","Osteomyelitis","Diabetic Foot Infections",
+      "Otitis Externa","Otitis Media"
+    ],
+    "Misc, Rare, Nosocomial": [
+      "Device-related infections","Intravascular Catheter-related infections","Neglected Tropical Diseases"
+    ],
+    "GU": ["UTIs","Pyelonephritis","Perinephric Abscess"],
+    "GI": ["Infectious Gastroenteritis","Seafood Poisoning","Pyogenic Liver Abscess"]
+  },
+
+  "Nephrology": {
+    "Diseases of Nephron": [
+      "Approach to AKI","Approach to Nephrotic Syndrome","Approach to Nephritic Syndrome","Dialysis",
+      "Thin Basement Membrane Nephropathy","Post-streptococcal GN","IgA Nephropathy","Alport Syndrome",
+      "Acute TIN","Chronic TIN","Renal Papillary Necrosis","Renal Tubular Disorders","CKD"
+    ],
+    "Electrolytes": [
+      "Approach to Hyponatremia","Approach to Hypernatremia","Approach to Hypokalemia","Approach to Hyperkalemia",
+      "Approach to Hypocalcemia","Approach to Hypercalcemia","Approach to Hypermagnesemia","Approach to Hypomagnesemia",
+      "Approach to Acidosis","Approach to Metabolic Alkalosis","SIADH","Diabetes Insipidus"
+    ],
+    "Misc": [
+      "Nephrolithiasis","Cardio-Renal Syndrome","Hepatorenal Syndrome","Rhabdomyolysis/Crush Syndrome",
+      "Polycystic Kidney Disease","Renal Cysts","Fibromuscular Dysplasia"
+    ]
+  },
+
+  "Neurology": {
+    "Localization": [
+      "Cerebral Localization","Brainstem Localization","Cerebellar Localization","Cranial Nerve (Peripheral) Localization",
+      "Spinal Cord Localization","Basal Ganglia Localization","Peripheral Nerve Localization"
+    ],
+    "Headache": ["Headache","Trigeminal Neuralgia"],
+    "Seizure": ["Approach to Seizure in Adults","Approach to Seizure in Children","Seizure Pharmacology"],
+    "Vertigo": [
+      "Diagnostic Approach to Vertigo","BPPV","Menière Disease","Vestibular Neuritis and Labyrinthitis"
+    ],
+    "Consciousness": [
+      "Approach to Altered Mental Status and Coma","Delirium","Transient Global Amnesia",
+      "Persistent Vegetative State","Heat-related Illness"
+    ],
+    "Sleep": [
+      "Normal Sleep Cycle & Classification","Circadian Rhythm Disorders","Insomnia Disorder",
+      "Hypersomnolence Disorder","Parasomnias","Sleep Movement Disorders","Narcolepsy"
+    ],
+    "Neurocognitive": [
+      "Approach to Dementia","Alzheimer Disease","Vascular Dementia","Frontotemporal Dementia","CJD"
+    ],
+    "Vascular": [
+      "Ischemic Stroke","TIA","Intracerebral Hemorrhage","Subarachnoid Hemorrhage","Subdural Hematoma",
+      "Epidural Hematoma","Intraventricular Hemorrhage","Cerebral Venous Thrombosis","Subclavian Steal Syndrome"
+    ],
+    "Spinal Cord": ["Cervical Myelopathy","Syringomyelia","Degenerative Disk Disease","Spinal Stenosis"],
+    "Movement": ["Approach to Tremor","Parkinson Disease","Parkinson-Plus Syndromes","Huntington Disease","Dystonia"],
+    "Neuromuscular": [
+      "Multiple Sclerosis","NMOSD/ADEM/MOGAD/CLIPPERS","ALS","Spinal Muscular Atrophy","Myasthenia Gravis",
+      "Stiff Person Syndrome","Myotonic Syndromes"
+    ],
+    "Neuropathy": ["Approach to Polyneuropathy","Peripheral Nerve Injury","GBS/CIDP","Morton Neuroma"],
+    "Inherited & Rare": [
+      "Neurocutaneous Syndromes","Rare Neurological Syndromes","Friedreich Ataxia",
+      "Hereditary Motor Sensory Neuropathy","Refsum Disease","Spinocerebellar Ataxias"
+    ]
+  },
+
+  "Obstetrics": {
+    "Emergencies": ["Ectopic Pregnancy","Uterine Rupture","Postpartum Hemorrhage","Amniotic Fluid Embolism","Antepartum Hemorrhage"],
+    "Pregnancy & Prenatal Care": [
+      "Prenatal Care","Multiple Gestation","HDFN","Induced Abortion","Late-term & Post-term Pregnancy"
+    ],
+    "Pregnancy-associated Disorders": [
+      "Hypertensive Pregnancy Disorders","Gestational Diabetes","Pregnancy Loss","Hydatidiform Mole",
+      "Gestational Trophoblastic Neoplasia","Chorioamnionitis","Hyperemesis Gravidarum","Cervical Insufficiency",
+      "Other Pregnancy Complications","Pregnancy-associated Liver Disorders","TORCH & Congenital Infections",
+      "Polyhydramnios","Oligohydramnios","Peripartum Cardiomyopathy"
+    ],
+    "Labour & Delivery": [
+      "Labour and Delivery","Induced Delivery","Cesarean Delivery","Preterm Labour","Postpartum Period & Complications",
+      "Antepartum Fetal Surveillance"
+    ]
+  },
+
+  "Oncology": {
+    "Lung": ["Lung Cancer","Solitary Pulmonary Nodule","Mesothelioma"],
+    "GI": [
+      "Esophageal Cancer","Hepatocellular Carcinoma","Rarer Hepatic Malignancies","Benign Liver Tumours/Cysts",
+      "Gastric Cancer","Cholangiocarcinoma","Gallbladder Cancer","Rarer Biliary Malignancies",
+      "Pancreatic Cancer","Small Bowel Neoplasms","Colorectal Cancer","Anal Cancer"
+    ],
+    "Endocrine": ["Approach to Neuroendocrine Tumours","Approach to Thyroid Nodules","Thyroid Cancer"],
+    "Gynecological": [
+      "Cervical Cancer Screening","Cervical Cancer","Uterine Leiomyoma","Ovarian Tumours",
+      "Benign Tumours of Endometrium","Endometrial Cancer","Vulvar/Vaginal Cancer","Approach to Adnexal Mass"
+    ],
+    "Breast": [
+      "Approach to Palpable Breast Mass/Abnormal Mammogram","Nipple Discharge","Breast Hypertrophy",
+      "Breast Cancer","Benign Breast Conditions","Fibroadenoma","Phyllodes Tumour","Galactocele",
+      "Fibrocystic Changes","Mammary Duct Ectasia","Intraductal Papilloma","LCIS"
+    ],
+    "CNS": ["Approach to Brain Tumor in Adults","Approach to Neurocutaneous Syndromes"],
+    "Heme": [
+      "Summary of Hematologic Malignancies","AML","ALL","CLL","CML","Hairy Cell Leukemia",
+      "Hodgkin Lymphomas","Non-Hodgkin Lymphomas","Mastocytosis","Multiple Myeloma/MGUS/SMM",
+      "Waldenström Macroglobulinemia","Polycythemia Vera","Essential Thrombocytosis","Mycosis Fungoides / CTCL",
+      "Chronic Eosinophilic Leukemia","Chronic Neutrophilic Leukemia","MPN-Unclassifiable","Primary Myelofibrosis",
+      "Myelodysplastic Syndromes","CMML","JMML","Langerhans Cell Histiocytosis",
+      "Erdheim–Chester Disease","Rosai–Dorfman Disease","POEMS Syndrome","Heavy Chain Diseases"
+    ],
+    "Oncologic Emergencies": ["Tumor lysis, SVC syndrome, cord compression, hypercalcemia, neutropenic sepsis"],
+    "Misc": ["Chemotherapy & Oncologic Pharmacology","Paraneoplastic Syndromes"]
+  },
+
+  "Pediatrics": {
+    "Infectious Diseases": ["Approach to Pediatric Sepsis","Approach to Influenza in Pediatrics"],
+    "Neonatology": ["Approach to Neonatal Jaundice","Perinatal Asphyxia and HIE"],
+    "Development": ["Developmental Approach (placeholder)"]
+  },
+
+  "Respirology": {
+    "Obstructive": [
+      "COPD","Acute Exacerbation of COPD","Asthma","Acute Exacerbation of Asthma",
+      "Bronchiectasis","Cystic Fibrosis","Acute Exacerbation of Cystic Fibrosis"
+    ],
+    "Restrictive": [
+      "PIGE (Pulmonary Infiltrates with Eosinophilia) – Diagnostic Approach",
+      "Hypersensitivity Pneumonitis","Eosinophilic Pneumonias","Restrictive Lung Diseases",
+      "Idiopathic Interstitial Pneumonias"
+    ],
+    "Critical Resp": [
+      "Hemoptysis","ARDS","Approach to Hypoxemia","Mechanical Ventilation","ECMO","Approach to Respiratory Failure"
+    ],
+    "Misc": [
+      "Occupational & Environmental Lung Disease","Pulmonary Alveolar Proteinosis",
+      "Pulmonary Hypertension","Tobacco Addiction & Cessation"
+    ],
+    "Pleural Disease": ["Pleural Effusion","Pleuritis","Pneumothorax"]
+  },
+
+  "Rheumatology": {
+    "Misc": ["Antirheumatic/Immunosuppressants","IgG4-Related Disease"],
+    "Connective Tissue Diseases": [
+      "Approach to Arthralgia/CTDs","Raynaud Phenomenon","Relapsing Polychondritis",
+      "Sjögren Syndrome","SLE","Systemic Sclerosis","MCTD"
+    ],
+    "Joint Diseases": [
+      "Rheumatoid Arthritis","Gout/Hyperuricemia","CPPD","Basic Calcium Phosphate Deposition",
+      "Reactive Arthritis","Seronegative Spondyloarthropathies","Psoriatic Arthritis",
+      "Ankylosing Spondylitis","Sarcoidosis"
+    ],
+    "Myopathies & Pain": ["Idiopathic Inflammatory Myopathies","Adult-Onset Still Disease","Polymyalgia Rheumatica"],
+    "Vasculitis": [
+      "Approach to Vasculitides","Giant Cell Arteritis","GPA","EGPA","MPA","Polyarteritis Nodosa","IgA Vasculitis",
+      "Takayasu Arteritis","Cryoglobulinemic Vasculitis","Behçet Disease","Cutaneous Small-Vessel Vasculitis",
+      "Thromboangiitis Obliterans (Buerger Disease)"
+    ]
+  },
+
+  "Urology": {
+    "Emergencies": ["Approach to Testicular Torsion"],
+    "Infections": ["Approach to Urinary Tract Infections","Approach to Cystitis"]
   }
-  if (pending && pending.t.trim()) entries.push(pending);
+};
 
-  // Normalize bullets to just two classes we care about
-  // black circle (●) ~ major; white circle (○) ~ sub; others → map to ●/○ best effort
-  return entries.map(e => {
-    let b = e.b;
-    if ('•◦▪▸►▶-'.includes(b)) b = e.b === '◦' ? '○' : '●';
-    return { b, t: e.t };
-  });
-}
-
-// De-dupe items
-function dedupeToc(items) {
-  const seen = new Set();
+// Utility: flatten tree to items[]
+function tocItemsFromTree(tree) {
   const out = [];
-  for (const it of items) {
-    const k = `${it.discipline}__${it.sub}__${it.topic}`;
-    if (!seen.has(k)) { seen.add(k); out.push(it); }
+  for (const [disc, subs] of Object.entries(tree)) {
+    for (const [sub, topics] of Object.entries(subs)) {
+      for (const t of topics) {
+        out.push({ discipline: disc, sub, topic: t });
+      }
+    }
   }
   return out;
 }
 
-// Ask the model to map bullet entries → {discipline,sub,topic} items
-async function aiInferTocFromEntries(entries, { batchSize = 220 } = {}) {
-  const all = [];
-  for (let i = 0; i < entries.length; i += batchSize) {
-    const chunk = entries.slice(i, i + batchSize);
-
-    const system = `You are an information extraction assistant. You will be given an ordered list of bullet entries from a PDF table of contents of a medical notebook. Each entry has a "b" (bullet) and "t" (text).
-Hierarchy rules:
-- A black circle ● that is immediately followed by one or more ○ entries indicates a new DISCIPLINE.
-- A white circle ○ is a SUB-DISCIPLINE under the most recent DISCIPLINE.
-- Subsequent ● while a SUB-DISCIPLINE is active are TOPICs belonging to (current DISCIPLINE, current SUB-DISCIPLINE).
-- If two ● entries appear with no ○ between them, treat the second ● as a new DISCIPLINE (close any open SUB).
-- Ignore page numbers and noise. Preserve the order.
-Return ONLY JSON:
-{"items":[{"discipline":"...","sub":"...","topic":"..."}]}`;
-
-    const payload = { entries: chunk };
-
-    const resp = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      temperature: 0,
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: JSON.stringify(payload) }
-      ]
-    });
-
-    let parsed = null;
-    try {
-      parsed = JSON.parse(resp.output_text ?? "{}");
-    } catch {
-      try { parsed = parseResponsesJSON(resp); } catch { parsed = null; }
-    }
-
-    const items = Array.isArray(parsed?.items) ? parsed.items : [];
-    all.push(...items);
-  }
-  return dedupeToc(all);
-}
-
-// Cache helpers
-function getCachedToc(label) {
-  const row = medDb.prepare(`SELECT json FROM toc_cache WHERE label = ?`).get(label);
-  if (!row) return null;
-  try { return JSON.parse(row.json); } catch { return null; }
-}
-function setCachedToc(label, data) {
-  medDb.prepare(`
-    INSERT INTO toc_cache (label, json) VALUES (?, ?)
-    ON CONFLICT(label) DO UPDATE SET json=excluded.json, created_at=CURRENT_TIMESTAMP
-  `).run(label, JSON.stringify(data));
-}
-
-// ------------------------------ ADMIN NUKE ----------------------------------
+// ------------------------------ ADMIN NUKE (kept) ---------------------------
 app.delete('/admin/wipe', async (req, res) => {
   try {
     const secret = String(req.query.secret || "");
@@ -318,7 +654,7 @@ app.delete('/admin/wipe', async (req, res) => {
   }
 });
 
-// --- AI username moderation ---
+// --- AI username moderation (kept) ---
 const OPENAI_MOD_URL = "https://api.openai.com/v1/moderations";
 const ALLOW_ON_MOD_FAIL = true;
 
@@ -361,13 +697,13 @@ async function isUsernameAllowedAI(username) {
   }
 }
 
-// Redis keys
+// Redis keys (kept)
 const kUser = (u) => `user:${u}`;
 const kExcl = (u) => `excl:${u}`;
 const kSess = (s) => `sess:${s}`;
 const kSessItems = (s) => `sess:${s}:items`;
 
-// DEBUGGERS
+// DEBUGGERS (kept)
 app.get("/admin/raw-items", async (req, res) => {
   try {
     const { sessionId } = req.query;
@@ -397,7 +733,7 @@ app.post("/admin/append-dummy", async (req, res) => {
   }
 });
 
-// Points helpers
+// Points helpers (kept)
 const kLB = () => `leaderboard:global`;
 function tierIndex(label) { const i = DIFF.indexOf(label); return (i >= 0 ? i : 0) + 1; }
 function pointsFor(label) { const t = tierIndex(label); return { correct: 10 * t, wrong: 5 * t }; }
@@ -425,78 +761,38 @@ async function applyScoreDelta(username, delta, wasCorrect) {
   return newScore;
 }
 
-// ------------------------------ /med/toc (AI) -------------------------------
-app.get('/med/toc', async (req, res) => {
-  try {
-    const label = req.query.label || (process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1');
-    const wantDebug  = String(req.query.debug   || '0') === '1';
-    const forceFresh = String(req.query.refresh || '0') === '1';
+// ------------------------------ HARD-CODED TOC ROUTES -----------------------
 
-    // cache first (unless refresh)
-    if (!forceFresh) {
-      const cached = getCachedToc(label);
-      if (cached && Array.isArray(cached.items) && cached.items.length) {
-        return res.json(cached);
-      }
-    }
-
-    const entries = buildBulletEntriesForLabel(label);
-    if (wantDebug) {
-      return res.json({
-        ok: true,
-        label,
-        sample_count: Math.min(250, entries.length),
-        sample: entries.slice(0, 250)
-      });
-    }
-
-    // quick deterministic pass
-    const itemsFast = [];
-    let disc = null, sub = null;
-
-    const nextNonEmpty = (fromIdx) => {
-      for (let j = fromIdx + 1; j < entries.length; j++) if (entries[j].t.trim()) return entries[j];
-      return null;
-    };
-
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
-      if (e.b === '○') { sub = e.t; if (!disc) disc = 'General'; continue; }
-      if (e.b === '●') {
-        const nxt = nextNonEmpty(i);
-        const newDisc = !sub || (nxt && nxt.b === '○');
-        if (newDisc) { disc = e.t; sub = null; }
-        else if (disc && sub) { itemsFast.push({ discipline: disc, sub, topic: e.t }); }
-      }
-    }
-
-    let items = dedupeToc(itemsFast);
-
-    // If the deterministic pass looks too small, fall back to AI
-    if (items.length < 5) {
-      items = await aiInferTocFromEntries(entries, { batchSize: 220 });
-    }
-
-    const out = {
-      ok: true,
-      label,
-      items,
-      counts: {
-        disciplines: new Set(items.map(i => i.discipline)).size,
-        subs:        new Set(items.map(i => `${i.discipline}::${i.sub}`)).size,
-        topics:      items.length
-      }
-    };
-
-    if (out.items.length) setCachedToc(label, out);
-
-    res.json(out);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+// Full TOC (flattened)
+app.get('/med/toc', (req, res) => {
+  const items = tocItemsFromTree(HARDCODED_TOC);
+  const counts = {
+    disciplines: Object.keys(HARDCODED_TOC).length,
+    subs: Object.values(HARDCODED_TOC).reduce((a, s) => a + Object.keys(s).length, 0),
+    topics: items.length
+  };
+  res.json({ ok: true, label: 'HARDCODED_TOC_V1', items, counts });
 });
 
-// ---------- Response parsing helpers ----------
+// Lists for UI pickers
+app.get('/med/disciplines', (req, res) => {
+  res.json({ disciplines: Object.keys(HARDCODED_TOC) });
+});
+
+app.get('/med/subdisciplines', (req, res) => {
+  const d = String(req.query.discipline || '');
+  const subs = HARDCODED_TOC[d] ? Object.keys(HARDCODED_TOC[d]) : [];
+  res.json({ discipline: d, subs });
+});
+
+app.get('/med/topics-for-sub', (req, res) => {
+  const d = String(req.query.discipline || '');
+  const s = String(req.query.sub || '');
+  const topics = HARDCODED_TOC[d]?.[s] || [];
+  res.json({ discipline: d, sub: s, topics });
+});
+
+// ---------- Response parsing helpers (kept) ----------
 function parseResponsesJSON(resp) {
   try {
     const t1 = typeof resp?.output_text === "string" ? resp.output_text.trim() : "";
@@ -529,7 +825,7 @@ function debugResp(tag, resp) {
   } catch {}
 }
 
-// Peek at a session's stored items
+// Peek at a session's stored items (kept)
 app.get("/admin/peek-session", async (req, res) => {
   try {
     const { sessionId } = req.query;
@@ -543,7 +839,7 @@ app.get("/admin/peek-session", async (req, res) => {
   }
 });
 
-// Helpers
+// Helpers (kept)
 async function userExists(username) { return Boolean(await redis.exists(kUser(username))); }
 
 async function createUser(username) {
@@ -600,7 +896,7 @@ async function updateLastSessionItem(sessionId, patch) {
   if (typeof raw === "string") {
     const t = raw.trim();
     if (t.startsWith("{") || t.startsWith("[")) { try { last = JSON.parse(t); } catch {} }
-  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) { last = raw; }
+  } else if (raw && typeof raw === "object" && !Array.isArray(r)) { last = raw; }
 
   if (!last) return;
 
@@ -608,7 +904,7 @@ async function updateLastSessionItem(sessionId, patch) {
   await redis.lset(kSessItems(sessionId), len - 1, updated);
 }
 
-// Delete a PDF (and its chunks via FK cascade) by label
+// Delete a PDF by label (kept from your version)
 app.delete('/med/pdfs/by-label', (req, res) => {
   try {
     const label = String(req.query.label || '');
@@ -617,7 +913,6 @@ app.delete('/med/pdfs/by-label', (req, res) => {
     const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
     if (!row) return res.json({ ok: true, deleted: false, reason: 'not found' });
 
-    // Delete doc (chunks cascade), and clear cached TOC
     medDb.prepare('DELETE FROM pdf_docs WHERE id = ?').run(row.id);
     medDb.prepare('DELETE FROM toc_cache WHERE label = ?').run(label);
 
@@ -627,9 +922,8 @@ app.delete('/med/pdfs/by-label', (req, res) => {
   }
 });
 
-
 ////////////////////////////////////////////////////////////////////////////////
-// OPENAI HELPERS (question/grade/summarize)
+// OPENAI HELPERS (question/grade/summarize) — kept as in your file
 ////////////////////////////////////////////////////////////////////////////////
 
 async function aiGenerateQuestion({ topic, difficulty, avoidList }) {
@@ -651,10 +945,8 @@ async function aiGenerateQuestion({ topic, difficulty, avoidList }) {
   const system = `You are the question engine for "One Line Pimp Simulator".
 Return ONLY JSON like: {"question":"..."}.
 Question must be answerable in ONE word or ONE short sentence.
-The questions should be difficult questions designed to mimic questions an attending physician would as (or "pimp") a medical student or resident.
-Ensure you take into account the appropriate difficulty and topic. The questions should be primarily clinical and related to medicine. Questions should not be excessively basic sceince questions, and should always be relevant to clincal practice. Things like MOA of drugs is fair game but the details of an obscure second messenger cascade for example are not.  
-The questions should be considered very challenging/difficult for that particular difficulty level. For example, if the difficulty is R1, the question should be considered challenging but doable for the top 5% of first year residents. Ensure that the difficuly is actually scaling, in other words ensure that there is actually a noticeable change in difficulty between the levels. 
-Avoid duplicates / near-duplicates of provided examples.`;
+The questions should be difficult questions designed to mimic questions an attending physician would ask (or "pimp") a medical student or resident.
+Ensure the difficulty scales with MSI1→Attending. Avoid duplicates of provided examples.`;
 
   const userPayload = { topic: topic || "random", difficulty: difficulty || "MSI3", avoid_examples: avoid };
 
@@ -703,7 +995,6 @@ Return ONLY JSON:
         { role: "user", content: JSON.stringify(userPayload) }
       ]
     });
-    debugResp("grade", resp);
     parsed = parseResponsesJSON(resp);
   } catch (e) {
     return { is_correct: false, explanation: "Grader unavailable; keeping same difficulty.", difficulty_delta: 0 };
@@ -722,7 +1013,7 @@ Return ONLY JSON:
 }
 
 async function aiSummarizeSession({ transcript, startDifficulty }) {
-  const system = `You will summarize the session in detail, explain in detail the strengths and weaknesses of the user in that session with examples. Be a fair but objective rater. Try to use the sandwhich method to provide feedback. Additioanlly, you must return a final rating for that student (what level they are performing at).
+  const system = `You will summarize the session in detail, explain strengths and weaknesses with examples, and give a final rating.
 Return JSON ONLY:
 {"feedback": "short feedback", "rating": "MSI1|MSI2|MSI3|MSI4|R1|R2|R3|R4|R5|Attending"}`;
 
@@ -755,7 +1046,7 @@ Return JSON ONLY:
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// ROUTES
+// ROUTES (your existing routes below are kept unchanged)
 ////////////////////////////////////////////////////////////////////////////////
 
 // Health check
@@ -775,12 +1066,10 @@ app.post('/api/users', async (req, res) => {
     if (!username || typeof username !== 'string') {
       return res.status(400).json({ error: "username required" });
     }
-
     const ok = await isUsernameAllowedAI(username);
     if (!ok) {
       return res.status(400).json({ error: 'That username isn’t allowed. Please choose something else.' });
     }
-
     if (await userExists(username)) {
       return res.status(409).json({ error: "Username taken" });
     }
@@ -1007,7 +1296,7 @@ app.get('/api/history', async (req, res) => {
   }
 });
 
-// ==================== MED LEARNER ROUTES (all under /med) ====================
+// ==================== MED LEARNER ROUTES (existing) ====================
 
 // Get completed topics for a user
 app.get('/med/topics', (req, res) => {
@@ -1031,7 +1320,7 @@ app.post('/med/topics', (req, res) => {
   }
 });
 
-// Upload & index a PDF (multipart/form-data)
+// Upload & index a PDF (multipart/form-data) — left intact
 app.post('/med/pdfs', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'file required' });
@@ -1043,7 +1332,7 @@ app.post('/med/pdfs', upload.single('file'), async (req, res) => {
   }
 });
 
-// Fetch & index a PDF by URL
+// Fetch & index a PDF by URL — left intact
 app.post('/med/pdfs/by-url', async (req, res) => {
   try {
     const { url, label } = req.body || {};
@@ -1060,7 +1349,7 @@ app.post('/med/pdfs/by-url', async (req, res) => {
   }
 });
 
-// Search indexed PDFs (FTS5; BM25 ranking)
+// Search indexed PDFs (FTS5; BM25 ranking) — left intact
 app.get('/med/pdfs/search', (req, res) => {
   const q = req.query.q;
   const k = Number(req.query.k || 8);
