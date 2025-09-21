@@ -723,6 +723,93 @@ Return STRICT JSON:
   }
 });
 
+// --- Learn-plan helpers (place under HARDCODED_TOC) ---
+
+// If you already added this earlier for high-yield, keep one copy only.
+const INTERNAL_MED_DISC_SET = new Set([
+  "Cardiology","Endocrinology","Gastroenterology","Hematology",
+  "Infectious Disease","Nephrology","Neurology","Respirology","Rheumatology"
+]);
+
+// Simple FTS search into your indexed notes (if any) to provide context to the AI.
+// It’s OK if you haven’t indexed anything yet; the endpoint will still work.
+function searchNoteSnippets(topic, k = 8) {
+  try {
+    const rows = medDb.prepare(`
+      SELECT pc.text AS text
+      FROM pdf_chunks_fts
+      JOIN pdf_chunks pc ON pc.rowid = pdf_chunks_fts.rowid
+      WHERE pdf_chunks_fts MATCH ?
+      ORDER BY bm25(pdf_chunks_fts)
+      LIMIT ?
+    `).all(topic, k);
+    return rows.map(r => r.text);
+  } catch {
+    return [];
+  }
+}
+
+// One function to ask OpenAI for the entire learn plan.
+// Returns {guidelines:[], trials:[], objectives:[]}
+async function buildLearnPlanAI(topic, noteSnippets = []) {
+  const system = `
+You are an evidence-based Internal Medicine educator.
+Build a LEARNING PLAN for the requested topic. Be comprehensive but concise.
+
+You MUST return STRICT JSON with this schema (no prose outside JSON):
+{
+  "guidelines":[
+    {"region":"Canada|USA|International","org":"","year":2020,"title":"","why":"","link":""}
+  ],
+  "trials":[
+    {"name":"","year":1999,"question":"","design":"","n":"","result":"","impact":"","one_liner":"","link":""}
+  ],
+  "objectives":[
+    {"objective":"","rationale":"",
+      "resources":[
+        {"type":"guideline","ref":""},
+        {"type":"trial","ref":""},
+        {"type":"other","title":"","link":""}
+      ]
+    }
+  ]
+}
+
+RULES
+- Prefer CANADIAN society guidance first (e.g., CCS/CTS/CMAJ/etc.); if none, provide USA (ACC/AHA/ACP/IDSA/etc.), then International.
+- "link" may be empty if unsure (front end will add search links).
+- Trials must be landmark/seminal (include negative trials if influential).
+- Objectives should be extensive and cover pathophys, dx, risk stratification, mgmt, complications, follow-up.
+- Under each objective, list relevant resources: reference trials/guidelines by exact title or name in your own output arrays.
+- If you see ambiguous subtopics, include them in objectives anyway.
+- Keep JSON valid. Do not include markdown or commentary.`;
+
+  const userPayload = {
+    topic,
+    note_snippets: noteSnippets, // optional context from user notes
+    prefer_regions: ["Canada","USA","International"],
+    want_objectives: "extensive",
+    max_guidelines: 10,
+    max_trials: 12
+  };
+
+  const resp = await openai.responses.create({
+    model: "gpt-4.1",
+    temperature: 0,
+    input: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(userPayload) }
+    ]
+  });
+
+  const parsed = parseResponsesJSON(resp);
+  if (!parsed || !Array.isArray(parsed.guidelines) || !Array.isArray(parsed.trials) || !Array.isArray(parsed.objectives)) {
+    // Fail gracefully with empty arrays
+    return { guidelines: [], trials: [], objectives: [] };
+  }
+  return parsed;
+}
+
 
 // ------------------------------ ADMIN NUKE (kept) ---------------------------
 app.delete('/admin/wipe', async (req, res) => {
@@ -1400,6 +1487,43 @@ app.get('/api/history', async (req, res) => {
 });
 
 // ==================== MED LEARNER ROUTES (existing) ====================
+
+// --- Learn Plan API ---
+// POST /med/learn-plan { topic, user_id? } -> guidelines, trials, objectives
+app.post('/med/learn-plan', async (req, res) => {
+  try {
+    const topic = String(req.body?.topic || "").trim();
+    if (!topic) return res.status(400).json({ error: "topic required" });
+
+    // Optional: pull a few note snippets to ground the AI (works even if no PDFs indexed)
+    const snippets = searchNoteSnippets(topic, 8);
+    const plan = await buildLearnPlanAI(topic, snippets);
+
+    // Sort guidelines Canada -> USA -> International
+    const order = { Canada: 0, USA: 1, International: 2 };
+    plan.guidelines.sort((a,b) => (order[a.region] ?? 99) - (order[b.region] ?? 99) || (b.year||0) - (a.year||0));
+
+    res.json({ ok: true, topic, ...plan, snippets_count: snippets.length });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// (Handy) GET wrapper to test in browser: /med/learn-plan?topic=Acute%20Coronary%20Syndrome
+app.get('/med/learn-plan', async (req, res) => {
+  try {
+    const topic = String(req.query?.topic || "").trim();
+    if (!topic) return res.status(400).json({ error: "topic required" });
+    const snippets = searchNoteSnippets(topic, 8);
+    const plan = await buildLearnPlanAI(topic, snippets);
+    const order = { Canada: 0, USA: 1, International: 2 };
+    plan.guidelines.sort((a,b) => (order[a.region] ?? 99) - (order[b.region] ?? 99) || (b.year||0) - (a.year||0));
+    res.json({ ok: true, topic, ...plan, snippets_count: snippets.length });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 
 // Get completed topics for a user
 app.get('/med/topics', (req, res) => {
