@@ -653,17 +653,34 @@ function normalizeTopicName(s = "") {
     .trim();
 }
 function listAllTopics() {
-  // Try global hardcoded arrays
-  const globals = [
-    globalThis.TOC_ITEMS,         // some versions used this name
-    globalThis.MED_TOC_STATIC,    // others used this
-    globalThis.HARD_TOC_ITEMS     // and this in earlier drafts
-  ];
-  for (const g of globals) {
-    if (Array.isArray(g) && g.length) {
-      return Array.from(new Set(g.map(it => it.topic))).sort();
-    }
+  const src = globalThis.MED_TOC_STATIC;
+  if (Array.isArray(src) && src.length) {
+    return Array.from(new Set(src.map(x => x.topic))).sort();
   }
+  try {
+    const rows = medDb.prepare(`SELECT DISTINCT topic FROM med_toc`).all();
+    if (rows?.length) return rows.map(r => r.topic).sort();
+  } catch {}
+  return [];
+}
+
+function seedMedTocIfEmpty() {
+  medDb.exec(`
+    CREATE TABLE IF NOT EXISTS med_toc (
+      discipline TEXT,
+      sub        TEXT,
+      topic      TEXT
+    );
+  `);
+  const count = medDb.prepare(`SELECT COUNT(*) as c FROM med_toc`).get().c;
+  if (count === 0 && Array.isArray(globalThis.MED_TOC_STATIC) && globalThis.MED_TOC_STATIC.length) {
+    const ins = medDb.prepare(`INSERT INTO med_toc (discipline, sub, topic) VALUES (?, ?, ?)`);
+    const tx  = medDb.transaction(items => { for (const it of items) ins.run(it.discipline, it.sub, it.topic); });
+    tx(globalThis.MED_TOC_STATIC);
+    console.log(`[med] seeded med_toc with ${globalThis.MED_TOC_STATIC.length} rows`);
+  }
+}
+seedMedTocIfEmpty();
 
   // Try DB fallback
   try {
