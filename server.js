@@ -4,6 +4,7 @@ import cors from 'cors';
 import { Redis } from '@upstash/redis';
 import OpenAI from 'openai';
 import { v4 as uuid } from 'uuid';
+
 // ==== Med Learner imports ====
 import Database from 'better-sqlite3';
 import multer from 'multer';
@@ -24,7 +25,6 @@ const redis = new Redis({
 });
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 const PORT = process.env.PORT || 3000;
 
 // Difficulty ladder
@@ -41,10 +41,10 @@ const kHistory = (u) => `history:${u}`;
 
 // Append one history item, keep only most recent N
 async function pushHistory(username, item, keep = 1000) {
-  // store as JSON lines
   await redis.lpush(kHistory(username), JSON.stringify(item));
   await redis.ltrim(kHistory(username), 0, keep - 1);
 }
+
 // ==== Med Learner: SQLite DB init (namespaced, no collisions) ====
 const medDb = new Database('medlearner.db');
 medDb.pragma('journal_mode = WAL');
@@ -109,7 +109,6 @@ function chunkText(raw) {
     let end = Math.min(i + CHUNK_SIZE, text.length);
     let slice = text.slice(i, end);
 
-    // prefer to break on paragraph/sentence
     const lastPara = slice.lastIndexOf('\n\n');
     const lastSent = slice.lastIndexOf('. ');
     const lastStop = Math.max(lastPara, lastSent);
@@ -123,7 +122,7 @@ function chunkText(raw) {
 
 async function indexPdfBuffer(buffer, label) {
   const data = await pdfParse(buffer);
-  const docId = uuidv4(); // uses your import { v4 as uuidv4 } from 'uuid'
+  const docId = uuidv4();
 
   medDb.prepare(`INSERT INTO pdf_docs (id, label) VALUES (?, ?)`).run(docId, label || null);
 
@@ -138,11 +137,7 @@ async function indexPdfBuffer(buffer, label) {
   return { docId, nChunks: chunks.length };
 }
 
-
-
-// ADMIN NUKE: delete all app data (guarded)
-// ADMIN NUKE: delete all app data (guarded)
-// Usage: DELETE /admin/wipe?secret=YOUR_SECRET  (add &dry=1 to dry-run)
+// ================= ADMIN NUKE (guarded) =================
 app.delete('/admin/wipe', async (req, res) => {
   try {
     const secret = String(req.query.secret || "");
@@ -151,56 +146,34 @@ app.delete('/admin/wipe', async (req, res) => {
     }
     const dry = String(req.query.dry || "0") === "1";
 
-    // Adjust to your actual key prefixes if different
-    const patterns = [
-      "user:*",        // user stats hash
-      "session:*",     // live sessions
-      "sessionitem:*", // per-question items (if applicable)
-      "exclusions:*",  // exclusion lists
-      "history:*",     // question history (if applicable)
-    ];
-
+    const patterns = ["user:*","session:*","sessionitem:*","exclusions:*","history:*"];
     let deleted = 0;
 
-    // Helper: delete in chunks to avoid huge payloads
     async function delChunked(keys) {
       const CHUNK = 100;
       for (let i = 0; i < keys.length; i += CHUNK) {
         const slice = keys.slice(i, i + CHUNK);
-        if (!dry && slice.length) {
-          await redis.del(...slice);
-        }
+        if (!dry && slice.length) await redis.del(...slice);
         deleted += slice.length;
       }
     }
 
     for (const pattern of patterns) {
-      const keys = await redis.keys(pattern);   // works on all clients
-      if (keys && keys.length) {
-        await delChunked(keys);
-      }
+      const keys = await redis.keys(pattern);
+      if (keys?.length) await delChunked(keys);
     }
 
-    // Leaderboard ZSET
     if (!dry) await redis.del("leaderboard:global");
-
     res.json({ ok: true, dry, deleted_keys_estimate: deleted });
   } catch (e) {
     res.status(500).json({ error: "wipe failed", detail: String(e) });
   }
 });
 
-
-
-// --- AI username moderation (keeps usernames case-sensitive) ---
+// --- AI username moderation ---
 const OPENAI_MOD_URL = "https://api.openai.com/v1/moderations";
-// Optional: set behavior if the moderation call fails (true = allow; false = block)
 const ALLOW_ON_MOD_FAIL = true;
 
-/**
- * Returns true if the username is acceptable, false if it's over the line.
- * Uses OpenAI's moderation model (text-only here).
- */
 async function isUsernameAllowedAI(username) {
   try {
     const resp = await fetch(OPENAI_MOD_URL, {
@@ -209,30 +182,23 @@ async function isUsernameAllowedAI(username) {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({
-        model: "omni-moderation-latest",
-        input: username, // keep original casing; judgment is case-insensitive internally
-      }),
+      body: JSON.stringify({ model: "omni-moderation-latest", input: username }),
     });
 
     const data = await resp.json();
     if (!resp.ok) throw new Error(data?.error?.message || resp.statusText);
 
-    // Normalized access across possible shapes
     const r = Array.isArray(data.results) ? data.results[0] : data;
     const c = r.categories || {};
     const s = r.category_scores || r.scores || {};
     const flagged = r.flagged === true;
 
-    // We block only the clearly over-the-top categories.
-    // "Edgy jokes" will usually not trip these thresholds.
     const blockHardFlags =
       c.hate === true || c.hate_threatening === true ||
-      c.harassment_threats === true || // explicit threats
+      c.harassment_threats === true ||
       c.sexual_minors === true ||
       c.violence_graphic === true;
 
-    // For softer categories, use higher probability thresholds so borderline stuff passes.
     const blockByScore =
       (s.hate || 0) > 0.50 ||
       (s.hate_threatening || 0) > 0.40 ||
@@ -243,18 +209,17 @@ async function isUsernameAllowedAI(username) {
     return !(flagged || blockHardFlags || blockByScore);
   } catch (e) {
     console.error("Moderation check failed:", e);
-    return ALLOW_ON_MOD_FAIL; // choose fail-open by default; flip to false to be stricter
+    return ALLOW_ON_MOD_FAIL;
   }
 }
 
-
-// Redis keys (per-username / per-session)
+// Redis keys
 const kUser = (u) => `user:${u}`;
-const kExcl = (u) => `excl:${u}`; // Redis LIST of question strings (ordered)
-const kSess = (s) => `sess:${s}`; // Redis HASH for session meta
-const kSessItems = (s) => `sess:${s}:items`; // Redis LIST of JSON strings (one per Q&A)
+const kExcl = (u) => `excl:${u}`;
+const kSess = (s) => `sess:${s}`;
+const kSessItems = (s) => `sess:${s}:items`;
 
-//DEBUGGERS
+// DEBUGGERS
 app.get("/admin/raw-items", async (req, res) => {
   try {
     const { sessionId } = req.query;
@@ -284,19 +249,10 @@ app.post("/admin/append-dummy", async (req, res) => {
   }
 });
 
-// Points map: harder tiers are worth more.
-// Correct = +10 * tierIndex, Wrong = -5 * tierIndex (never lets score drop below 0).
-// Tier index: MSI1=1 ... Attending=10
+// Points helpers
 const kLB = () => `leaderboard:global`;
-
-function tierIndex(label) {
-  const i = DIFF.indexOf(label);
-  return (i >= 0 ? i : 0) + 1; // 1..10
-}
-function pointsFor(label) {
-  const t = tierIndex(label);
-  return { correct: 10 * t, wrong: 5 * t };
-}
+function tierIndex(label) { const i = DIFF.indexOf(label); return (i >= 0 ? i : 0) + 1; }
+function pointsFor(label) { const t = tierIndex(label); return { correct: 10 * t, wrong: 5 * t }; }
 
 async function getUserScore(username) {
   const h = await redis.hgetall(kUser(username));
@@ -306,20 +262,15 @@ async function getUserScore(username) {
   return { score, answered, correct, accuracy: answered ? correct / answered : 0 };
 }
 
-// Atomically bump score/stats and the leaderboard.
-// Floors score at 0 if it would go negative.
 async function applyScoreDelta(username, delta, wasCorrect) {
-  // increment counters
   await redis.hincrby(kUser(username), "answered", 1);
   if (wasCorrect) await redis.hincrby(kUser(username), "correct", 1);
 
-  // bump score in user hash and leaderboard ZSET
   let newScore = await redis.hincrby(kUser(username), "score", delta);
   await redis.zincrby(kLB(), delta, username);
 
   if (newScore < 0) {
-    // clamp both back to 0
-    await redis.hincrby(kUser(username), "score", -newScore);      // add positive to bring to 0
+    await redis.hincrby(kUser(username), "score", -newScore);
     await redis.zincrby(kLB(), -newScore, username);
     newScore = 0;
   }
@@ -333,13 +284,11 @@ const STANDARD_PDF_URL =
 const STANDARD_PDF_LABEL =
   process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
 
-// Optional: prevent accidental duplicate labels from different deploys
 medDb.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_pdf_label_unique
   ON pdf_docs(label) WHERE label IS NOT NULL;
 `);
 
-// Returns true if a doc with this label already exists
 function pdfExistsByLabel(label) {
   const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
   return !!row;
@@ -368,19 +317,13 @@ async function ensureStandardPdfIndexed() {
     console.error('[MedLearner] Error ensuring standard PDF:', err);
   }
 }
-
-// Kick it off at boot—non-blocking
 ensureStandardPdfIndexed();
 
 // ==== Med Learner: TOC endpoint derived from the standard PDF ====
-const STANDARD_PDF_LABEL =
-  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
-
 app.get('/med/toc', (req, res) => {
   try {
     const label = req.query.label || STANDARD_PDF_LABEL;
 
-    // Pull all chunk text for the labeled doc
     const rows = medDb.prepare(`
       SELECT pc.text
       FROM pdf_chunks pc
@@ -392,17 +335,14 @@ app.get('/med/toc', (req, res) => {
       return res.status(404).json({ error: `No chunks found for label "${label}". Is the PDF indexed?` });
     }
 
-    const items = []; // { discipline, sub, topic }
-
+    const items = [];
     const push = (disc, sub, topic) => {
       disc = (disc || '').trim();
       sub  = (sub  || '').trim();
       topic= (topic|| '').trim();
-      if (!disc || !sub || !topic) return;
-      items.push({ discipline: disc, sub, topic });
+      if (disc && sub && topic) items.push({ discipline: disc, sub, topic });
     };
 
-    // Parse lines into Discipline > Sub > Topic with a few tolerant patterns
     for (const { text } of rows) {
       const lines = String(text || '')
         .split(/\r?\n/)
@@ -410,33 +350,25 @@ app.get('/med/toc', (req, res) => {
         .filter(Boolean);
 
       for (const s of lines) {
-        // 1) Strict ">" separators
         let m = s.match(/^([^>]{2,}?)\s*>\s*([^>]{2,}?)\s*>\s*(.+)$/);
         if (m) { push(m[1], m[2], m[3]); continue; }
 
-        // 2) Colon / em-dash / hyphen separators
         m = s.match(/^(.+?)\s*[:—-]\s*(.+?)\s*[:—-]\s*(.+)$/);
         if (m) { push(m[1], m[2], m[3]); continue; }
 
-        // 3) Labeled headings within a line
         m = s.match(/Discipline[:\s-]+([A-Za-z/ &-]+).+Sub[-\s]?discipline[:\s-]+([A-Za-z/ &-]+).+Topic[:\s-]+(.+)/i);
         if (m) { push(m[1], m[2], m[3]); continue; }
       }
     }
 
-    if (!items.length) {
-      return res.status(200).json({ ok: true, items: [], counts: { disciplines: 0, subs: 0, topics: 0 } });
-    }
+    const discSet  = new Set(items.map(i => i.discipline));
+    const subSet   = new Set(items.map(i => `${i.discipline}::${i.sub}`));
+    const topicSet = new Set(items.map(i => i.topic));
 
-    // Build counts
-    const discSet = new Set(items.map(i => i.discipline));
-    const subSet  = new Set(items.map(i => `${i.discipline}::${i.sub}`));
-    const topicSet= new Set(items.map(i => i.topic));
-
-    return res.json({
+    res.json({
       ok: true,
       label,
-      items, // [{discipline, sub, topic}]
+      items,
       counts: { disciplines: discSet.size, subs: subSet.size, topics: topicSet.size }
     });
   } catch (e) {
@@ -444,44 +376,25 @@ app.get('/med/toc', (req, res) => {
   }
 });
 
-// put this helper near your other helpers
-// SAFE: never throws, only parses when a string clearly looks like JSON.
+// ---------- Response parsing helpers ----------
 function parseResponsesJSON(resp) {
   try {
-    // A) Aggregated text
     const t1 = typeof resp?.output_text === "string" ? resp.output_text.trim() : "";
-    if (t1 && (t1.startsWith("{") || t1.startsWith("["))) {
-      return JSON.parse(t1);
-    }
+    if (t1 && (t1.startsWith("{") || t1.startsWith("["))) return JSON.parse(t1);
 
-    // B) First content part
     const part = resp?.output?.[0]?.content?.[0];
     if (!part) return null;
 
-    // text field (string)
     const t2 = typeof part?.text === "string" ? part.text.trim() : "";
-    if (t2 && (t2.startsWith("{") || t2.startsWith("["))) {
-      return JSON.parse(t2);
-    }
+    if (t2 && (t2.startsWith("{") || t2.startsWith("["))) return JSON.parse(t2);
 
-    // explicit json field (already parsed)
-    if (part && typeof part.json === "object" && part.json !== null) {
-      return part.json;
-    }
-
-    // the part itself might already be a JSON object
-    if (part && typeof part === "object" && !Array.isArray(part)) {
-      return part;
-    }
+    if (part && typeof part.json === "object" && part.json !== null) return part.json;
+    if (part && typeof part === "object" && !Array.isArray(part)) return part;
 
     return null;
-  } catch {
-    // never throw
-    return null;
-  }
+  } catch { return null; }
 }
 
-//DEBUG
 function debugResp(tag, resp) {
   try {
     console.log(`[${tag}] typeof output_text=`, typeof resp?.output_text);
@@ -504,44 +417,25 @@ app.get("/admin/peek-session", async (req, res) => {
 
     const meta = await getSessionMeta(String(sessionId));
     const items = await getSessionItems(String(sessionId));
-    res.json({
-      meta,
-      items_count: items.length,
-      last_item: items[items.length - 1] || null
-    });
+    res.json({ meta, items_count: items.length, last_item: items[items.length - 1] || null });
   } catch (e) {
     res.status(500).json({ error: "peek failed", detail: String(e) });
   }
 });
 
 // Helpers
-async function userExists(username) {
-  return Boolean(await redis.exists(kUser(username)));
-}
+async function userExists(username) { return Boolean(await redis.exists(kUser(username))); }
 
 async function createUser(username) {
-  // Simple marker key; hash allows future fields
   await redis.hset(kUser(username), { created_at: Date.now() });
-  // after: await createUser(username);
   await redis.hset(kUser(username), { score: 0, answered: 0, correct: 0 });
   await redis.zadd(kLB(), { score: 0, member: username });
-  await redis.zadd('leaderboard:global', { score: 0, member: username }); // NOT empty string
+  await redis.zadd('leaderboard:global', { score: 0, member: username });
 }
 
-async function exclusionsCount(username) {
-  return await redis.llen(kExcl(username));
-}
-
-async function getExclusions(username) {
-  // full list (as strings)
-  return await redis.lrange(kExcl(username), 0, -1);
-}
-
-async function pushExclusions(username, questions) {
-  if (!questions?.length) return 0;
-  // RPUSH preserves order of session
-  return await redis.rpush(kExcl(username), ...questions);
-}
+async function exclusionsCount(username) { return await redis.llen(kExcl(username)); }
+async function getExclusions(username) { return await redis.lrange(kExcl(username), 0, -1); }
+async function pushExclusions(username, questions) { if (!questions?.length) return 0; return await redis.rpush(kExcl(username), ...questions); }
 
 async function createSession({ username, topic, startingDifficulty }) {
   const id = uuid();
@@ -566,23 +460,16 @@ async function getSessionItems(sessionId) {
   for (const r of raw) {
     if (typeof r === "string") {
       const t = r.trim();
-      if (t.startsWith("{") || t.startsWith("[")) {
-        try { items.push(JSON.parse(t)); } catch {}
-      }
+      if (t.startsWith("{") || t.startsWith("[")) { try { items.push(JSON.parse(t)); } catch {} }
     } else if (r && typeof r === "object" && !Array.isArray(r)) {
-      // Upstash client may already deserialize JSON -> object
       items.push(r);
     }
   }
   return items;
 }
 
+async function pushSessionItem(sessionId, item) { await redis.rpush(kSessItems(sessionId), item); }
 
-async function pushSessionItem(sessionId, item) {
-  await redis.rpush(kSessItems(sessionId), item);
-}
-
-// UPDATE last
 async function updateLastSessionItem(sessionId, patch) {
   const len = await redis.llen(kSessItems(sessionId));
   if (len === 0) return;
@@ -592,25 +479,17 @@ async function updateLastSessionItem(sessionId, patch) {
 
   if (typeof raw === "string") {
     const t = raw.trim();
-    if (t.startsWith("{") || t.startsWith("[")) {
-      try { last = JSON.parse(t); } catch {}
-    }
-  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    last = raw;
-  }
+    if (t.startsWith("{") || t.startsWith("[")) { try { last = JSON.parse(t); } catch {} }
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) { last = raw; }
 
   if (!last) return;
 
   const updated = { ...last, ...patch };
-
-  // Write back using the same style as push (see below)
-  // If your push writes objects, write object. If it writes strings, JSON.stringify here too.
   await redis.lset(kSessItems(sessionId), len - 1, updated);
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////
-// OPENAI HELPERS
+// OPENAI HELPERS (question/grade/summarize)
 ////////////////////////////////////////////////////////////////////////////////
 
 async function aiGenerateQuestion({ topic, difficulty, avoidList }) {
@@ -653,9 +532,7 @@ Avoid duplicates / near-duplicates of provided examples.`;
   return parsed.question.trim();
 }
 
-
 async function aiGradeAnswer({ question, userAnswer, difficulty }) {
-  // Mock path to keep you unblocked if quota/rate-limit/whatever:
   if (process.env.MOCK_AI === "1") {
     const golds = {
       "First-line treatment for status asthmaticus?": "nebulized saba and ipratropium",
@@ -689,11 +566,9 @@ Return ONLY JSON:
     debugResp("grade", resp);
     parsed = parseResponsesJSON(resp);
   } catch (e) {
-    // If OpenAI itself errors (429/500/etc), fall back gracefully
     return { is_correct: false, explanation: "Grader unavailable; keeping same difficulty.", difficulty_delta: 0 };
   }
 
-  // If parsing failed or fields missing, also fail gracefully
   if (!parsed || (parsed.is_correct === undefined && parsed.explanation === undefined)) {
     return { is_correct: false, explanation: "Grader returned unexpected format.", difficulty_delta: 0 };
   }
@@ -705,8 +580,6 @@ Return ONLY JSON:
 
   return { is_correct, explanation, difficulty_delta: delta };
 }
-
-
 
 async function aiSummarizeSession({ transcript, startDifficulty }) {
   const system = `You will summarize the session in detail, explain in detail the strengths and weaknesses of the user in that session with examples. Be a fair but objective rater. Try to use the sandwhich method to provide feedback. Additioanlly, you must return a final rating for that student (what level they are performing at).
@@ -762,14 +635,12 @@ app.post('/api/users', async (req, res) => {
     if (!username || typeof username !== 'string') {
       return res.status(400).json({ error: "username required" });
     }
-    
-    // AI moderation gate (case-sensitive username preserved)
+
     const ok = await isUsernameAllowedAI(username);
     if (!ok) {
       return res.status(400).json({ error: 'That username isn’t allowed. Please choose something else.' });
     }
-    
-    
+
     if (await userExists(username)) {
       return res.status(409).json({ error: "Username taken" });
     }
@@ -831,50 +702,30 @@ app.post('/api/next', async (req, res) => {
     const username = meta.username;
     const topic = overrideTopic || meta.topic || 'random';
 
-    // Determine current difficulty: last session item or session start
     const items = await getSessionItems(sessionId);
     const lastDiff = items.length
       ? items[items.length - 1].final_difficulty
       : (overrideDiff || meta.start_diff || "MSI3");
     const difficulty = lastDiff;
 
-    // Avoid duplicates by consulting user's existing exclusions
-    const avoidList = await getExclusions(username);
     const exclList = await getExclusions(username);
 
-    // Get current session items (so we don't repeat within the session)
     const already = await getSessionItems(sessionId);
     const sessionQs = already.map(it => it.question).filter(Boolean);
 
-    // Build a fast lookup set (case/space normalized)
     const norm = s => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
     const avoidSet = new Set([...exclList, ...sessionQs].map(norm));
 
-    // Generate with retry if duplicate slips through
     let question;
     let tries = 0;
     do {
-      question = await aiGenerateQuestion({
-        topic,
-        difficulty,
-        avoidList: [...avoidSet]   // still pass for model context
-      });
+      question = await aiGenerateQuestion({ topic, difficulty, avoidList: [...avoidSet] });
       tries++;
     } while (avoidSet.has(norm(question)) && tries < 3);
 
-    // If still duplicate after retries, tweak the prompt topic slightly as a hacky escape
     if (avoidSet.has(norm(question))) {
       question = `${topic !== 'random' ? topic + ': ' : ''}${question}`;
     }
-
-    /*
-    let question = await aiGenerateQuestion({ topic, difficulty, avoidList });
-    let tries = 0;
-    while (avoidList.includes(question) && tries < 2) {
-      question = await aiGenerateQuestion({ topic, difficulty, avoidList });
-      tries++;
-    }
-    */
 
     const asked_index_in_session = items.length + 1;
     const baseCount = await exclusionsCount(username);
@@ -900,6 +751,7 @@ app.post('/api/answer', async (req, res) => {
   try {
     const { sessionId, answer } = req.body || {};
     if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
     if (typeof answer !== "string") return res.status(400).json({ error: "answer required" });
 
     const meta = await getSessionMeta(sessionId);
@@ -918,30 +770,24 @@ app.post('/api/answer', async (req, res) => {
 
     const nextDiff = bumpDifficulty(last.final_difficulty, difficulty_delta);
 
-    // compute points for THIS item using the difficulty at the time of asking
     const { correct, wrong } = pointsFor(last.final_difficulty);
     const points_delta = is_correct ? correct : -wrong;
 
-    // apply score change + counters
     const score_after = await applyScoreDelta(username, points_delta, is_correct);
 
-    // compute points_delta above…
     const askedAt = Date.now();
 
-    // record to history
     await pushHistory(username, {
       question: last.question,
-      difficulty: last.final_difficulty,   // difficulty when asked
+      difficulty: last.final_difficulty,
       user_answer: answer,
       is_correct,
       explanation,
       points_delta,
-      score_after,                         // optional: current score after grading
+      score_after,
       asked_at: askedAt,
     });
 
-
-    // persist back to last item
     await updateLastSessionItem(sessionId, {
       user_answer: answer,
       is_correct,
@@ -951,13 +797,7 @@ app.post('/api/answer', async (req, res) => {
       score_after
     });
 
-    res.json({
-      correct: is_correct,
-      explanation,
-      nextDifficulty: nextDiff,
-      points_delta,
-      score: score_after
-    });
+    res.json({ correct: is_correct, explanation, nextDifficulty: nextDiff, points_delta, score: score_after });
   } catch (e) {
     res.status(500).json({ error: "Failed to grade answer", detail: String(e) });
   }
@@ -977,8 +817,7 @@ app.get('/api/score', async (req, res) => {
   }
 });
 
-// Leaderboard (global). Defaults to top 20.
-// Replace your current /api/leaderboard with this
+// Leaderboard (global)
 app.get('/api/leaderboard', async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(100, Number(req.query.limit || 10)));
@@ -986,15 +825,11 @@ app.get('/api/leaderboard', async (req, res) => {
 
     const raw = await redis.zrange(key, 0, limit - 1, { rev: true, withScores: true });
 
-    // Normalize: supports both object-array and alternating-array formats
     let pairs = [];
-
     if (Array.isArray(raw) && raw.length > 0) {
       if (typeof raw[0] === 'object' && raw[0] !== null && ('member' in raw[0] || 'score' in raw[0])) {
-        // Upstash modern shape: [{member, score}, ...]
         pairs = raw.map(r => [String(r.member ?? ''), Number(r.score ?? 0)]);
       } else if (typeof raw[0] === 'string' || typeof raw[0] === 'number') {
-        // Alternating shape: ["member","score","member","score", ...]
         for (let i = 0; i < raw.length; i += 2) {
           const m = String(raw[i] ?? '');
           const s = Number(raw[i + 1] ?? 0);
@@ -1003,14 +838,9 @@ app.get('/api/leaderboard', async (req, res) => {
       }
     }
 
-    // Filter out empty members and clamp NaN scores to 0
     const board = pairs
       .filter(([m]) => m && m.trim().length > 0)
-      .map(([m, s], i) => ({
-        rank: i + 1,
-        username: m,
-        score: Number.isFinite(s) ? s : 0
-      }));
+      .map(([m, s], i) => ({ rank: i + 1, username: m, score: Number.isFinite(s) ? s : 0 }));
 
     res.json({ leaderboard: board });
   } catch (e) {
@@ -1018,7 +848,7 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
-// GET /api/history?username=alice&limit=200
+// GET /api/history
 app.get('/api/history', async (req, res) => {
   try {
     const username = String(req.query.username || "");
@@ -1034,44 +864,6 @@ app.get('/api/history', async (req, res) => {
     res.json({ items });
   } catch (e) {
     res.status(500).json({ error: "history failed", detail: String(e) });
-  }
-});
-
-
-// Conclude session (merge to exclusions, return new_count, next_number, feedback, rating)
-app.post('/api/conclude', async (req, res) => {
-  try {
-    const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-
-    const meta = await getSessionMeta(sessionId);
-    if (!meta) return res.status(404).json({ error: "Session not found" });
-
-    const username = meta.username;
-    const transcript = await getSessionItems(sessionId);
-
-    // Merge all session questions into user's exclusions
-    const newQs = transcript.map(t => t.question);
-    await pushExclusions(username, newQs);
-
-    const new_count = await exclusionsCount(username);
-    const next_number = new_count + 1;
-
-    const session_points = transcript.reduce((sum, t) => {
-      if (typeof t.points_delta === "number") return sum + t.points_delta;
-      // fallback if older items predate scoring: estimate by starting_difficulty
-      const { correct, wrong } = pointsFor(t.starting_difficulty || t.final_difficulty || "MSI3");
-      return sum + (t.is_correct ? correct : -wrong);
-    }, 0);
-
-    const { feedback, rating } = await aiSummarizeSession({
-      transcript,
-      startDifficulty: meta.start_diff
-    });
-
-    res.json({ new_count, next_number, feedback, rating, session_points });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to conclude session", detail: String(e) });
   }
 });
 
@@ -1092,8 +884,7 @@ app.post('/med/topics', (req, res) => {
   const { user_id, topic } = req.body || {};
   if (!user_id || !topic) return res.status(400).json({ error: 'user_id and topic required' });
   try {
-    medDb.prepare(`INSERT OR IGNORE INTO completed_topics (user_id, topic) VALUES (?, ?)`)
-         .run(user_id, topic);
+    medDb.prepare(`INSERT OR IGNORE INTO completed_topics (user_id, topic) VALUES (?, ?)`).run(user_id, topic);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1118,7 +909,6 @@ app.post('/med/pdfs/by-url', async (req, res) => {
     const { url, label } = req.body || {};
     if (!url) return res.status(400).json({ error: 'url required' });
 
-    // Node 18+ has global fetch on Render; no node-fetch needed
     const r = await fetch(url);
     if (!r.ok) return res.status(400).json({ error: `fetch failed: ${r.status}` });
 
@@ -1130,7 +920,7 @@ app.post('/med/pdfs/by-url', async (req, res) => {
   }
 });
 
-// Search indexed PDFs (FTS5; supports BM25 ranking)
+// Search indexed PDFs (FTS5; BM25 ranking)
 app.get('/med/pdfs/search', (req, res) => {
   const q = req.query.q;
   const k = Number(req.query.k || 8);
@@ -1166,12 +956,9 @@ app.get('/med/pdfs/search', (req, res) => {
   }
 });
 
-
-
 ////////////////////////////////////////////////////////////////////////////////
 // START
 ////////////////////////////////////////////////////////////////////////////////
-
 app.listen(PORT, () => {
   console.log(`Server listening on :${PORT}`);
 });
