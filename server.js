@@ -33,7 +33,7 @@ const PORT = process.env.PORT || 3000;
 const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-4.1";
 // Use a smarter model ONLY for URL selection to reduce 404s; set env to "gpt-5.1" (or whatever you have)
 // If not set, it will fallback to BASE_MODEL.
-const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5.1";
+const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5";
 
 // helper: some models (gpt-5.x, o-series) don't accept temperature on Responses API
 function supportsTemperature(model) {
