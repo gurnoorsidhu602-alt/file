@@ -35,6 +35,91 @@ const bumpDifficulty = (label, delta) => {
   const next = i < 0 ? 2 : clamp(i + delta, 0, DIFF.length - 1);
   return DIFF[next];
 };
+// ---------------- MED ROUTER (mounts at /med) ----------------
+import express from "express";
+const medRouter = express.Router();
+
+// Uses your env (or default) label that the boot indexer wrote
+const STANDARD_PDF_LABEL = process.env.STANDARD_PDF_LABEL || "STANDARD_TOC_V1";
+
+// /med/toc  — returns JSON: { ok, label, items:[{discipline,sub,topic}], counts:{} }
+medRouter.get("/toc", (req, res) => {
+  try {
+    const label = req.query.label || STANDARD_PDF_LABEL;
+
+    const rows = medDb.prepare(`
+      SELECT pc.text
+      FROM pdf_chunks pc
+      JOIN pdf_docs pd ON pd.id = pc.doc_id
+      WHERE pd.label = ?
+    `).all(label);
+
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ error: `No chunks found for label "${label}". Is the PDF indexed?` });
+    }
+
+    const items = [];
+    const push = (d, s, t) => {
+      d = (d||"").trim(); s = (s||"").trim(); t = (t||"").trim();
+      if (d && s && t) items.push({ discipline: d, sub: s, topic: t });
+    };
+
+    for (const { text } of rows) {
+      const lines = String(text||"")
+        .split(/\r?\n/)
+        .map(x => x.replace(/^\s*[-*•]\s*/, "").trim())
+        .filter(Boolean);
+
+      for (const line of lines) {
+        let m = line.match(/^([^>]{2,}?)\s*>\s*([^>]{2,}?)\s*>\s*(.+)$/);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+        m = line.match(/^(.+?)\s*[:—-]\s*(.+?)\s*[:—-]\s*(.+)$/);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+        m = line.match(/Discipline[:\s-]+([A-Za-z/ &-]+).+Sub[-\s]?discipline[:\s-]+([A-Za-z/ &-]+).+Topic[:\s-]+(.+)/i);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+      }
+    }
+
+    const discs  = new Set(items.map(i => i.discipline));
+    const subs   = new Set(items.map(i => `${i.discipline}::${i.sub}`));
+    const topics = new Set(items.map(i => i.topic));
+
+    res.json({ ok: true, label, items,
+      counts: { disciplines: discs.size, subs: subs.size, topics: topics.size } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// -------- TEMP: show mounted routes at /_routes --------
+app.get("/_routes", (req, res) => {
+  const out = [];
+  const walk = (stack, prefix="") => {
+    (stack || []).forEach(layer => {
+      if (layer.route && layer.route.path) {
+        out.push({ method: Object.keys(layer.route.methods)[0].toUpperCase(), path: prefix + layer.route.path });
+      } else if (layer.name === "router" && layer.handle && layer.handle.stack) {
+        const p = layer.regexp && layer.regexp.fast_slash ? prefix
+          : (layer.regexp?.toString().match(/\\\/([^\\]+)\\\//)?.[1] ? prefix + "/" + layer.regexp.toString().match(/\\\/([^\\]+)\\\//)[1] : prefix);
+        walk(layer.handle.stack, p);
+      }
+    });
+  };
+  walk(app._router?.stack);
+  res.json({ routes: out });
+});
+
+
+// (Optional) keep your other /med routes here too, e.g. /topics, /pdfs, /pdfs/search
+// If they already exist on `app.get('/med/...')`, you can leave them;
+// or move them under `medRouter` the same way.
+
+// Mount the router BEFORE any static or wildcard handlers:
+app.use("/med", medRouter);
+
+
 
 // ---- History helpers ----
 const kHistory = (u) => `history:${u}`;
