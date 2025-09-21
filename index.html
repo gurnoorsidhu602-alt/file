@@ -33,7 +33,6 @@
     .kbd{background:#0c132c;border:1px solid var(--border);padding:2px 6px;border-radius:6px}
     .linkbar a{margin-right:10px}
     .list li{margin:6px 0}
-    .mono{font-family:ui-monospace,SFMono-Regular,Consolas,Monaco,monospace}
   </style>
 </head>
 <body>
@@ -182,7 +181,7 @@
         <div class="row">
           <span class="muted">Topic:</span>
           <span id="testTopic" class="tag">—</span>
-          <button id="btnBuildQuestions">Build Questions from Hits</button>
+          <button id="btnBuildQuestions" title="Build from hits; if none, use AI" class="primary">Build Questions</button>
           <span id="qCount" class="muted"></span>
         </div>
         <div id="testArea" class="stack"></div>
@@ -198,47 +197,44 @@
       connected: false,
       completed: new Set(),
 
-      // TOC
       discToSub: new Map(),
       subToTopics: new Map(),
       allTopics: new Set(),
 
       pickedTopic: null,
-      learnPlan: null, // {guidelines, trials, objectives}
+      learnPlan: null,
       lastHits: [],
       questions: [],
-      qIndex: 0
+      qIndex: 0,
+
+      // flip to true if you want AI questions always (ignoring hits)
+      preferAI: false
     };
 
     const $ = id => document.getElementById(id);
     const show = (el, on=true) => el.classList.toggle('hidden', !on);
     const sanitize = s => (s||'').trim();
-
     const selDisc = $('selDisc'), selSub = $('selSub'), selTopic = $('selTopic');
 
-    // ---------- Login ----------
+    // Login & header
     $('btnStart').onclick = async () => {
       state.userId = sanitize($('loginUser').value) || 'Gurnoor';
       $('userId').value = state.userId;
       await connectAndBootstrap();
       $('login').classList.add('hidden');
     };
-
-    // ---------- Header ----------
     $('baseUrl').oninput = e => state.baseUrl = sanitize(e.target.value);
     $('userId').oninput  = e => state.userId  = sanitize(e.target.value) || 'Gurnoor';
-
     $('btnPick').onclick  = () => selectMode('pick');
     $('btnLearn').onclick = () => selectMode('learn');
     $('btnTest').onclick  = () => selectMode('test');
-
     function selectMode(which){
       show($('modePick'), which==='pick');
       show($('modeLearn'), which==='learn');
       show($('modeTest'), which==='test');
     }
 
-    // ---------- Connectivity + bootstrap ----------
+    // Bootstrap
     async function connectAndBootstrap(){
       const dot = $('connDot');
       dot.textContent = 'connecting…'; dot.style.color = 'var(--muted)';
@@ -247,14 +243,11 @@
         state.connected = r.ok || r.status === 400;
         dot.textContent = state.connected ? 'connected' : 'disconnected';
         dot.style.color = state.connected ? 'var(--ok)' : 'var(--muted)';
-      } catch(e) {
-        state.connected = false; dot.textContent = 'disconnected'; dot.style.color = 'var(--muted)';
-      }
+      } catch { dot.textContent='disconnected'; dot.style.color='var(--muted)'; }
       await loadCompleted();
       await fetchTOC();
       selectMode('pick');
     }
-
     async function loadCompleted(){
       const list = $('completedList');
       list.innerHTML = '<span class="muted">Loading…</span>';
@@ -269,165 +262,100 @@
           div.innerHTML = `<span class="tag">${t}</span>`;
           list.appendChild(div);
         });
-      }catch(err){
-        list.innerHTML = `<span class="bad">Failed to load: ${err.message}</span>`;
-      }
+      }catch(err){ list.innerHTML = `<span class="bad">${err.message}</span>`; }
     }
     $('btnLoadTopics').onclick = loadCompleted;
     $('btnRefreshTopics').onclick = loadCompleted;
 
-    // ---------- Fetch TOC ----------
+    // TOC
     async function fetchTOC(){
-      const s = $('tocStatus');
-      s.textContent = 'Loading…';
+      const s = $('tocStatus'); s.textContent = 'Loading…';
       try{
         const r = await fetch(`${state.baseUrl}/med/toc`);
-        const j = await r.json();
-        if(!r.ok) throw new Error(j.error || r.statusText);
+        const j = await r.json(); if(!r.ok) throw new Error(j.error || r.statusText);
 
-        state.discToSub = new Map();
-        state.subToTopics = new Map();
-        state.allTopics = new Set();
-
-        (j.items || []).forEach(it=>{
-          const { discipline: d, sub: sub, topic: t } = it;
-          if(!d || !sub || !t) return;
-          (state.discToSub.get(d) || state.discToSub.set(d, new Set()).get(d)).add(sub);
+        state.discToSub = new Map(); state.subToTopics = new Map(); state.allTopics = new Set();
+        (j.items||[]).forEach(it=>{
+          const { discipline:d, sub, topic:t } = it; if(!d||!sub||!t) return;
+          (state.discToSub.get(d) || state.discToSub.set(d,new Set()).get(d)).add(sub);
           const key = `${d}::${sub}`;
-          (state.subToTopics.get(key) || state.subToTopics.set(key, new Set()).get(key)).add(t);
+          (state.subToTopics.get(key) || state.subToTopics.set(key,new Set()).get(key)).add(t);
           state.allTopics.add(t);
         });
-
         $('discCount').textContent  = String(state.discToSub.size);
         $('subCount').textContent   = String([...state.subToTopics.keys()].length);
         $('topicCount').textContent = String(state.allTopics.size);
-
         populateDisciplines();
         s.textContent = state.allTopics.size ? 'TOC loaded' : 'No TOC items found';
-      }catch(err){
-        s.textContent = `Failed to load TOC: ${err.message}`;
-        s.style.color = 'var(--danger)';
-      }
+      }catch(err){ s.textContent = `Failed to load TOC: ${err.message}`; s.style.color='var(--danger)'; }
     }
-
     function populateDisciplines(){
-      selDisc.innerHTML = '';
-      const discs = [...state.discToSub.keys()].sort((a,b)=>a.localeCompare(b));
-      discs.forEach(d=>{
-        const opt = document.createElement('option'); opt.value=d; opt.textContent=d;
-        selDisc.appendChild(opt);
+      selDisc.innerHTML=''; [...state.discToSub.keys()].sort().forEach(d=>{
+        const o=document.createElement('option'); o.value=d; o.textContent=d; selDisc.appendChild(o);
       });
-      selSub.innerHTML=''; selSub.disabled = true; $('btnRandomSub').disabled = true;
-      selTopic.innerHTML=''; selTopic.disabled = true; $('btnRandomTopic').disabled = true;
+      selSub.innerHTML=''; selSub.disabled=true; $('btnRandomSub').disabled=true;
+      selTopic.innerHTML=''; selTopic.disabled=true; $('btnRandomTopic').disabled=true;
     }
-
     selDisc.onchange = ()=>{
-      const chosen = [...selDisc.selectedOptions].map(o=>o.value);
-      selSub.innerHTML=''; selTopic.innerHTML=''; selTopic.disabled=true; $('btnRandomTopic').disabled = true;
-
-      const subs = new Set();
-      chosen.forEach(d => (state.discToSub.get(d)||new Set()).forEach(s=>subs.add(s)));
-      [...subs].sort((a,b)=>a.localeCompare(b)).forEach(s=>{
-        const opt = document.createElement('option'); opt.value=s; opt.textContent=s;
-        selSub.appendChild(opt);
-      });
-      selSub.disabled = subs.size===0;
-      $('btnRandomSub').disabled = subs.size===0;
+      const chosen=[...selDisc.selectedOptions].map(o=>o.value);
+      selSub.innerHTML=''; selTopic.innerHTML=''; selTopic.disabled=true; $('btnRandomTopic').disabled=true;
+      const subs=new Set(); chosen.forEach(d => (state.discToSub.get(d)||new Set()).forEach(s=>subs.add(s)));
+      [...subs].sort().forEach(s=>{ const o=document.createElement('option'); o.value=s; o.textContent=s; selSub.appendChild(o); });
+      selSub.disabled = subs.size===0; $('btnRandomSub').disabled = subs.size===0;
     };
-
     selSub.onchange = ()=>{
-      const discs = [...selDisc.selectedOptions].map(o=>o.value);
-      const subs  = [...selSub.selectedOptions].map(o=>o.value);
+      const discs=[...selDisc.selectedOptions].map(o=>o.value);
+      const subs=[...selSub.selectedOptions].map(o=>o.value);
       selTopic.innerHTML='';
-
-      const topics = new Set();
-      discs.forEach(d=>{
-        subs.forEach(s=>{
-          const key = `${d}::${s}`;
-          (state.subToTopics.get(key)||new Set()).forEach(t=>topics.add(t));
-        });
-      });
-      [...topics].sort((a,b)=>a.localeCompare(b)).forEach(t=>{
-        if(state.completed.has(t)) return; // exclude completed
-        const opt = document.createElement('option'); opt.value=t; opt.textContent=t;
-        selTopic.appendChild(opt);
-      });
-      selTopic.disabled = topics.size===0;
-      $('btnRandomTopic').disabled = topics.size===0;
+      const topics=new Set();
+      discs.forEach(d=>subs.forEach(s=>(state.subToTopics.get(`${d}::${s}`)||new Set()).forEach(t=>{
+        if(!state.completed.has(t)) topics.add(t);
+      })));
+      [...topics].sort().forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent=t; selTopic.appendChild(o); });
+      selTopic.disabled = topics.size===0; $('btnRandomTopic').disabled = topics.size===0;
     };
-
     $('btnClearSelections').onclick = ()=>{ populateDisciplines(); $('pickResult').innerHTML=''; };
 
+    // Pick + Randoms
     $('btnPickFromSelections').onclick = ()=>{
-      const chosen = [...selTopic.selectedOptions].map(o=>o.value);
+      const chosen=[...selTopic.selectedOptions].map(o=>o.value);
       const pool = chosen.length ? chosen : [...state.allTopics].filter(t=>!state.completed.has(t));
       if(!pool.length){ $('pickResult').innerHTML='<span class="bad">No eligible topics.</span>'; return; }
       renderPickConfirmation(pool[0]);
     };
-
-    // Randomizers
-    function setSingle(selectEl, value){
-      [...selectEl.options].forEach(o => o.selected = (o.value === value));
-      selectEl.dispatchEvent(new Event('change'));
-    }
-    $('btnRandomDisc').onclick = ()=>{
-      const discs = [...state.discToSub.keys()];
-      if(!discs.length) return;
-      const pick = discs[Math.floor(Math.random()*discs.length)];
-      setSingle(selDisc, pick);
-    };
+    function setSingle(selectEl, value){ [...selectEl.options].forEach(o=>o.selected=(o.value===value)); selectEl.dispatchEvent(new Event('change')); }
+    $('btnRandomDisc').onclick = ()=>{ const arr=[...state.discToSub.keys()]; if(!arr.length) return; setSingle(selDisc, arr[Math.floor(Math.random()*arr.length)]); };
     $('btnRandomSub').onclick = ()=>{
-      const discs = [...selDisc.selectedOptions].map(o=>o.value);
-      if(!discs.length) return;
-      const subs = new Set();
-      discs.forEach(d => (state.discToSub.get(d)||new Set()).forEach(s=>subs.add(s)));
-      const arr = [...subs];
-      if(!arr.length) return;
-      const pick = arr[Math.floor(Math.random()*arr.length)];
-      setSingle(selSub, pick);
+      const discs=[...selDisc.selectedOptions].map(o=>o.value); if(!discs.length) return;
+      const subs=new Set(); discs.forEach(d=>(state.discToSub.get(d)||new Set()).forEach(s=>subs.add(s)));
+      const arr=[...subs]; if(!arr.length) return; setSingle(selSub, arr[Math.floor(Math.random()*arr.length)]);
     };
     $('btnRandomTopic').onclick = ()=>{
-      const discs = [...selDisc.selectedOptions].map(o=>o.value);
-      const subs  = [...selSub.selectedOptions].map(o=>o.value);
-      const topics = new Set();
-      discs.forEach(d => subs.forEach(s => (state.subToTopics.get(`${d}::${s}`)||new Set()).forEach(t => {
-        if(!state.completed.has(t)) topics.add(t);
-      })));
-      const arr = [...topics];
-      if(!arr.length){ alert('No eligible topics in this selection.'); return; }
-      const pick = arr[Math.floor(Math.random()*arr.length)];
-      renderPickConfirmation(pick);
+      const discs=[...selDisc.selectedOptions].map(o=>o.value);
+      const subs=[...selSub.selectedOptions].map(o=>o.value);
+      const topics=new Set();
+      discs.forEach(d=>subs.forEach(s=>(state.subToTopics.get(`${d}::${s}`)||new Set()).forEach(t=>{ if(!state.completed.has(t)) topics.add(t); })));
+      const arr=[...topics]; if(!arr.length){ alert('No eligible topics.'); return; }
+      renderPickConfirmation(arr[Math.floor(Math.random()*arr.length)]);
     };
     $('btnRandomAny').onclick = ()=>{
-      const pool = [...state.allTopics].filter(t=>!state.completed.has(t));
+      const pool=[...state.allTopics].filter(t=>!state.completed.has(t));
       if(!pool.length){ alert('No eligible topics.'); return; }
-      const pick = pool[Math.floor(Math.random()*pool.length)];
-      renderPickConfirmation(pick);
+      renderPickConfirmation(pool[Math.floor(Math.random()*pool.length)]);
     };
-
-    // High-Yield (IM) via server AI (kept)
     $('btnHighYieldIM').onclick = async ()=>{
-      const body = { user_id: state.userId, n: 1 };
       try{
-        const r = await fetch(`${state.baseUrl}/med/high-yield-im`, {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify(body)
-        });
-        const j = await r.json();
-        if(!r.ok) throw new Error(j.error || 'AI pick failed');
-        const pick = j.pick || (j.ranked && j.ranked[0]);
-        if(!pick) throw new Error('No AI pick returned');
+        const r = await fetch(`${state.baseUrl}/med/high-yield-im`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ user_id: state.userId, n: 1 }) });
+        const j = await r.json(); if(!r.ok) throw new Error(j.error||'AI pick failed');
+        const pick = j.pick || (j.ranked && j.ranked[0]); if(!pick) throw new Error('No AI pick returned');
         renderPickConfirmation(pick.topic, pick.reason);
-      }catch(err){
-        alert(`High-Yield pick failed: ${err.message}`);
-      }
+      }catch(err){ alert(`High-Yield pick failed: ${err.message}`); }
     };
 
     function renderPickConfirmation(topic, reason){
       state.pickedTopic = topic;
       const box = $('pickResult'); box.innerHTML='';
-      const wrap = document.createElement('div');
-      wrap.className='stack';
+      const wrap = document.createElement('div'); wrap.className='stack';
       const reasonHtml = reason ? `<div class="muted">AI rationale: ${reason}</div>` : '';
       wrap.innerHTML = `
         <div class="quote">Topic Selected: ${topic}\nWould you like to confirm this topic?</div>
@@ -441,7 +369,7 @@
       $('btnRejectPick').onclick = ()=>{ box.innerHTML='<span class="muted">Okay. Adjust selections and pick again.</span>'; };
     }
 
-    // ---------- LEARN MODE ----------
+    // Learn flow
     async function startLearn(topic){
       $('currentTopic').textContent = topic;
       $('testTopic').textContent = topic;
@@ -449,182 +377,128 @@
       $('trialsBox').innerHTML = '<span class="muted">Asking AI for landmark trials…</span>';
       $('objectivesBox').innerHTML = '<span class="muted">Asking AI for learning objectives…</span>';
       $('hits').innerHTML = ''; $('searchInfo').textContent = '';
-      state.learnPlan = null;
-      selectMode('learn');
+      state.learnPlan = null; selectMode('learn');
 
       try{
-        const r = await fetch(`${state.baseUrl}/med/learn-plan`, {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ topic, user_id: state.userId })
-        });
-        const j = await r.json();
-        if(!r.ok) throw new Error(j.error || r.statusText);
+        const r = await fetch(`${state.baseUrl}/med/learn-plan`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ topic, user_id: state.userId }) });
+        const j = await r.json(); if(!r.ok) throw new Error(j.error||r.statusText);
         state.learnPlan = j;
-        renderGuidelines(j.guidelines || []);
-        renderTrials(j.trials || []);
-        renderObjectives(j.objectives || [], j.guidelines||[], j.trials||[]);
+        renderGuidelines(j.guidelines||[]); renderTrials(j.trials||[]); renderObjectives(j.objectives||[], j.guidelines||[], j.trials||[]);
       }catch(err){
         $('guidelinesBox').innerHTML = `<span class="bad">${err.message}</span>`;
         $('trialsBox').innerHTML = `<span class="bad">${err.message}</span>`;
         $('objectivesBox').innerHTML = `<span class="bad">${err.message}</span>`;
       }
     }
-
     function gSearch(q){ return `https://www.google.com/search?q=${encodeURIComponent(q)}`; }
     function pmidSearch(q){ return `https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(q)}`; }
     function scholar(q){ return `https://scholar.google.com/scholar?q=${encodeURIComponent(q)}`; }
-
     function renderGuidelines(list){
-      const box = $('guidelinesBox'); box.innerHTML='';
-      if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
-      const ul = document.createElement('ul'); ul.className='list';
+      const box=$('guidelinesBox'); box.innerHTML=''; if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
+      const ul=document.createElement('ul'); ul.className='list';
       list.forEach(g=>{
-        const li = document.createElement('li');
-        const title = `${g.title || ''}`.trim();
-        const org = g.org ? ` (${g.org})` : '';
-        const meta = [g.region, g.year].filter(Boolean).join(' · ');
-        const link = g.link || gSearch(`${title} ${g.org||''} guideline`);
-        li.innerHTML = `
-          <div><b>${title}</b>${org} — <span class="muted">${meta}</span></div>
-          <div class="linkbar"><a href="${link}" target="_blank">Open</a></div>
-          ${g.why ? `<div class="muted">${g.why}</div>` : ''}`;
+        const title=`${g.title||''}`.trim(); const org=g.org?` (${g.org})`:'';
+        const meta=[g.region,g.year].filter(Boolean).join(' · ');
+        const link=g.link||gSearch(`${title} ${g.org||''} guideline`);
+        const li=document.createElement('li');
+        li.innerHTML=`<div><b>${title}</b>${org} — <span class="muted">${meta}</span></div><div class="linkbar"><a href="${link}" target="_blank">Open</a></div>${g.why?`<div class="muted">${g.why}</div>`:''}`;
         ul.appendChild(li);
-      });
-      box.appendChild(ul);
+      }); box.appendChild(ul);
     }
-
     function renderTrials(list){
-      const box = $('trialsBox'); box.innerHTML='';
-      if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
-      const ul = document.createElement('ul'); ul.className='list';
+      const box=$('trialsBox'); box.innerHTML=''; if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
+      const ul=document.createElement('ul'); ul.className='list';
       list.forEach(t=>{
-        const link = t.link || scholar(`${t.name||''} ${state.pickedTopic||''}`);
-        const meta = [t.year, t.design, t.n].filter(Boolean).join(' · ');
-        li = document.createElement('li');
-        li.innerHTML = `
-          <div><b>${t.name||'Trial'}</b> — <span class="muted">${meta}</span></div>
-          <div class="muted">${t.one_liner || t.result || ''}</div>
-          <div class="linkbar">
-            <a href="${link}" target="_blank">Open</a>
-            <a href="${pmidSearch(t.name||'')}" target="_blank">PubMed</a>
-            <a href="${scholar(t.name||'')}" target="_blank">Scholar</a>
-          </div>`;
+        const link=t.link||scholar(`${t.name||''} ${state.pickedTopic||''}`);
+        const meta=[t.year,t.design,t.n].filter(Boolean).join(' · ');
+        const li=document.createElement('li');
+        li.innerHTML=`<div><b>${t.name||'Trial'}</b> — <span class="muted">${meta}</span></div><div class="muted">${t.one_liner||t.result||''}</div><div class="linkbar"><a href="${link}" target="_blank">Open</a><a href="${pmidSearch(t.name||'')}" target="_blank">PubMed</a><a href="${scholar(t.name||'')}" target="_blank">Scholar</a></div>`;
         ul.appendChild(li);
-      });
-      box.appendChild(ul);
+      }); box.appendChild(ul);
     }
-
     function renderObjectives(objs, guidelines, trials){
-      const box = $('objectivesBox'); box.innerHTML='';
-      if(!objs.length){ box.innerHTML='<span class="muted">None produced by AI.</span>'; return; }
-
-      const gIndex = new Map((guidelines||[]).map(g => [String(g.title||'').toLowerCase(), g]));
-      const tIndex = new Map((trials||[]).map(t => [String(t.name||'').toLowerCase(), t]));
-
+      const box=$('objectivesBox'); box.innerHTML=''; if(!objs.length){ box.innerHTML='<span class="muted">None produced by AI.</span>'; return; }
+      const gIndex=new Map((guidelines||[]).map(g=>[String(g.title||'').toLowerCase(),g]));
+      const tIndex=new Map((trials||[]).map(t=>[String(t.name||'').toLowerCase(),t]));
       objs.forEach(o=>{
-        const wrap = document.createElement('div');
-        wrap.className = 'stack';
-        const header = document.createElement('div');
-        header.innerHTML = `<b>${o.objective||''}</b>`;
-        wrap.appendChild(header);
-        if(o.rationale){
-          const rat = document.createElement('div');
-          rat.className = 'muted';
-          rat.textContent = o.rationale;
-          wrap.appendChild(rat);
-        }
-
-        const ul = document.createElement('ul'); ul.className='list';
+        const wrap=document.createElement('div'); wrap.className='stack';
+        const header=document.createElement('div'); header.innerHTML=`<b>${o.objective||''}</b>`; wrap.appendChild(header);
+        if(o.rationale){ const rat=document.createElement('div'); rat.className='muted'; rat.textContent=o.rationale; wrap.appendChild(rat); }
+        const ul=document.createElement('ul'); ul.className='list';
         (o.resources||[]).forEach(r=>{
-          const li = document.createElement('li');
-          if(r.type === 'guideline'){
-            const key = String(r.ref||'').toLowerCase();
-            const g = gIndex.get(key);
-            const txt = g ? `${g.title} (${g.org||''} ${g.year||''})` : (r.ref||'Guideline');
-            const link = (g && g.link) || gSearch(`${txt} guideline`);
-            li.innerHTML = `📘 ${txt} — <a href="${link}" target="_blank">Open</a>`;
-          } else if(r.type === 'trial'){
-            const key = String(r.ref||'').toLowerCase();
-            const t = tIndex.get(key);
-            const txt = t ? `${t.name} (${t.year||''})` : (r.ref||'Trial');
-            const link = (t && t.link) || scholar(txt);
-            li.innerHTML = `🧪 ${txt} — <a href="${link}" target="_blank">Open</a>`;
-          } else {
-            const title = r.title || 'Resource';
-            const link  = r.link || gSearch(`${title} ${state.pickedTopic||''}`);
-            li.innerHTML = `🔎 ${title} — <a href="${link}" target="_blank">Open</a>`;
-          }
+          const li=document.createElement('li');
+          if(r.type==='guideline'){ const key=String(r.ref||'').toLowerCase(); const g=gIndex.get(key);
+            const txt=g?`${g.title} (${g.org||''} ${g.year||''})`:(r.ref||'Guideline'); const link=(g&&g.link)||gSearch(`${txt} guideline`);
+            li.innerHTML=`📘 ${txt} — <a href="${link}" target="_blank">Open</a>`;
+          } else if(r.type==='trial'){ const key=String(r.ref||'').toLowerCase(); const t=tIndex.get(key);
+            const txt=t?`${t.name} (${t.year||''})`:(r.ref||'Trial'); const link=(t&&t.link)||scholar(txt);
+            li.innerHTML=`🧪 ${txt} — <a href="${link}" target="_blank">Open</a>`;
+          } else { const title=r.title||'Resource'; const link=r.link||gSearch(`${title} ${state.pickedTopic||''}`); li.innerHTML=`🔎 ${title} — <a href="${link}" target="_blank">Open</a>`; }
           ul.appendChild(li);
         });
-        wrap.appendChild(ul);
-        box.appendChild(wrap);
+        wrap.appendChild(ul); box.appendChild(wrap);
       });
     }
 
-    // Optional: notes search (unchanged)
+    // Notes search (optional)
     $('btnSearch').onclick = async ()=>{
       const q = sanitize($('searchQuery').value) || state.pickedTopic || '';
       if(!q){ alert('Enter a query or pick a topic first.'); return; }
       $('hits').innerHTML = '<span class="muted">Searching…</span>'; $('searchInfo').textContent = '';
       try{
         const r = await fetch(`${state.baseUrl}/med/pdfs/search?q=${encodeURIComponent(q)}&k=12`);
-        const j = await r.json();
-        state.lastHits = j.hits || [];
-        renderHits(state.lastHits);
-        $('searchInfo').textContent = `${state.lastHits.length} chunk(s)`;
-      }catch(err){
-        $('hits').innerHTML = `<span class="bad">Search failed: ${err.message}</span>`;
-      }
+        const j = await r.json(); state.lastHits = j.hits || [];
+        renderHits(state.lastHits); $('searchInfo').textContent = `${state.lastHits.length} chunk(s)`;
+      }catch(err){ $('hits').innerHTML = `<span class="bad">${err.message}</span>`; }
     };
-
     function renderHits(hits){
-      const area = $('hits'); area.innerHTML='';
+      const area=$('hits'); area.innerHTML='';
       if(!hits.length){ area.innerHTML='<span class="muted">No matches yet.</span>'; return; }
-      hits.forEach((h,i)=>{
-        const card = document.createElement('div'); card.className='quote'; card.innerHTML = `[${i+1}] ${h.text}`;
-        area.appendChild(card);
-      });
+      hits.forEach((h,i)=>{ const card=document.createElement('div'); card.className='quote'; card.innerHTML=`[${i+1}] ${h.text}`; area.appendChild(card); });
     }
 
-    $('btnMarkLearned').onclick = async ()=>{
-      const topic = state.pickedTopic || sanitize($('currentTopic').textContent);
-      if(!topic){ alert('No topic selected.'); return; }
+    // TEST: build questions (hits → cloze; else AI)
+    function cloze(text){
+      const cands=[...new Set((text.match(/\b([A-Z]{3,}|[A-Za-z]{6,}|\d+(?:\.\d+)?\s?(?:mg|mmol\/L|L|g|mcg|units|%))\b/g)||[]))].filter(w=>w.length>=4&&w.length<=30).slice(0,12);
+      if(!cands.length) return null; const answer=cands[Math.floor(Math.random()*cands.length)]; const stem=text.replace(answer,'_____'); return { stem, answer };
+    }
+    $('btnBuildQuestions').onclick = async ()=>{
+      const topic = state.pickedTopic || $('testTopic').textContent.trim();
+      if(!topic){ alert('Pick a topic first.'); return; }
+
+      // If we have PDF hits and you don't prefer AI, build cloze; otherwise call server AI.
+      if (!state.preferAI && state.lastHits.length){
+        const used = state.lastHits.slice(0, Math.min(12, state.lastHits.length));
+        state.questions = used.map(h => {
+          const z = cloze(h.text);
+          return z ? { q: z.stem, answer: z.answer, explain: "" } : null;
+        }).filter(Boolean);
+        state.qIndex = 0; $('qCount').textContent = `${state.questions.length} question(s) built from notes`;
+        return renderQuestion();
+      }
+
+      // AI questions
       try{
-        const r = await fetch(`${state.baseUrl}/med/topics`, {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ user_id: state.userId, topic })
-        });
-        const j = await r.json();
-        if(!r.ok) throw new Error(j.error || r.statusText);
-        $('markStatus').textContent = `Marked learned: ${topic}`;
-        $('markStatus').style.color = 'var(--ok)';
-        await loadCompleted();
+        $('qCount').textContent = 'building (AI)…';
+        const r = await fetch(`${state.baseUrl}/med/test-questions`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ topic, n: 12 }) });
+        const j = await r.json(); if(!r.ok) throw new Error(j.error||r.statusText);
+        state.questions = j.questions || []; state.qIndex = 0;
+        $('qCount').textContent = `${state.questions.length} question(s) built (AI)`;
+        renderQuestion();
       }catch(err){
-        $('markStatus').textContent = `Failed: ${err.message}`;
-        $('markStatus').style.color = 'var(--danger)';
+        $('qCount').textContent = `failed: ${err.message}`;
+        $('testArea').innerHTML = `<span class="bad">${err.message}</span>`;
       }
     };
 
-    // Test mode (unchanged)
-    function cloze(text){
-      const cands = [...new Set((text.match(/\b([A-Z]{3,}|[A-Za-z]{6,}|\d+(\.\d+)?\s?(mg|mmol\/L|L|g|mcg|units|%))\b/g) || []))].filter(w => w.length>=4 && w.length<=30).slice(0,12);
-      if(!cands.length) return null;
-      const answer = cands[Math.floor(Math.random()*cands.length)];
-      const stem = text.replace(answer, '_____');
-      return { stem, answer };
-    }
-    $('btnBuildQuestions').onclick = ()=>{
-      const used = state.lastHits.slice(0, Math.min(12, state.lastHits.length));
-      state.questions = used.map(h => cloze(h.text)).filter(Boolean);
-      state.qIndex = 0; $('qCount').textContent = `${state.questions.length} question(s) built`; renderQuestion();
-    };
     function renderQuestion(){
-      const area = $('testArea'); area.innerHTML='';
-      if(!state.questions.length){ area.innerHTML = `<span class="muted">No questions yet. Search in Learn Mode, then “Build Questions”.</span>`; return; }
+      const area=$('testArea'); area.innerHTML='';
+      if(!state.questions.length){ area.innerHTML = `<span class="muted">No questions yet.</span>`; return; }
       const q = state.questions[state.qIndex];
-      const wrap = document.createElement('div'); wrap.className='stack';
+      const stem = q.q || q.stem || '';
+      const wrap=document.createElement('div'); wrap.className='stack';
       wrap.innerHTML = `
-        <div class="quote">Listen up. ${state.qIndex+1}/${state.questions.length}. ${q.stem}</div>
+        <div class="quote">Listen up. ${state.qIndex+1}/${state.questions.length}. ${stem}</div>
         <div class="row">
           <input id="ans" placeholder="Your answer" size="40" />
           <button id="btnSubmit" class="primary">Submit</button>
@@ -632,29 +506,33 @@
         </div>
         <div id="feedback" class="muted"></div>
         <div class="footerbar">
-          <span class="muted">Mean attending mode: brisk corrections.</span>
+          <div class="muted">Mean attending mode: brisk corrections.</div>
           <div>
             <button id="btnPrev" class="ghost">Prev</button>
             <button id="btnNext" class="ghost">Next</button>
           </div>
         </div>`;
       area.appendChild(wrap);
+
       const feedback = $('feedback');
       const nextQ = ()=>{ if(state.qIndex < state.questions.length-1){ state.qIndex++; renderQuestion(); } };
       const prevQ = ()=>{ if(state.qIndex > 0){ state.qIndex--; renderQuestion(); } };
-      const check = ()=>{
-        const val = (document.getElementById('ans').value||'').trim().toLowerCase();
-        const ok = val && q.answer.toLowerCase().includes(val);
-        if(ok){ feedback.innerHTML = `<span class="ok">Correct.</span>`; setTimeout(nextQ, 700); }
-        else { feedback.innerHTML = `<span class="bad">Wrong. Answer: <span class="kbd">${q.answer}</span>.</span>`; }
+      const correct = (val, target) => {
+        const v = (val||'').trim().toLowerCase();
+        const t = (target||'').trim().toLowerCase();
+        return v && (t.includes(v) || v.includes(t));
       };
-      document.getElementById('btnSubmit').onclick = check;
-      document.getElementById('btnReveal').onclick = ()=>{ feedback.innerHTML = `Answer: <span class="kbd">${q.answer}</span>`; };
+      document.getElementById('btnSubmit').onclick = ()=>{
+        const val = document.getElementById('ans').value;
+        if (correct(val, q.answer)) { feedback.innerHTML = `<span class="ok">Correct.</span>`; setTimeout(nextQ, 700); }
+        else { feedback.innerHTML = `<span class="bad">Wrong.</span> ${q.explain ? `<div>${q.explain}</div>`:''} <div class="muted">Answer: <span class="kbd">${q.answer}</span></div>`; }
+      };
+      document.getElementById('btnReveal').onclick = ()=>{ feedback.innerHTML = `Answer: <span class="kbd">${q.answer}</span>${q.explain?`<div>${q.explain}</div>`:''}`; };
       document.getElementById('btnNext').onclick = nextQ;
       document.getElementById('btnPrev').onclick = prevQ;
     }
 
-    // Preconnect dot
+    // Preconnect
     (async function preconnect(){
       try{
         const r = await fetch(`https://file-iy1w.onrender.com/med/topics`);
