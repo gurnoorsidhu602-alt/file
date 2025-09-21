@@ -35,17 +35,7 @@ const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-4.1";
 // If not set, it will fallback to BASE_MODEL.
 const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5.1";
 
-// Small helper to parse OpenAI "responses" JSON blocks (keep if you already have one)
-function parseResponsesJSON(resp) {
-  try {
-    const parts = resp?.output?.[0]?.content || resp?.output_text || resp?.choices?.[0]?.message?.content || "";
-    const text = typeof parts === "string" ? parts : parts?.map?.(p => p?.text || "").join("") || "";
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1));
-    return JSON.parse(text);
-  } catch { return null; }
-}
+
 
 
 // Difficulty ladder
