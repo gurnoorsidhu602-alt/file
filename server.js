@@ -4,6 +4,11 @@ import cors from 'cors';
 import { Redis } from '@upstash/redis';
 import OpenAI from 'openai';
 import { v4 as uuid } from 'uuid';
+// ==== Med Learner imports ====
+import Database from 'better-sqlite3';
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
+import { v4 as uuidv4 } from 'uuid';
 
 ////////////////////////////////////////////////////////////////////////////////
 // CONFIG & INIT
