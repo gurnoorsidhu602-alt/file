@@ -1095,6 +1095,77 @@ async function ensureStandardPdfIndexed() {
 // Kick it off at boot—non-blocking
 ensureStandardPdfIndexed();
 
+// ==== Med Learner: TOC endpoint derived from the standard PDF ====
+const STANDARD_PDF_LABEL =
+  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
+
+app.get('/med/toc', (req, res) => {
+  try {
+    const label = req.query.label || STANDARD_PDF_LABEL;
+
+    // Pull all chunk text for the labeled doc
+    const rows = medDb.prepare(`
+      SELECT pc.text
+      FROM pdf_chunks pc
+      JOIN pdf_docs pd ON pd.id = pc.doc_id
+      WHERE pd.label = ?
+    `).all(label);
+
+    if (!rows.length) {
+      return res.status(404).json({ error: `No chunks found for label "${label}". Is the PDF indexed?` });
+    }
+
+    const items = []; // { discipline, sub, topic }
+
+    const push = (disc, sub, topic) => {
+      disc = (disc || '').trim();
+      sub  = (sub  || '').trim();
+      topic= (topic|| '').trim();
+      if (!disc || !sub || !topic) return;
+      items.push({ discipline: disc, sub, topic });
+    };
+
+    // Parse lines into Discipline > Sub > Topic with a few tolerant patterns
+    for (const { text } of rows) {
+      const lines = String(text || '')
+        .split(/\r?\n/)
+        .map(s => s.replace(/^\s*[-*•]\s*/, '').trim())
+        .filter(Boolean);
+
+      for (const s of lines) {
+        // 1) Strict ">" separators
+        let m = s.match(/^([^>]{2,}?)\s*>\s*([^>]{2,}?)\s*>\s*(.+)$/);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+
+        // 2) Colon / em-dash / hyphen separators
+        m = s.match(/^(.+?)\s*[:—-]\s*(.+?)\s*[:—-]\s*(.+)$/);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+
+        // 3) Labeled headings within a line
+        m = s.match(/Discipline[:\s-]+([A-Za-z/ &-]+).+Sub[-\s]?discipline[:\s-]+([A-Za-z/ &-]+).+Topic[:\s-]+(.+)/i);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+      }
+    }
+
+    if (!items.length) {
+      return res.status(200).json({ ok: true, items: [], counts: { disciplines: 0, subs: 0, topics: 0 } });
+    }
+
+    // Build counts
+    const discSet = new Set(items.map(i => i.discipline));
+    const subSet  = new Set(items.map(i => `${i.discipline}::${i.sub}`));
+    const topicSet= new Set(items.map(i => i.topic));
+
+    return res.json({
+      ok: true,
+      label,
+      items, // [{discipline, sub, topic}]
+      counts: { disciplines: discSet.size, subs: subSet.size, topics: topicSet.size }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 ////////////////////////////////////////////////////////////////////////////////
 // START
