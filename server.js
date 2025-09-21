@@ -3,13 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import { Redis } from '@upstash/redis';
 import OpenAI from 'openai';
-import { v4 as uuid } from 'uuid';
-
-// ==== Med Learner imports ====
 import Database from 'better-sqlite3';
 import multer from 'multer';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuid, v4 as uuidv4 } from 'uuid';
 
 ////////////////////////////////////////////////////////////////////////////////
 // CONFIG & INIT
@@ -36,141 +33,7 @@ const bumpDifficulty = (label, delta) => {
   return DIFF[next];
 };
 
-
-// ---- TOC helpers (bullet extraction + AI) ----
-medDb.exec(`
-  CREATE TABLE IF NOT EXISTS toc_cache (
-    label TEXT PRIMARY KEY,
-    json  TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-`);
-
-// Build consolidated bullet entries from the indexed PDF text
-function buildBulletEntriesForLabel(label) {
-  const rows = medDb.prepare(`
-    SELECT pc.text
-    FROM pdf_chunks pc
-    JOIN pdf_docs pd ON pd.id = pc.doc_id
-    WHERE pd.label = ?
-    ORDER BY pc.ord
-  `).all(label);
-
-  const rawLines = [];
-  for (const { text } of rows) String(text || '').split(/\r?\n/).forEach(l => rawLines.push(l));
-
-  const BULLET = /^\s*([●○•◦▪▸►▶-])\s*(.*)$/u; // common PDF bullets
-  const entries = []; // { b: '●'|'○'|'-'|..., t: 'line text' }
-  let pending = null;
-
-  for (let line of rawLines) {
-    // trim dot leaders + trailing page numbers; collapse ws
-    line = String(line || '')
-      .replace(/\.{2,}\s*\d+\s*$/, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    if (!line) continue;
-
-    const m = line.match(BULLET);
-    if (m) {
-      if (pending && pending.t.trim()) entries.push(pending);
-      const b = m[1];
-      const t = (m[2] || '').trim();
-      pending = t ? { b, t } : null;
-    } else if (pending) {
-      // continuation (wrapped line)
-      pending.t += ' ' + line;
-    }
-  }
-  if (pending && pending.t.trim()) entries.push(pending);
-
-  // Normalize bullets to just two classes we care about
-  // black circle (●) ~ major; white circle (○) ~ sub; others → keep as is
-  return entries.map(e => {
-    let b = e.b;
-    if ('•◦▪▸►▶-'.includes(b)) b = e.b === '◦' ? '○' : '●';
-    return { b, t: e.t };
-  });
-}
-
-// De-dupe items
-function dedupeToc(items) {
-  const seen = new Set();
-  const out = [];
-  for (const it of items) {
-    const k = `${it.discipline}__${it.sub}__${it.topic}`;
-    if (!seen.has(k)) { seen.add(k); out.push(it); }
-  }
-  return out;
-}
-
-// Ask the model to map bullet entries → {discipline,sub,topic} items
-async function aiInferTocFromEntries(entries, { batchSize = 220 } = {}) {
-  const all = [];
-  for (let i = 0; i < entries.length; i += batchSize) {
-    const chunk = entries.slice(i, i + batchSize);
-
-    const system = `You are an information extraction assistant. You will be given an ordered list of bullet entries from a PDF table of contents of a medical notebook. Each entry has a "b" (bullet) and "t" (text).
-Hierarchy rules:
-- A black circle ● that is immediately followed by one or more ○ entries indicates a new DISCIPLINE.
-- A white circle ○ is a SUB-DISCIPLINE under the most recent DISCIPLINE.
-- Subsequent ● while a SUB-DISCIPLINE is active are TOPICs belonging to (current DISCIPLINE, current SUB-DISCIPLINE).
-- If two ● entries appear with no ○ between them, treat the second ● as a new DISCIPLINE (close any open SUB).
-- Ignore page numbers and noise. Preserve the order.
-Return ONLY JSON:
-{"items":[{"discipline":"...","sub":"...","topic":"..."}]}`;
-
-    const payload = { entries: chunk };
-
-    const resp = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      temperature: 0,
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: JSON.stringify(payload) }
-      ]
-    });
-
-    const parsed = (function tryParse(r) {
-      try {
-        const j = JSON.parse(r.output_text ?? "{}");
-        return Array.isArray(j.items) ? j : null;
-      } catch {
-        // fallback to our existing parser helper if you kept it
-        try { return parseResponsesJSON(r); } catch { return null; }
-      }
-    })(resp);
-
-    const items = Array.isArray(parsed?.items) ? parsed.items : [];
-    all.push(...items);
-  }
-  return dedupeToc(all);
-}
-
-// Cache helpers
-function getCachedToc(label) {
-  const row = medDb.prepare(`SELECT json FROM toc_cache WHERE label = ?`).get(label);
-  if (!row) return null;
-  try { return JSON.parse(row.json); } catch { return null; }
-}
-function setCachedToc(label, data) {
-  medDb.prepare(`
-    INSERT INTO toc_cache (label, json) VALUES (?, ?)
-    ON CONFLICT(label) DO UPDATE SET json=excluded.json, created_at=CURRENT_TIMESTAMP
-  `).run(label, JSON.stringify(data));
-}
-
-
-// ---- History helpers ----
-const kHistory = (u) => `history:${u}`;
-
-// Append one history item, keep only most recent N
-async function pushHistory(username, item, keep = 1000) {
-  await redis.lpush(kHistory(username), JSON.stringify(item));
-  await redis.ltrim(kHistory(username), 0, keep - 1);
-}
-
-// ==== Med Learner: SQLite DB init (namespaced, no collisions) ====
+// ------------------------------ SQLITE INIT ---------------------------------
 const medDb = new Database('medlearner.db');
 medDb.pragma('journal_mode = WAL');
 medDb.exec(`
@@ -214,9 +77,20 @@ medDb.exec(`
     INSERT INTO pdf_chunks_fts(pdf_chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
     INSERT INTO pdf_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
   END;
+
+  -- TOC cache
+  CREATE TABLE IF NOT EXISTS toc_cache (
+    label TEXT PRIMARY KEY,
+    json  TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- one-time safety: ensure labels are unique if set
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pdf_label_unique
+  ON pdf_docs(label) WHERE label IS NOT NULL;
 `);
 
-// ==== Med Learner: helpers (unique names) ====
+// ------------------------------ PDF HELPERS ---------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
 
 const CHUNK_SIZE = 1200;     // characters
@@ -262,7 +136,156 @@ async function indexPdfBuffer(buffer, label) {
   return { docId, nChunks: chunks.length };
 }
 
-// ================= ADMIN NUKE (guarded) =================
+// ----------------------- STANDARD PDF AUTO-INDEXER --------------------------
+const STANDARD_PDF_URL =
+  process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
+const STANDARD_PDF_LABEL =
+  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
+
+function pdfExistsByLabel(label) {
+  const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
+  return !!row;
+}
+
+async function ensureStandardPdfIndexed() {
+  try {
+    if (!STANDARD_PDF_URL) {
+      console.warn('[MedLearner] STANDARD_PDF_URL not set; skipping auto-index.');
+      return;
+    }
+    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) {
+      console.log(`[MedLearner] Standard PDF already indexed: ${STANDARD_PDF_LABEL}`);
+      return;
+    }
+    console.log(`[MedLearner] Fetching standard PDF from ${STANDARD_PDF_URL}`);
+    const resp = await fetch(STANDARD_PDF_URL);
+    if (!resp.ok) {
+      console.error(`[MedLearner] Failed to fetch standard PDF: ${resp.status}`);
+      return;
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const { docId, nChunks } = await indexPdfBuffer(buf, STANDARD_PDF_LABEL);
+    console.log(`[MedLearner] Indexed standard PDF "${STANDARD_PDF_LABEL}" as ${docId} (${nChunks} chunks).`);
+  } catch (err) {
+    console.error('[MedLearner] Error ensuring standard PDF:', err);
+  }
+}
+ensureStandardPdfIndexed();
+
+// ----------------------------- TOC AI HELPERS -------------------------------
+
+// Build consolidated bullet entries from the indexed PDF text
+function buildBulletEntriesForLabel(label) {
+  const rows = medDb.prepare(`
+    SELECT pc.text
+    FROM pdf_chunks pc
+    JOIN pdf_docs pd ON pd.id = pc.doc_id
+    WHERE pd.label = ?
+    ORDER BY pc.ord
+  `).all(label);
+
+  const rawLines = [];
+  for (const { text } of rows) String(text || '').split(/\r?\n/).forEach(l => rawLines.push(l));
+
+  const BULLET = /^\s*([●○•◦▪▸►▶-])\s*(.*)$/u; // common PDF bullets
+  const entries = []; // { b: '●'|'○'|'-'|..., t: 'line text' }
+  let pending = null;
+
+  for (let line of rawLines) {
+    // trim dot leaders + trailing page numbers; collapse ws
+    line = String(line || '')
+      .replace(/\.{2,}\s*\d+\s*$/, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (!line) continue;
+
+    const m = line.match(BULLET);
+    if (m) {
+      if (pending && pending.t.trim()) entries.push(pending);
+      const b = m[1];
+      const t = (m[2] || '').trim();
+      pending = t ? { b, t } : null;
+    } else if (pending) {
+      // continuation (wrapped line)
+      pending.t += ' ' + line;
+    }
+  }
+  if (pending && pending.t.trim()) entries.push(pending);
+
+  // Normalize bullets to just two classes we care about
+  // black circle (●) ~ major; white circle (○) ~ sub; others → map to ●/○ best effort
+  return entries.map(e => {
+    let b = e.b;
+    if ('•◦▪▸►▶-'.includes(b)) b = e.b === '◦' ? '○' : '●';
+    return { b, t: e.t };
+  });
+}
+
+// De-dupe items
+function dedupeToc(items) {
+  const seen = new Set();
+  const out = [];
+  for (const it of items) {
+    const k = `${it.discipline}__${it.sub}__${it.topic}`;
+    if (!seen.has(k)) { seen.add(k); out.push(it); }
+  }
+  return out;
+}
+
+// Ask the model to map bullet entries → {discipline,sub,topic} items
+async function aiInferTocFromEntries(entries, { batchSize = 220 } = {}) {
+  const all = [];
+  for (let i = 0; i < entries.length; i += batchSize) {
+    const chunk = entries.slice(i, i + batchSize);
+
+    const system = `You are an information extraction assistant. You will be given an ordered list of bullet entries from a PDF table of contents of a medical notebook. Each entry has a "b" (bullet) and "t" (text).
+Hierarchy rules:
+- A black circle ● that is immediately followed by one or more ○ entries indicates a new DISCIPLINE.
+- A white circle ○ is a SUB-DISCIPLINE under the most recent DISCIPLINE.
+- Subsequent ● while a SUB-DISCIPLINE is active are TOPICs belonging to (current DISCIPLINE, current SUB-DISCIPLINE).
+- If two ● entries appear with no ○ between them, treat the second ● as a new DISCIPLINE (close any open SUB).
+- Ignore page numbers and noise. Preserve the order.
+Return ONLY JSON:
+{"items":[{"discipline":"...","sub":"...","topic":"..."}]}`;
+
+    const payload = { entries: chunk };
+
+    const resp = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      temperature: 0,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: JSON.stringify(payload) }
+      ]
+    });
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(resp.output_text ?? "{}");
+    } catch {
+      try { parsed = parseResponsesJSON(resp); } catch { parsed = null; }
+    }
+
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    all.push(...items);
+  }
+  return dedupeToc(all);
+}
+
+// Cache helpers
+function getCachedToc(label) {
+  const row = medDb.prepare(`SELECT json FROM toc_cache WHERE label = ?`).get(label);
+  if (!row) return null;
+  try { return JSON.parse(row.json); } catch { return null; }
+}
+function setCachedToc(label, data) {
+  medDb.prepare(`
+    INSERT INTO toc_cache (label, json) VALUES (?, ?)
+    ON CONFLICT(label) DO UPDATE SET json=excluded.json, created_at=CURRENT_TIMESTAMP
+  `).run(label, JSON.stringify(data));
+}
+
+// ------------------------------ ADMIN NUKE ----------------------------------
 app.delete('/admin/wipe', async (req, res) => {
   try {
     const secret = String(req.query.secret || "");
@@ -402,48 +425,7 @@ async function applyScoreDelta(username, delta, wasCorrect) {
   return newScore;
 }
 
-// ==== Med Learner: ensure standard PDF is indexed on startup ====
-// Prefer ENV so you can swap the file without changing code.
-const STANDARD_PDF_URL =
-  process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
-const STANDARD_PDF_LABEL =
-  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
-
-medDb.exec(`
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_pdf_label_unique
-  ON pdf_docs(label) WHERE label IS NOT NULL;
-`);
-
-function pdfExistsByLabel(label) {
-  const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
-  return !!row;
-}
-
-async function ensureStandardPdfIndexed() {
-  try {
-    if (!STANDARD_PDF_URL) {
-      console.warn('[MedLearner] STANDARD_PDF_URL not set; skipping auto-index.');
-      return;
-    }
-    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) {
-      console.log(`[MedLearner] Standard PDF already indexed: ${STANDARD_PDF_LABEL}`);
-      return;
-    }
-    console.log(`[MedLearner] Fetching standard PDF from ${STANDARD_PDF_URL}`);
-    const resp = await fetch(STANDARD_PDF_URL);
-    if (!resp.ok) {
-      console.error(`[MedLearner] Failed to fetch standard PDF: ${resp.status}`);
-      return;
-    }
-    const buf = Buffer.from(await resp.arrayBuffer());
-    const { docId, nChunks } = await indexPdfBuffer(buf, STANDARD_PDF_LABEL);
-    console.log(`[MedLearner] Indexed standard PDF "${STANDARD_PDF_LABEL}" as ${docId} (${nChunks} chunks).`);
-  } catch (err) {
-    console.error('[MedLearner] Error ensuring standard PDF:', err);
-  }
-}
-ensureStandardPdfIndexed();
-
+// ------------------------------ /med/toc (AI) -------------------------------
 app.get('/med/toc', async (req, res) => {
   try {
     const label = req.query.label || (process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1');
@@ -459,9 +441,16 @@ app.get('/med/toc', async (req, res) => {
     }
 
     const entries = buildBulletEntriesForLabel(label);
-    if (wantDebug) return res.json({ ok: true, label, sample_count: Math.min(250, entries.length), sample: entries.slice(0,250) });
+    if (wantDebug) {
+      return res.json({
+        ok: true,
+        label,
+        sample_count: Math.min(250, entries.length),
+        sample: entries.slice(0, 250)
+      });
+    }
 
-    // --- fast deterministic attempt (same logic as before, but tightened) ---
+    // quick deterministic pass
     const itemsFast = [];
     let disc = null, sub = null;
 
@@ -499,7 +488,6 @@ app.get('/med/toc', async (req, res) => {
       }
     };
 
-    // cache
     if (out.items.length) setCachedToc(label, out);
 
     res.json(out);
@@ -507,8 +495,6 @@ app.get('/med/toc', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
-
 
 // ---------- Response parsing helpers ----------
 function parseResponsesJSON(resp) {
