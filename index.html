@@ -55,7 +55,6 @@
     <h1>Med Learner</h1>
     <div class="pill">
       <span class="muted">Base</span>
-      <!-- Default to your learner backend; you can change it in the UI -->
       <input id="baseUrl" value="https://file-iy1w.onrender.com" size="34" />
       <span id="connDot" class="tag">connecting…</span>
     </div>
@@ -307,45 +306,43 @@
       selSub.disabled = subs.size===0; $('btnRandomSub').disabled = subs.size===0;
     };
     selSub.onchange = () => {
-      const discs = [...selDisc.selectedOptions].map(o => o.value);
-      const subs  = [...selSub.selectedOptions].map(o => o.value);
+  const discs = [...selDisc.selectedOptions].map(o => o.value);
+  const subs  = [...selSub.selectedOptions].map(o => o.value);
 
-      selTopic.innerHTML = '';
-      const topics = new Set();
+  selTopic.innerHTML = '';
+  const topics = new Set();
 
-      for (const d of discs) {
-        for (const s of subs) {
-          const key = `${d}::${s}`;
-          const set = state.subToTopics.get(key) || new Set();
-          for (const t of set) {
-            const tn = normalizeTopicName(t);
-            if (!state.completedNorm || !state.completedNorm.has(tn)) {
-              topics.add(t);
-            }
-          }
+  for (const d of discs) {
+    for (const s of subs) {
+      const key = `${d}::${s}`;
+      const set = state.subToTopics.get(key) || new Set();
+      for (const t of set) {
+        const tn = normalizeTopicName(t);
+        if (!state.completedNorm || !state.completedNorm.has(tn)) {
+          topics.add(t);
         }
       }
+    }
+  }
 
-      for (const t of [...topics].sort()) {
-        const o = document.createElement('option');
-        o.value = t; o.textContent = t;
-        selTopic.appendChild(o);
-      }
+  for (const t of [...topics].sort()) {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = t;
+    selTopic.appendChild(o);
+  }
 
-      selTopic.disabled = topics.size === 0;
-      $('btnRandomTopic').disabled = topics.size === 0;
-    };
+  selTopic.disabled = topics.size === 0;
+  $('btnRandomTopic').disabled = topics.size === 0;
+};
 
     $('btnClearSelections').onclick = ()=>{ populateDisciplines(); $('pickResult').innerHTML=''; };
 
     // Pick & randomizers
     $('btnPickFromSelections').onclick = ()=>{
       const chosen=[...selTopic.selectedOptions].map(o=>o.value);
-      const pool = chosen.length ? chosen : [...state.allTopics].filter(t=>!state.completedNorm || !state.completedNorm.has(normalizeTopicName(t)));
+      const pool = chosen.length ? chosen : [...state.allTopics].filter(t=>!state.completed.has(t));
       if(!pool.length){ $('pickResult').innerHTML='<span class="bad">No eligible topics.</span>'; return; }
-      // choose randomly among the eligible list
-      const pick = pool[Math.floor(Math.random()*pool.length)];
-      renderPickConfirmation(pick);
+      renderPickConfirmation(pool[0]);
     };
     function setSingle(selectEl, value){ [...selectEl.options].forEach(o=>o.selected=(o.value===value)); selectEl.dispatchEvent(new Event('change')); }
     $('btnRandomDisc').onclick = ()=>{ const arr=[...state.discToSub.keys()]; if(!arr.length) return; setSingle(selDisc, arr[Math.floor(Math.random()*arr.length)]); };
@@ -358,40 +355,27 @@
       const discs=[...selDisc.selectedOptions].map(o=>o.value);
       const subs=[...selSub.selectedOptions].map(o=>o.value);
       const topics=new Set();
-      discs.forEach(d=>subs.forEach(s=>(state.subToTopics.get(`${d}::${s}`)||new Set()).forEach(t=>{
-        if(!state.completedNorm || !state.completedNorm.has(normalizeTopicName(t))) topics.add(t);
-      })));
+      discs.forEach(d=>subs.forEach(s=>(state.subToTopics.get(`${d}::${s}`)||new Set()).forEach(t=>{ if(!state.completed.has(t)) topics.add(t); })));
       const arr=[...topics]; if(!arr.length){ alert('No eligible topics.'); return; }
       renderPickConfirmation(arr[Math.floor(Math.random()*arr.length)]);
     };
-    $('btnRandomAny').onclick = () => {
-      const pool = [...state.allTopics].filter(
-        t => !state.completedNorm || !state.completedNorm.has(normalizeTopicName(t))
-      );
-      if (!pool.length) { alert('No eligible topics.'); return; }
-      const pick = pool[Math.floor(Math.random() * pool.length)];
-      renderPickConfirmation(pick);
-    };
+      $('btnRandomAny').onclick = () => {
+        const pool = [...state.allTopics].filter(
+          t => !state.completedNorm || !state.completedNorm.has(normalizeTopicName(t))
+        );
+        if (!pool.length) { alert('No eligible topics.'); return; }
+        const pick = pool[Math.floor(Math.random() * pool.length)];
+        renderPickConfirmation(pick);
+      };
 
-    // FIX: High-Yield now calls GET /med/pick/high-yield?user_id=...
+
     $('btnHighYieldIM').onclick = async ()=>{
       try{
-        const url = `${state.baseUrl}/med/pick/high-yield?user_id=${encodeURIComponent(state.userId)}`;
-        const r = await fetch(url);
-        const j = await r.json();
-        if(!r.ok) throw new Error(j.error||'AI pick failed');
-
-        const topic =
-          j?.pick?.topic ||
-          (typeof j?.topic === 'string' ? j.topic : null) ||
-          (Array.isArray(j?.ranked) && j.ranked[0]?.topic) ||
-          null;
-
-        if(!topic) throw new Error('No AI pick returned');
-        renderPickConfirmation(topic, j?.reason);
-      }catch(err){
-        alert(`High-Yield pick failed: ${err.message}`);
-      }
+        const r = await fetch(`${state.baseUrl}/med/high-yield-im`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ user_id: state.userId, n: 1 }) });
+        const j = await r.json(); if(!r.ok) throw new Error(j.error||'AI pick failed');
+        const pick = j.pick || (j.ranked && j.ranked[0]); if(!pick) throw new Error('No AI pick returned');
+        renderPickConfirmation(pick.topic, pick.reason);
+      }catch(err){ alert(`High-Yield pick failed: ${err.message}`); }
     };
 
     function renderPickConfirmation(topic, reason){
@@ -422,11 +406,7 @@
       state.learnPlan = null; selectMode('learn');
 
       try{
-        const r = await fetch(`${state.baseUrl}/med/learn-plan`, {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ topic, user_id: state.userId })
-        });
+        const r = await fetch(`${state.baseUrl}/med/learn-plan`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ topic, user_id: state.userId }) });
         const j = await r.json(); if(!r.ok) throw new Error(j.error||r.statusText);
         state.learnPlan = j;
         renderGuidelines(j.guidelines||[]); renderTrials(j.trials||[]); renderObjectives(j.objectives||[], j.guidelines||[], j.trials||[]);
@@ -439,40 +419,31 @@
     function gSearch(q){ return `https://www.google.com/search?q=${encodeURIComponent(q)}`; }
     function pmidSearch(q){ return `https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(q)}`; }
     function scholar(q){ return `https://scholar.google.com/scholar?q=${encodeURIComponent(q)}`; }
-
-    // FIX: prefer `url` (server) but still accept `link`
     function renderGuidelines(list){
-      const box=$('guidelinesBox'); box.innerHTML='';
-      if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
+      const box=$('guidelinesBox'); box.innerHTML=''; if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
       const ul=document.createElement('ul'); ul.className='list';
       list.forEach(g=>{
         const title=`${g.title||''}`.trim(); const org=g.org?` (${g.org})`:'';
         const meta=[g.region,g.year].filter(Boolean).join(' · ');
-        const link=(g.url||g.link)||gSearch(`${title} ${g.org||''} guideline`);
+        const link=g.link || gSearch(`${title} ${g.org||''} guideline`);
         const li=document.createElement('li');
         li.innerHTML=`<div><b>${title}</b>${org} — <span class="muted">${meta}</span></div><div class="linkbar"><a href="${link}" target="_blank">Open</a></div>${g.why?`<div class="muted">${g.why}</div>`:''}`;
         ul.appendChild(li);
       }); box.appendChild(ul);
     }
-
-    // FIX: prefer `url`
     function renderTrials(list){
-      const box=$('trialsBox'); box.innerHTML='';
-      if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
+      const box=$('trialsBox'); box.innerHTML=''; if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
       const ul=document.createElement('ul'); ul.className='list';
       list.forEach(t=>{
-        const link=(t.url||t.link)||scholar(`${t.name||''} ${state.pickedTopic||''}`);
+        const link=t.link || scholar(`${t.name||''} ${state.pickedTopic||''}`);
         const meta=[t.year,t.design,t.n].filter(Boolean).join(' · ');
         const li=document.createElement('li');
         li.innerHTML=`<div><b>${t.name||'Trial'}</b> — <span class="muted">${meta}</span></div><div class="muted">${t.one_liner||t.result||''}</div><div class="linkbar"><a href="${link}" target="_blank">Open</a><a href="${pmidSearch(t.name||'')}" target="_blank">PubMed</a><a href="${scholar(t.name||'')}" target="_blank">Scholar</a></div>`;
         ul.appendChild(li);
       }); box.appendChild(ul);
     }
-
-    // FIX: prefer `url` throughout
     function renderObjectives(objs, guidelines, trials){
-      const box=$('objectivesBox'); box.innerHTML='';
-      if(!objs.length){ box.innerHTML='<span class="muted">None produced by AI.</span>'; return; }
+      const box=$('objectivesBox'); box.innerHTML=''; if(!objs.length){ box.innerHTML='<span class="muted">None produced by AI.</span>'; return; }
       const gIndex=new Map((guidelines||[]).map(g=>[String(g.title||'').toLowerCase(),g]));
       const tIndex=new Map((trials||[]).map(t=>[String(t.name||'').toLowerCase(),t]));
       objs.forEach(o=>{
@@ -482,21 +453,13 @@
         const ul=document.createElement('ul'); ul.className='list';
         (o.resources||[]).forEach(r=>{
           const li=document.createElement('li');
-          if(r.type==='guideline'){
-            const key=String(r.ref||'').toLowerCase(); const g=gIndex.get(key);
-            const txt=g?`${g.title} (${g.org||''} ${g.year||''})`:(r.ref||'Guideline');
-            const link=(g&&(g.url||g.link))||gSearch(`${txt} guideline`);
+          if(r.type==='guideline'){ const key=String(r.ref||'').toLowerCase(); const g=gIndex.get(key);
+            const txt=g?`${g.title} (${g.org||''} ${g.year||''})`:(r.ref||'Guideline'); const link=(g&&g.link)||gSearch(`${txt} guideline`);
             li.innerHTML=`📘 ${txt} — <a href="${link}" target="_blank">Open</a>`;
-          } else if(r.type==='trial'){
-            const key=String(r.ref||'').toLowerCase(); const t=tIndex.get(key);
-            const txt=t?`${t.name} (${t.year||''})`:(r.ref||'Trial');
-            const link=(t&&(t.url||t.link))||scholar(txt);
+          } else if(r.type==='trial'){ const key=String(r.ref||'').toLowerCase(); const t=tIndex.get(key);
+            const txt=t?`${t.name} (${t.year||''})`:(r.ref||'Trial'); const link=(t&&t.link)||scholar(txt);
             li.innerHTML=`🧪 ${txt} — <a href="${link}" target="_blank">Open</a>`;
-          } else {
-            const title=r.title||'Resource';
-            const link=r.url||r.link||gSearch(`${title} ${state.pickedTopic||''}`);
-            li.innerHTML=`🔎 ${title} — <a href="${link}" target="_blank">Open</a>`;
-          }
+          } else { const title=r.title||'Resource'; const link=r.link||gSearch(`${title} ${state.pickedTopic||''}`); li.innerHTML=`🔎 ${title} — <a href="${link}" target="_blank">Open</a>`; }
           ul.appendChild(li);
         });
         wrap.appendChild(ul); box.appendChild(wrap);
@@ -520,7 +483,7 @@
       hits.forEach((h,i)=>{ const card=document.createElement('div'); card.className='quote'; card.innerHTML=`[${i+1}] ${h.text}`; area.appendChild(card); });
     }
 
-    // Mark learned
+    // Mark learned (fixed wiring + disabled state)
     $('btnMarkLearned').addEventListener('click', async ()=>{
       const btn = $('btnMarkLearned');
       const topic = state.pickedTopic || $('currentTopic').textContent.trim();
@@ -544,7 +507,7 @@
       }
     });
 
-    // TEST: hits->cloze or AI fallback
+    // TEST: hits->cloze or AI fallback (unchanged logic)
     function cloze(text){
       const cands=[...new Set((text.match(/\b([A-Z]{3,}|[A-Za-z]{6,}|\d+(?:\.\d+)?\s?(?:mg|mmol\/L|L|g|mcg|units|%))\b/g)||[]))].filter(w=>w.length>=4&&w.length<=30).slice(0,12);
       if(!cands.length) return null; const answer=cands[Math.floor(Math.random()*cands.length)]; const stem=text.replace(answer,'_____'); return { stem, answer };
@@ -604,10 +567,10 @@
       $('btnNext').onclick = nextQ; $('btnPrev').onclick = prevQ;
     }
 
-    // Preconnect dot (uses current Base URL)
+    // Preconnect dot
     (async function preconnect(){
       try{
-        const r = await fetch(`${state.baseUrl}/med/topics`);
+        const r = await fetch(`https://file-iy1w.onrender.com/med/topics`);
         const ok = r.ok || r.status===400;
         $('connDot').textContent = ok ? 'connected' : 'disconnected';
         $('connDot').style.color = ok ? 'var(--ok)' : 'var(--muted)';
@@ -619,4 +582,3 @@
   </script>
 </body>
 </html>
-
