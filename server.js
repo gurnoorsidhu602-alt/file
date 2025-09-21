@@ -608,6 +608,26 @@ async function updateLastSessionItem(sessionId, patch) {
   await redis.lset(kSessItems(sessionId), len - 1, updated);
 }
 
+// Delete a PDF (and its chunks via FK cascade) by label
+app.delete('/med/pdfs/by-label', (req, res) => {
+  try {
+    const label = String(req.query.label || '');
+    if (!label) return res.status(400).json({ error: 'label required' });
+
+    const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
+    if (!row) return res.json({ ok: true, deleted: false, reason: 'not found' });
+
+    // Delete doc (chunks cascade), and clear cached TOC
+    medDb.prepare('DELETE FROM pdf_docs WHERE id = ?').run(row.id);
+    medDb.prepare('DELETE FROM toc_cache WHERE label = ?').run(label);
+
+    res.json({ ok: true, deleted: true, label });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // OPENAI HELPERS (question/grade/summarize)
 ////////////////////////////////////////////////////////////////////////////////
