@@ -229,6 +229,15 @@
     $('btnTest').onclick  = () => selectMode('test');
     function selectMode(which){ show($('modePick'), which==='pick'); show($('modeLearn'), which==='learn'); show($('modeTest'), which==='test'); }
 
+    function normalizeTopicName(s = "") {
+      return String(s)
+        .toLowerCase()
+        .replace(/^(approach\s*to|evaluation\s*of|diagnosis\s*of|management\s*of|treatment\s*of|overview\s*of)\s+/i, "")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
     // Bootstrap
     async function connectAndBootstrap(){
       const dot = $('connDot');
@@ -250,6 +259,7 @@
         const r = await fetch(`${state.baseUrl}/med/topics?user_id=${encodeURIComponent(state.userId)}`);
         const j = await r.json();
         state.completed = new Set((j.topics||[]).map(String));
+        state.completedNorm = new Set([...(state.completed)].map(normalizeTopicName));
         list.innerHTML = '';
         if(state.completed.size===0){ list.innerHTML = '<span class="muted">None yet.</span>'; return; }
         [...state.completed].forEach(t=>{
@@ -295,20 +305,36 @@
       [...subs].sort().forEach(s=>{ const o=document.createElement('option'); o.value=s; o.textContent=s; selSub.appendChild(o); });
       selSub.disabled = subs.size===0; $('btnRandomSub').disabled = subs.size===0;
     };
-    selSub.onchange = ()=>{
-      const discs=[...selDisc.selectedOptions].map(o=>o.value);
-      const subs=[...selSub.selectedOptions].map(o=>o.value);
-      selTopic.innerHTML='';
-      const topics=new Set();
-      discs.forEach(d=>{
-        subs.forEach(s=>{
-          const key = `${d}::${s}`;
-          (state.subToTopics.get(key)||new Set()).forEach(t=>{ if(!state.completed.has(t)) topics.add(t); });
-        });
-      });
-      [...topics].sort().forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent=t; selTopic.appendChild(o); });
-      selTopic.disabled = topics.size===0; $('btnRandomTopic').disabled = topics.size===0;
-    };
+    selSub.onchange = () => {
+  const discs = [...selDisc.selectedOptions].map(o => o.value);
+  const subs  = [...selSub.selectedOptions].map(o => o.value);
+
+  selTopic.innerHTML = '';
+  const topics = new Set();
+
+  for (const d of discs) {
+    for (const s of subs) {
+      const key = `${d}::${s}`;
+      const set = state.subToTopics.get(key) || new Set();
+      for (const t of set) {
+        const tn = normalizeTopicName(t);
+        if (!state.completedNorm || !state.completedNorm.has(tn)) {
+          topics.add(t);
+        }
+      }
+    }
+  }
+
+  for (const t of [...topics].sort()) {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = t;
+    selTopic.appendChild(o);
+  }
+
+  selTopic.disabled = topics.size === 0;
+  $('btnRandomTopic').disabled = topics.size === 0;
+};
+
     $('btnClearSelections').onclick = ()=>{ populateDisciplines(); $('pickResult').innerHTML=''; };
 
     // Pick & randomizers
@@ -333,11 +359,16 @@
       const arr=[...topics]; if(!arr.length){ alert('No eligible topics.'); return; }
       renderPickConfirmation(arr[Math.floor(Math.random()*arr.length)]);
     };
-    $('btnRandomAny').onclick = ()=>{
-      const pool=[...state.allTopics].filter(t=>!state.completed.has(t));
-      if(!pool.length){ alert('No eligible topics.'); return; }
-      renderPickConfirmation(pool[Math.floor(Math.random()*pool.length)]);
-    };
+      $('btnRandomAny').onclick = () => {
+        const pool = [...state.allTopics].filter(
+          t => !state.completedNorm || !state.completedNorm.has(normalizeTopicName(t))
+        );
+        if (!pool.length) { alert('No eligible topics.'); return; }
+        const pick = pool[Math.floor(Math.random() * pool.length)];
+        renderPickConfirmation(pick);
+      };
+
+
     $('btnHighYieldIM').onclick = async ()=>{
       try{
         const r = await fetch(`${state.baseUrl}/med/high-yield-im`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ user_id: state.userId, n: 1 }) });
@@ -551,3 +582,4 @@
   </script>
 </body>
 </html>
+
