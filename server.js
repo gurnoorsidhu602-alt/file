@@ -33,7 +33,7 @@ const PORT = process.env.PORT || 3000;
 const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-4.1";
 // Use a smarter model ONLY for URL selection to reduce 404s; set env to "gpt-5.1" (or whatever you have)
 // If not set, it will fallback to BASE_MODEL.
-const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || BASE_MODEL;
+const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5.1";
 
 // Small helper to parse OpenAI "responses" JSON blocks (keep if you already have one)
 function parseResponsesJSON(resp) {
@@ -832,22 +832,7 @@ const INTERNAL_MED_DISC_SET = new Set([
 */
 
 // Simple FTS search into your indexed notes (if any) to provide context to the AI.
-// It’s OK if you haven’t indexed anything yet; the endpoint will still work.
-function searchNoteSnippets(topic, k = 8) {
-  try {
-    const rows = medDb.prepare(`
-      SELECT pc.text AS text
-      FROM pdf_chunks_fts
-      JOIN pdf_chunks pc ON pc.rowid = pdf_chunks_fts.rowid
-      WHERE pdf_chunks_fts MATCH ?
-      ORDER BY bm25(pdf_chunks_fts)
-      LIMIT ?
-    `).all(topic, k);
-    return rows.map(r => r.text);
-  } catch {
-    return [];
-  }
-}
+
 
 // Optional grounding from your indexed PDFs (works even if empty)
 function searchNoteSnippets(topic, k = 8) {
