@@ -36,6 +36,131 @@ const bumpDifficulty = (label, delta) => {
   return DIFF[next];
 };
 
+medDb.exec(`
+  CREATE TABLE IF NOT EXISTS toc_cache (
+    label TEXT PRIMARY KEY,
+    json  TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+// ---- TOC helpers (bullet extraction + AI) ----
+
+// Build consolidated bullet entries from the indexed PDF text
+function buildBulletEntriesForLabel(label) {
+  const rows = medDb.prepare(`
+    SELECT pc.text
+    FROM pdf_chunks pc
+    JOIN pdf_docs pd ON pd.id = pc.doc_id
+    WHERE pd.label = ?
+    ORDER BY pc.ord
+  `).all(label);
+
+  const rawLines = [];
+  for (const { text } of rows) String(text || '').split(/\r?\n/).forEach(l => rawLines.push(l));
+
+  const BULLET = /^\s*([●○•◦▪▸►▶-])\s*(.*)$/u; // common PDF bullets
+  const entries = []; // { b: '●'|'○'|'-'|..., t: 'line text' }
+  let pending = null;
+
+  for (let line of rawLines) {
+    // trim dot leaders + trailing page numbers; collapse ws
+    line = String(line || '')
+      .replace(/\.{2,}\s*\d+\s*$/, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (!line) continue;
+
+    const m = line.match(BULLET);
+    if (m) {
+      if (pending && pending.t.trim()) entries.push(pending);
+      const b = m[1];
+      const t = (m[2] || '').trim();
+      pending = t ? { b, t } : null;
+    } else if (pending) {
+      // continuation (wrapped line)
+      pending.t += ' ' + line;
+    }
+  }
+  if (pending && pending.t.trim()) entries.push(pending);
+
+  // Normalize bullets to just two classes we care about
+  // black circle (●) ~ major; white circle (○) ~ sub; others → keep as is
+  return entries.map(e => {
+    let b = e.b;
+    if ('•◦▪▸►▶-'.includes(b)) b = e.b === '◦' ? '○' : '●';
+    return { b, t: e.t };
+  });
+}
+
+// De-dupe items
+function dedupeToc(items) {
+  const seen = new Set();
+  const out = [];
+  for (const it of items) {
+    const k = `${it.discipline}__${it.sub}__${it.topic}`;
+    if (!seen.has(k)) { seen.add(k); out.push(it); }
+  }
+  return out;
+}
+
+// Ask the model to map bullet entries → {discipline,sub,topic} items
+async function aiInferTocFromEntries(entries, { batchSize = 220 } = {}) {
+  const all = [];
+  for (let i = 0; i < entries.length; i += batchSize) {
+    const chunk = entries.slice(i, i + batchSize);
+
+    const system = `You are an information extraction assistant. You will be given an ordered list of bullet entries from a PDF table of contents of a medical notebook. Each entry has a "b" (bullet) and "t" (text).
+Hierarchy rules:
+- A black circle ● that is immediately followed by one or more ○ entries indicates a new DISCIPLINE.
+- A white circle ○ is a SUB-DISCIPLINE under the most recent DISCIPLINE.
+- Subsequent ● while a SUB-DISCIPLINE is active are TOPICs belonging to (current DISCIPLINE, current SUB-DISCIPLINE).
+- If two ● entries appear with no ○ between them, treat the second ● as a new DISCIPLINE (close any open SUB).
+- Ignore page numbers and noise. Preserve the order.
+Return ONLY JSON:
+{"items":[{"discipline":"...","sub":"...","topic":"..."}]}`;
+
+    const payload = { entries: chunk };
+
+    const resp = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      temperature: 0,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: JSON.stringify(payload) }
+      ]
+    });
+
+    const parsed = (function tryParse(r) {
+      try {
+        const j = JSON.parse(r.output_text ?? "{}");
+        return Array.isArray(j.items) ? j : null;
+      } catch {
+        // fallback to our existing parser helper if you kept it
+        try { return parseResponsesJSON(r); } catch { return null; }
+      }
+    })(resp);
+
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    all.push(...items);
+  }
+  return dedupeToc(all);
+}
+
+// Cache helpers
+function getCachedToc(label) {
+  const row = medDb.prepare(`SELECT json FROM toc_cache WHERE label = ?`).get(label);
+  if (!row) return null;
+  try { return JSON.parse(row.json); } catch { return null; }
+}
+function setCachedToc(label, data) {
+  medDb.prepare(`
+    INSERT INTO toc_cache (label, json) VALUES (?, ?)
+    ON CONFLICT(label) DO UPDATE SET json=excluded.json, created_at=CURRENT_TIMESTAMP
+  `).run(label, JSON.stringify(data));
+}
+
+
 // ---- History helpers ----
 const kHistory = (u) => `history:${u}`;
 
@@ -319,148 +444,70 @@ async function ensureStandardPdfIndexed() {
 }
 ensureStandardPdfIndexed();
 
-// ===== MED LEARNER: TOC endpoint (handles ●/○ bullets + wrapped lines) =====
-app.get('/med/toc', (req, res) => {
+app.get('/med/toc', async (req, res) => {
   try {
     const label = req.query.label || (process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1');
-    const wantDebug = String(req.query.debug || '0') === '1';
+    const wantDebug  = String(req.query.debug   || '0') === '1';
+    const forceFresh = String(req.query.refresh || '0') === '1';
 
-    // 1) Pull all text for the labeled doc (in order)
-    const rows = medDb.prepare(`
-      SELECT pc.text
-      FROM pdf_chunks pc
-      JOIN pdf_docs pd ON pd.id = pc.doc_id
-      WHERE pd.label = ?
-      ORDER BY pc.ord
-    `).all(label);
-
-    if (!rows.length) {
-      return res.status(404).json({ error: `No chunks found for label "${label}". Is the PDF indexed?` });
-    }
-
-    // 2) Split into raw lines
-    const rawLines = [];
-    for (const { text } of rows) {
-      String(text || '').split(/\r?\n/).forEach(line => rawLines.push(line));
-    }
-
-    // 3) Consolidate wrapped lines into bullet entries
-    //    We keep the lead bullet (● or ○) and append subsequent non-bullet lines.
-    const BULLET_RE = /^\s*([●○])\s*(.*)$/; // \u25CF \u25CB
-    const entries = []; // [{bullet:'●'|'○', text:'...'}]
-    let pending = null;
-
-    for (let i = 0; i < rawLines.length; i++) {
-      let line = rawLines[i] || '';
-      // trim dot-leaders + page numbers (rare in your file, but safe)
-      line = line.replace(/\.{2,}\s*\d+\s*$/, '');
-      // collapse whitespace
-      line = line.replace(/\s{2,}/g, ' ').trim();
-
-      if (!line) continue;
-
-      const m = line.match(BULLET_RE);
-      if (m) {
-        // push previous pending
-        if (pending && pending.text.trim()) entries.push(pending);
-        const bullet = m[1];
-        const text = (m[2] || '').trim();
-        if (!text) {
-          pending = null; // ignore empty bullets
-        } else {
-          pending = { bullet, text };
-        }
-      } else {
-        // continuation of previous bullet line (soft wrap)
-        if (pending) {
-          pending.text += ' ' + line;
-        } else {
-          // no active bullet; ignore orphan content
-        }
+    // cache first (unless refresh)
+    if (!forceFresh) {
+      const cached = getCachedToc(label);
+      if (cached && Array.isArray(cached.items) && cached.items.length) {
+        return res.json(cached);
       }
     }
-    if (pending && pending.text.trim()) entries.push(pending);
 
-    if (wantDebug) {
-      return res.json({ ok: true, label, sample_count: Math.min(entries.length, 200), sample: entries.slice(0,200) });
-    }
+    const entries = buildBulletEntriesForLabel(label);
+    if (wantDebug) return res.json({ ok: true, label, sample_count: Math.min(250, entries.length), sample: entries.slice(0,250) });
 
-    // 4) Interpret hierarchy:
-    //    ● at top-level = Discipline, ○ = Sub, ● when a sub is active = Topic.
-    //    Ambiguity: a new Discipline also starts with ●; we detect it if the next
-    //    significant entry is a ○ (subhead) OR there is no active sub.
-    const items = [];
-    let currentDisc = null;
-    let currentSub  = null;
-
-    const pushItem = (disc, sub, topic) => {
-      disc  = (disc  || '').trim();
-      sub   = (sub   || '').trim();
-      topic = (topic || '').trim();
-      if (disc && sub && topic) items.push({ discipline: disc, sub, topic });
-    };
+    // --- fast deterministic attempt (same logic as before, but tightened) ---
+    const itemsFast = [];
+    let disc = null, sub = null;
 
     const nextNonEmpty = (fromIdx) => {
-      for (let j = fromIdx + 1; j < entries.length; j++) {
-        const e = entries[j];
-        if (e && e.text && e.text.trim()) return e;
-      }
+      for (let j = fromIdx + 1; j < entries.length; j++) if (entries[j].t.trim()) return entries[j];
       return null;
     };
 
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i];
-      if (!e.text) continue;
-
-      if (e.bullet === '○') {
-        // Sub-discipline
-        currentSub = e.text;
-        if (!currentDisc) {
-          // If a sub appears before a discipline (rare), treat as a new discipline
-          currentDisc = 'General';
-        }
-        continue;
-      }
-
-      if (e.bullet === '●') {
-        const next = nextNonEmpty(i);
-        const isNewDiscipline = !currentSub || (next && next.bullet === '○');
-
-        if (isNewDiscipline) {
-          // New discipline heading
-          currentDisc = e.text;
-          currentSub  = null;
-        } else {
-          // Topic under the current sub
-          if (currentDisc && currentSub) {
-            pushItem(currentDisc, currentSub, e.text);
-          }
-        }
+      if (e.b === '○') { sub = e.t; if (!disc) disc = 'General'; continue; }
+      if (e.b === '●') {
+        const nxt = nextNonEmpty(i);
+        const newDisc = !sub || (nxt && nxt.b === '○');
+        if (newDisc) { disc = e.t; sub = null; }
+        else if (disc && sub) { itemsFast.push({ discipline: disc, sub, topic: e.t }); }
       }
     }
 
-    // 5) De-dup + counts
-    const uniq = [];
-    const seen = new Set();
-    for (const it of items) {
-      const k = `${it.discipline}__${it.sub}__${it.topic}`;
-      if (!seen.has(k)) { seen.add(k); uniq.push(it); }
+    let items = dedupeToc(itemsFast);
+
+    // If the deterministic pass looks too small, fall back to AI
+    if (items.length < 5) {
+      items = await aiInferTocFromEntries(entries, { batchSize: 220 });
     }
 
-    const discs  = new Set(uniq.map(i => i.discipline));
-    const subs   = new Set(uniq.map(i => `${i.discipline}::${i.sub}`));
-    const topics = new Set(uniq.map(i => i.topic));
-
-    res.json({
+    const out = {
       ok: true,
       label,
-      items: uniq,
-      counts: { disciplines: discs.size, subs: subs.size, topics: topics.size }
-    });
+      items,
+      counts: {
+        disciplines: new Set(items.map(i => i.discipline)).size,
+        subs:        new Set(items.map(i => `${i.discipline}::${i.sub}`)).size,
+        topics:      items.length
+      }
+    };
+
+    // cache
+    if (out.items.length) setCachedToc(label, out);
+
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
 
 
 // ---------- Response parsing helpers ----------
