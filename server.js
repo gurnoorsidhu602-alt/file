@@ -652,6 +652,28 @@ function normalizeTopicName(s = "") {
     .replace(/\s+/g, " ")
     .trim();
 }
+function listAllTopics() {
+  // Try global hardcoded arrays
+  const globals = [
+    globalThis.TOC_ITEMS,         // some versions used this name
+    globalThis.MED_TOC_STATIC,    // others used this
+    globalThis.HARD_TOC_ITEMS     // and this in earlier drafts
+  ];
+  for (const g of globals) {
+    if (Array.isArray(g) && g.length) {
+      return Array.from(new Set(g.map(it => it.topic))).sort();
+    }
+  }
+
+  // Try DB fallback
+  try {
+    const rows = medDb.prepare(`SELECT DISTINCT topic FROM med_toc`).all();
+    if (rows?.length) return rows.map(r => r.topic).sort();
+  } catch (_) {}
+
+  return [];
+}
+
 
 
 // === Add under HARDCODED_TOC ===
@@ -676,16 +698,27 @@ function collectIMCandidates(excludeSet = new Set()) {
   return out;
 }
 
+// Read completed topics for a user from the DB
+function getCompletedTopicsForUser(user_id) {
+  try {
+    const rows = medDb.prepare(`SELECT topic FROM user_topics WHERE user_id = ?`).all(user_id);
+    return rows.map(r => r.topic);
+  } catch {
+    return [];
+  }
+}
+
 // High-Yield (IM) via AI
-// POST /med/high-yield-im { user_id, n? }
 app.post('/med/high-yield-im', async (req, res) => {
   try {
     const user_id = String(req.body?.user_id || "Gurnoor");
     const n = Math.max(1, Math.min(10, Number(req.body?.n || 1)));
 
-    // 1) Build eligible pool from your hard-coded TOC
-    //    (TOC_ITEMS must be the array of {discipline, sub, topic} you already serve at /med/toc)
-    const allTopics = Array.from(new Set(TOC_ITEMS.map(it => it.topic))).sort();
+    // 1) Get the candidate pool
+    const allTopics = listAllTopics();             // <— no TOC_ITEMS reference anymore
+    if (!allTopics.length) {
+      return res.status(500).json({ error: "No topics available. Seed TOC or DB first." });
+    }
 
     // 2) Exclude completed (normalized)
     const completed = getCompletedTopicsForUser(user_id);
@@ -693,22 +726,21 @@ app.post('/med/high-yield-im', async (req, res) => {
     const eligible = allTopics.filter(t => !completedNorm.has(normalizeTopicName(t)));
 
     if (!eligible.length) {
-      return res.json({ ok: true, ranked: [], pick: null, reason: "No eligible topics (all completed)." });
+      return res.json({ ok: true, ranked: [], pick: null, reason: "All topics completed." });
     }
 
-    // 3) Ask AI to rank **from the eligible list only**
+    // 3) Ask AI to rank ONLY from 'eligible'
     const system = `
 You are a clerkship director selecting HIGH-YIELD Internal Medicine study topics.
 From the provided list ONLY, rank topics (most to least high-yield for IM).
-Return STRICT JSON:
-{"ranked":[{"topic":"","reason":""}]}.
+Return STRICT JSON: {"ranked":[{"topic":"","reason":""}]}.
 Do NOT invent topics not in the list.
-Prefer common inpatient issues, critical emergencies, and algorithm-heavy entities.
+Prefer common inpatient issues, time-sensitive emergencies, and algorithm-heavy entities.
 `;
     const user = { topics: eligible, max: Math.min(20, eligible.length) };
 
     const resp = await responsesCall({
-      model: BASE_MODEL, // keep cheap model here
+      model: BASE_MODEL,
       messages: [
         { role: "system", content: system },
         { role: "user",   content: JSON.stringify(user) }
@@ -719,18 +751,18 @@ Prefer common inpatient issues, critical emergencies, and algorithm-heavy entiti
     let out = parseResponsesJSON(resp) || {};
     let ranked = Array.isArray(out.ranked) ? out.ranked : [];
 
-    // 4) Safety: filter again after AI (and drop any out-of-list items)
+    // 4) Safety: keep only eligible and not completed (again)
     const eligibleSet = new Set(eligible);
     ranked = ranked
       .filter(x => x && x.topic && eligibleSet.has(x.topic))
       .filter(x => !completedNorm.has(normalizeTopicName(x.topic)));
 
-    // 5) Fallback if AI returns nothing usable
+    // 5) Fallback
     if (!ranked.length) {
       const fallback = eligible[Math.floor(Math.random() * eligible.length)];
       return res.json({
         ok: true,
-        ranked: [{ topic: fallback, reason: "Random fallback from eligible (AI gave no usable output)." }],
+        ranked: [{ topic: fallback, reason: "Random fallback from eligible (AI returned nothing usable)." }],
         pick: { topic: fallback, reason: "Random fallback." }
       });
     }
@@ -741,6 +773,7 @@ Prefer common inpatient issues, critical emergencies, and algorithm-heavy entiti
     res.status(500).json({ error: String(e) });
   }
 });
+
 
 // ====== AI Pimp Questions ======
 
