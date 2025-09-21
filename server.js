@@ -45,6 +45,98 @@ async function pushHistory(username, item, keep = 1000) {
   await redis.lpush(kHistory(username), JSON.stringify(item));
   await redis.ltrim(kHistory(username), 0, keep - 1);
 }
+// ==== Med Learner: SQLite DB init (namespaced, no collisions) ====
+const medDb = new Database('medlearner.db');
+medDb.pragma('journal_mode = WAL');
+medDb.exec(`
+  PRAGMA foreign_keys = ON;
+
+  CREATE TABLE IF NOT EXISTS completed_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    topic   TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, topic)
+  );
+
+  CREATE TABLE IF NOT EXISTS pdf_docs (
+    id TEXT PRIMARY KEY,
+    label TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS pdf_chunks (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL,
+    ord INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    FOREIGN KEY(doc_id) REFERENCES pdf_docs(id) ON DELETE CASCADE
+  );
+
+  -- Full-text search over PDF chunks
+  CREATE VIRTUAL TABLE IF NOT EXISTS pdf_chunks_fts
+  USING fts5(text, content='pdf_chunks', content_rowid='rowid');
+
+  CREATE TRIGGER IF NOT EXISTS pdf_chunks_ai AFTER INSERT ON pdf_chunks BEGIN
+    INSERT INTO pdf_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS pdf_chunks_ad AFTER DELETE ON pdf_chunks BEGIN
+    INSERT INTO pdf_chunks_fts(pdf_chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS pdf_chunks_au AFTER UPDATE ON pdf_chunks BEGIN
+    INSERT INTO pdf_chunks_fts(pdf_chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+    INSERT INTO pdf_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+  END;
+`);
+
+// ==== Med Learner: helpers (unique names) ====
+const upload = multer({ storage: multer.memoryStorage() });
+
+const CHUNK_SIZE = 1200;     // characters
+const CHUNK_OVERLAP = 150;   // characters
+
+function chunkText(raw) {
+  const text = (raw || '')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const chunks = [];
+  let i = 0;
+  while (i < text.length) {
+    let end = Math.min(i + CHUNK_SIZE, text.length);
+    let slice = text.slice(i, end);
+
+    // prefer to break on paragraph/sentence
+    const lastPara = slice.lastIndexOf('\n\n');
+    const lastSent = slice.lastIndexOf('. ');
+    const lastStop = Math.max(lastPara, lastSent);
+    if (lastStop > 400 && end < text.length) slice = slice.slice(0, lastStop + 1);
+
+    chunks.push(slice.trim());
+    i += Math.max(slice.length - CHUNK_OVERLAP, 1);
+  }
+  return chunks.filter(Boolean);
+}
+
+async function indexPdfBuffer(buffer, label) {
+  const data = await pdfParse(buffer);
+  const docId = uuidv4(); // uses your import { v4 as uuidv4 } from 'uuid'
+
+  medDb.prepare(`INSERT INTO pdf_docs (id, label) VALUES (?, ?)`).run(docId, label || null);
+
+  const chunks = chunkText(data.text || '');
+  const insert = medDb.prepare(`INSERT INTO pdf_chunks (id, doc_id, ord, text) VALUES (?, ?, ?, ?)`);
+
+  const tx = medDb.transaction(() => {
+    chunks.forEach((c, idx) => insert.run(uuidv4(), docId, idx, c));
+  });
+  tx();
+
+  return { docId, nChunks: chunks.length };
+}
 
 
 
@@ -865,6 +957,98 @@ app.post('/api/conclude', async (req, res) => {
     res.status(500).json({ error: "Failed to conclude session", detail: String(e) });
   }
 });
+
+// ==================== MED LEARNER ROUTES (all under /med) ====================
+
+// Get completed topics for a user
+app.get('/med/topics', (req, res) => {
+  const user_id = req.query.user_id;
+  if (!user_id) return res.status(400).json({ error: 'user_id required' });
+  const rows = medDb
+    .prepare(`SELECT topic FROM completed_topics WHERE user_id = ? ORDER BY created_at DESC`)
+    .all(user_id);
+  res.json({ topics: rows.map(r => r.topic) });
+});
+
+// Add a completed topic
+app.post('/med/topics', (req, res) => {
+  const { user_id, topic } = req.body || {};
+  if (!user_id || !topic) return res.status(400).json({ error: 'user_id and topic required' });
+  try {
+    medDb.prepare(`INSERT OR IGNORE INTO completed_topics (user_id, topic) VALUES (?, ?)`)
+         .run(user_id, topic);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Upload & index a PDF (multipart/form-data)
+app.post('/med/pdfs', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file required' });
+    const label = req.body?.label || req.file.originalname;
+    const { docId, nChunks } = await indexPdfBuffer(req.file.buffer, label);
+    res.json({ ok: true, doc_id: docId, chunks: nChunks, label });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Fetch & index a PDF by URL
+app.post('/med/pdfs/by-url', async (req, res) => {
+  try {
+    const { url, label } = req.body || {};
+    if (!url) return res.status(400).json({ error: 'url required' });
+
+    // Node 18+ has global fetch on Render; no node-fetch needed
+    const r = await fetch(url);
+    if (!r.ok) return res.status(400).json({ error: `fetch failed: ${r.status}` });
+
+    const buf = Buffer.from(await r.arrayBuffer());
+    const { docId, nChunks } = await indexPdfBuffer(buf, label || url);
+    res.json({ ok: true, doc_id: docId, chunks: nChunks, label: label || url });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Search indexed PDFs (FTS5; supports BM25 ranking)
+app.get('/med/pdfs/search', (req, res) => {
+  const q = req.query.q;
+  const k = Number(req.query.k || 8);
+  if (!q) return res.status(400).json({ error: 'q required' });
+
+  try {
+    const rows = medDb.prepare(`
+      SELECT pc.rowid as rowid,
+             pc.id     as chunk_id,
+             pc.doc_id as doc_id,
+             pd.label  as label,
+             pc.text   as text,
+             bm25(pdf_chunks_fts) as score
+      FROM pdf_chunks_fts
+      JOIN pdf_chunks pc ON pc.rowid = pdf_chunks_fts.rowid
+      JOIN pdf_docs   pd ON pd.id = pc.doc_id
+      WHERE pdf_chunks_fts MATCH ?
+      ORDER BY score
+      LIMIT ?
+    `).all(q, k);
+
+    res.json({
+      hits: rows.map(r => ({
+        doc_id: r.doc_id,
+        label : r.label,
+        chunk_id: r.chunk_id,
+        text  : r.text,
+        score : r.score
+      }))
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // START
