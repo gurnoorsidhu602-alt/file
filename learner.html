@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Med Learner — Pick • Learn • Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0b1020; --card:#121936; --ink:#e9ecf8; --muted:#9aa3bf;
+      --accent:#7c9cff; --accent-2:#5fe3c0; --danger:#ff6b6b; --ok:#41d37e;
+      --border:rgba(255,255,255,0.08);
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:linear-gradient(180deg,#0a0f1f, #0b1228);
+      color:var(--ink); font-family:ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Helvetica, Arial;
+    }
+    header{
+      position:sticky; top:0; z-index:10;
+      background:rgba(10,15,35,0.8); backdrop-filter:blur(10px);
+      border-bottom:1px solid var(--border);
+      padding:12px 16px;
+      display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+    }
+    header h1{margin:0 12px 0 0; font-size:16px; font-weight:700; letter-spacing:.3px}
+    .pill{display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--border); border-radius:12px; background:var(--card)}
+    input, select, button, textarea{
+      color:var(--ink); background:#0f1631; border:1px solid var(--border);
+      padding:8px 10px; border-radius:10px; outline:none; font-size:14px;
+    }
+    input::placeholder, textarea::placeholder{color:var(--muted)}
+    button{cursor:pointer; background:linear-gradient(180deg,#1c2553,#152046); border-color:#1e2a60}
+    button:hover{filter:brightness(1.07)}
+    button.primary{background:linear-gradient(180deg,#5b79ff,#3d57e6)}
+    button.ghost{background:transparent}
+    .grid{display:grid; grid-template-columns:320px 1fr; gap:16px; padding:16px}
+    .card{background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px}
+    .section-title{font-size:13px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); margin-bottom:8px}
+    .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .stack{display:flex; flex-direction:column; gap:8px}
+    .muted{color:var(--muted)}
+    .ok{color:var(--ok)}
+    .bad{color:var(--danger)}
+    .tag{padding:2px 8px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:12px}
+    .list{display:flex; flex-direction:column; gap:8px; max-height:220px; overflow:auto}
+    .quote{
+      background:#0e1530; border:1px solid var(--border);
+      border-left:3px solid var(--accent); padding:10px; border-radius:12px;
+      white-space:pre-wrap; line-height:1.35
+    }
+    .footerbar{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:10px}
+    .linkbar a{color:var(--accent-2); text-decoration:none; margin-right:10px}
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#0b1330; border:1px solid var(--border); border-radius:6px; padding:2px 6px}
+    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Med Learner</h1>
+    <div class="pill">
+      <span class="muted">Base URL</span>
+      <input id="baseUrl" value="https://file-iy1w.onrender.com" size="36" />
+      <button id="btnPing">Connect</button>
+      <span id="connDot" class="tag">disconnected</span>
+    </div>
+    <div class="pill">
+      <span class="muted">user_id</span>
+      <input id="userId" value="Gurnoor" size="12" />
+      <button id="btnLoadTopics">Load Topics</button>
+    </div>
+    <div class="pill">
+      <button id="btnPick" class="primary">Pick Mode</button>
+      <button id="btnLearn">Learn Mode</button>
+      <button id="btnTest">Test Mode</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- LEFT: TOC + Completed + Index -->
+    <aside class="stack">
+      <div class="card">
+        <div class="section-title">Table of Contents (paste/import)</div>
+        <textarea id="tocInput" rows="10" placeholder="- Cardiology > Ischemia > NSTEMI
+- Cardiology > Arrhythmia > Atrial fibrillation
+- Pulmonology > COPD > Exacerbation
+- Nephrology > AKI > Prerenal azotemia
+(You may also paste JSON: { 'Cardiology': { 'Ischemia': ['NSTEMI'] } })"></textarea>
+        <div class="row">
+          <button id="btnParseTOC">Parse TOC</button>
+          <select id="disciplineFilter">
+            <option value="">All disciplines</option>
+          </select>
+          <span id="tocCount" class="muted">0 topics</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">Completed Topics (from server)</div>
+        <div id="completedList" class="list"></div>
+        <div class="footerbar">
+          <span class="muted">Source: GET /med/topics</span>
+          <button id="btnRefreshTopics" class="ghost">Refresh</button>
+        </div>
+      </div>
+
+      <div class="card stack">
+        <div class="section-title">Index PDFs (optional)</div>
+        <div class="row">
+          <input id="pdfUrl" placeholder="https://.../your.pdf" size="28" />
+          <input id="pdfLabel" placeholder="Label (optional)" size="16" />
+        </div>
+        <div class="row">
+          <button id="btnIndexByUrl">POST /med/pdfs/by-url</button>
+        </div>
+        <div class="row">
+          <input id="pdfFile" type="file" accept="application/pdf" />
+          <button id="btnIndexFile">POST /med/pdfs</button>
+        </div>
+        <div id="indexStatus" class="muted"></div>
+      </div>
+    </aside>
+
+    <!-- RIGHT: Mode workspace -->
+    <section class="stack">
+      <div class="card stack" id="modePick">
+        <div class="section-title">Pick Mode</div>
+        <div class="row">
+          <button id="btnAutoPick" class="primary">Pick a Topic (exclude completed)</button>
+          <input id="manualTopic" placeholder="...or enter a topic manually" size="40" />
+          <button id="btnConfirmManual">Confirm Manual Topic</button>
+        </div>
+        <div id="pickResult" class="stack"></div>
+      </div>
+
+      <div class="card stack" id="modeLearn" style="display:none">
+        <div class="section-title">Learn Mode</div>
+        <div class="row">
+          <span class="muted">Current topic:</span>
+          <span id="currentTopic" class="tag">—</span>
+          <button id="btnChangeTopic" class="ghost">Change</button>
+        </div>
+
+        <div class="stack">
+          <div class="row">
+            <input id="searchQuery" size="44" placeholder="Search your notes (e.g., NSTEMI OR ACS, 'heart failure' AND diuretics)" />
+            <button id="btnSearch" class="primary">GET /med/pdfs/search</button>
+          </div>
+          <div id="searchInfo" class="muted"></div>
+          <div id="hits" class="stack"></div>
+        </div>
+
+        <div class="card" style="background:#0f1736; border:1px dashed var(--border)">
+          <div class="section-title">Guideline & Landmark Trial Links</div>
+          <div class="linkbar" id="extLinks"></div>
+          <div class="muted" style="margin-top:8px">
+            These open search queries (Canadian first, then American). Use them alongside your notes above.
+          </div>
+        </div>
+
+        <div class="footerbar">
+          <div class="muted">When you’re done studying, mark it learned.</div>
+          <button id="btnMarkLearned" class="primary">POST /med/topics (mark learned)</button>
+        </div>
+        <div id="markStatus" class="muted"></div>
+      </div>
+
+      <div class="card stack" id="modeTest" style="display:none">
+        <div class="section-title">Test Knowledge Mode</div>
+        <div class="row">
+          <span class="muted">Topic:</span>
+          <span id="testTopic" class="tag">—</span>
+          <button id="btnBuildQuestions">Build Questions from Hits</button>
+          <span id="qCount" class="muted"></span>
+        </div>
+        <div id="testArea" class="stack"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // ---------- State ----------
+    const state = {
+      baseUrl: 'https://file-iy1w.onrender.com',
+      userId: 'Gurnoor',
+      toc: [],               // [{discipline, group, topic}]
+      tocByDiscipline: {},   // map discipline -> topics
+      completed: new Set(),  // topics from server
+      pickedTopic: null,
+      lastDisciplineUsed: null,
+      lastHits: [],          // pdf search hits used to build questions
+      questions: [],         // generated questions
+      qIndex: 0
+    };
+
+    // ---------- DOM helpers ----------
+    const $ = (id) => document.getElementById(id);
+    const connDot = $('connDot');
+
+    function setConnected(ok){
+      connDot.textContent = ok ? 'connected' : 'disconnected';
+      connDot.style.color = ok ? 'var(--ok)' : 'var(--muted)';
+      connDot.style.borderColor = ok ? 'rgba(95, 227, 192, 0.4)' : 'var(--border)';
+    }
+
+    function toast(el, msg, ok=true){
+      el.textContent = msg;
+      el.style.color = ok ? 'var(--ok)' : 'var(--danger)';
+      setTimeout(()=>{ el.textContent=''; el.style.color='var(--muted)'; }, 4000);
+    }
+
+    function sanitize(s){ return (s||'').trim(); }
+
+    // ---------- Base / user ----------
+    $('baseUrl').addEventListener('input', e => state.baseUrl = sanitize(e.target.value));
+    $('userId').addEventListener('input', e => state.userId = sanitize(e.target.value) || 'Gurnoor');
+
+    $('btnPing').addEventListener('click', async () => {
+      try{
+        // a 400 with {"error":"user_id required"} still proves route exists
+        const r = await fetch(`${state.baseUrl}/med/topics`);
+        setConnected(r.ok || r.status===400);
+      }catch(err){
+        setConnected(false);
+      }
+    });
+
+    // ---------- TOC parsing ----------
+    const IM_PRIORITY = ['Cardiology','Pulmonology','Infectious Diseases','Nephrology','Endocrinology','Gastroenterology','Hematology','Hematology/Oncology','Neurology','Rheumatology'];
+
+    function parseTOC(raw){
+      const items = [];
+      if(!raw) return items;
+
+      // Try JSON first
+      try{
+        const obj = JSON.parse(raw.replace(/'/g,'"'));
+        for(const disc of Object.keys(obj)){
+          const groups = obj[disc];
+          for(const grp of Object.keys(groups)){
+            const topics = groups[grp];
+            (topics||[]).forEach(t => {
+              items.push({discipline:disc.trim(), group:grp.trim(), topic:String(t).trim()});
+            });
+          }
+        }
+        return items;
+      }catch(_){ /* fall through */ }
+
+      // Fallback: line syntax "Discipline > Group > Topic"
+      raw.split(/\r?\n/).forEach(line=>{
+        const s = line.replace(/^\s*[-*]\s*/,'').trim();
+        if(!s) return;
+        const parts = s.split('>').map(p=>p.trim()).filter(Boolean);
+        if(parts.length>=3){
+          const [discipline, group, ...rest] = parts;
+          items.push({discipline, group, topic: rest.join(' > ')});
+        }else if(parts.length===2){
+          const [discipline, topic] = parts;
+          items.push({discipline, group:'General', topic});
+        }
+      });
+      return items;
+    }
+
+    function rebuildDisciplineFilter(){
+      const sel = $('disciplineFilter');
+      const seen = new Set();
+      // clear
+      while(sel.options.length>1) sel.remove(1);
+      state.toc.forEach(it=>{
+        if(seen.has(it.discipline)) return;
+        seen.add(it.discipline);
+        const opt = document.createElement('option');
+        opt.value = it.discipline; opt.textContent = it.discipline;
+        sel.appendChild(opt);
+      });
+    }
+
+    $('btnParseTOC').addEventListener('click', ()=>{
+      state.toc = parseTOC($('tocInput').value);
+      state.tocByDiscipline = {};
+      state.toc.forEach(it=>{
+        (state.tocByDiscipline[it.discipline] ||= []).push(it);
+      });
+      $('tocCount').textContent = `${state.toc.length} topics`;
+      rebuildDisciplineFilter();
+    });
+
+    // ---------- Completed topics ----------
+    async function loadCompleted(){
+      const list = $('completedList');
+      list.innerHTML = '<span class="muted">Loading…</span>';
+      try{
+        const url = `${state.baseUrl}/med/topics?user_id=${encodeURIComponent(state.userId)}`;
+        const r = await fetch(url);
+        const j = await r.json();
+        state.completed = new Set((j.topics||[]).map(String));
+        list.innerHTML = '';
+        if(state.completed.size===0){
+          list.innerHTML = '<span class="muted">None yet.</span>';
+          return;
+        }
+        [...state.completed].forEach(t=>{
+          const div = document.createElement('div');
+          div.className='row';
+          div.innerHTML = `<span class="tag">${t}</span>`;
+          list.appendChild(div);
+        });
+      }catch(err){
+        list.innerHTML = `<span class="bad">Failed to load: ${err.message}</span>`;
+      }
+    }
+    $('btnLoadTopics').addEventListener('click', loadCompleted);
+    $('btnRefreshTopics').addEventListener('click', loadCompleted);
+
+    // ---------- Pick Mode ----------
+    function showMode(which){
+      $('modePick').style.display = which==='pick' ? '' : 'none';
+      $('modeLearn').style.display = which==='learn' ? '' : 'none';
+      $('modeTest').style.display = which==='test' ? '' : 'none';
+    }
+    $('btnPick').addEventListener('click', ()=>showMode('pick'));
+    $('btnLearn').addEventListener('click', ()=>showMode('learn'));
+    $('btnTest').addEventListener('click', ()=>showMode('test'));
+
+    function chooseTopic(){
+      const filter = $('disciplineFilter').value;
+      let pool = state.toc.filter(it => !state.completed.has(it.topic));
+      if(filter) pool = pool.filter(it => it.discipline===filter);
+
+      // Prefer IM disciplines first
+      pool.sort((a,b)=>{
+        const ai = IM_PRIORITY.indexOf(a.discipline); const bi = IM_PRIORITY.indexOf(b.discipline);
+        const ar = ai===-1? 999 : ai; const br = bi===-1? 999 : bi;
+        return ar-br;
+      });
+
+      // Try not to repeat last discipline
+      const first = pool.find(p => p.discipline !== state.lastDisciplineUsed) || pool[0];
+      return first || null;
+    }
+
+    function renderPickResult(topicObj){
+      const box = $('pickResult'); box.innerHTML='';
+      if(!topicObj){
+        box.innerHTML = `<span class="bad">No eligible topics. Add TOC or clear filter.</span>`;
+        return;
+      }
+      state.pickedTopic = topicObj.topic;
+      state.lastDisciplineUsed = topicObj.discipline;
+      const wrap = document.createElement('div');
+      wrap.className='stack';
+      wrap.innerHTML = `
+        <div class="quote">
+Topic Selected: ${topicObj.topic}
+Would you like to confirm this topic?
+        </div>
+        <div class="row">
+          <span class="muted">Discipline:</span><span class="tag">${topicObj.discipline}</span>
+          <span class="muted">Group:</span><span class="tag">${topicObj.group}</span>
+        </div>
+        <div class="row">
+          <button id="btnConfirmPick" class="primary">Yes</button>
+          <button id="btnRejectPick">No</button>
+        </div>
+      `;
+      box.appendChild(wrap);
+
+      $('btnConfirmPick').onclick = ()=>{
+        $('currentTopic').textContent = state.pickedTopic;
+        $('testTopic').textContent = state.pickedTopic;
+        showMode('learn');
+        buildGuidelineLinks(state.pickedTopic);
+        $('searchQuery').value = state.pickedTopic;
+        $('hits').innerHTML = '';
+        $('markStatus').textContent = '';
+      };
+      $('btnRejectPick').onclick = ()=>{
+        box.innerHTML = `<span class="muted">Okay. Adjust filters or click “Pick a Topic” again.</span>`;
+      };
+    }
+
+    $('btnAutoPick').addEventListener('click', ()=>{
+      const picked = chooseTopic();
+      renderPickResult(picked);
+    });
+
+    $('btnConfirmManual').addEventListener('click', ()=>{
+      const t = sanitize($('manualTopic').value);
+      if(!t){ alert('Enter a topic first.'); return; }
+      renderPickResult({discipline:'Manual', group:'Manual', topic:t});
+    });
+
+    $('btnChangeTopic').addEventListener('click', ()=>{
+      showMode('pick');
+      $('pickResult').textContent='';
+    });
+
+    // ---------- Learn Mode ----------
+    function buildGuidelineLinks(topic){
+      const links = $('extLinks'); links.innerHTML='';
+      const enc = encodeURIComponent(topic);
+      const a = (href, label) => {
+        const el = document.createElement('a'); el.href = href; el.target='_blank'; el.rel='noopener'; el.textContent = label; return el;
+      };
+      // Canadian first
+      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:cmaj.ca+guideline`, "CMAJ guideline"));
+      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:ccs.ca+guideline`, "CCS (Canada)"));
+      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:cts-sct.ca+guideline`, "CTS (Canada)"));
+      // American next
+      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:acc.org+guideline`, "ACC"));
+      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:ahajournals.org+guideline`, "AHA"));
+      links.appendChild(a(`https://www.google.com/search?q=${enc}+site:chestnet.org+guideline`, "CHEST"));
+      links.appendChild(a(`https://www.google.com/search?q=${enc}+landmark+trial`, "Landmark trials (broad)"));
+      links.appendChild(a(`https://scholar.google.com/scholar?q=${enc}+randomized+trial`, "Scholar: RCTs"));
+    }
+
+    $('btnSearch').addEventListener('click', async ()=>{
+      const q = sanitize($('searchQuery').value) || state.pickedTopic || '';
+      if(!q){ alert('Enter a query or pick a topic first.'); return; }
+      $('hits').innerHTML = '<span class="muted">Searching…</span>';
+      $('searchInfo').textContent = '';
+      try{
+        const url = `${state.baseUrl}/med/pdfs/search?q=${encodeURIComponent(q)}&k=12`;
+        const r = await fetch(url);
+        const j = await r.json();
+        state.lastHits = j.hits || [];
+        renderHits(state.lastHits);
+        $('searchInfo').textContent = `${state.lastHits.length} chunk(s)`;
+      }catch(err){
+        $('hits').innerHTML = `<span class="bad">Search failed: ${err.message}</span>`;
+      }
+    });
+
+    function renderHits(hits){
+      const area = $('hits'); area.innerHTML='';
+      if(!hits.length){
+        area.innerHTML = `<span class="muted">No matches yet. Index a PDF or broaden your query.</span>`;
+        return;
+      }
+      hits.forEach((h,i)=>{
+        const card = document.createElement('div');
+        card.className='quote';
+        card.innerHTML = `[${i+1}] ${h.text}`;
+        area.appendChild(card);
+      });
+    }
+
+    $('btnIndexByUrl').addEventListener('click', async ()=>{
+      const url = sanitize($('pdfUrl').value);
+      const label = sanitize($('pdfLabel').value);
+      if(!url){ alert('Enter a PDF URL.'); return; }
+      $('indexStatus').textContent = 'Indexing…';
+      try{
+        const r = await fetch(`${state.baseUrl}/med/pdfs/by-url`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ url, label: label || undefined })
+        });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error || r.statusText);
+        toast($('indexStatus'), `Indexed "${j.label}" (${j.chunks} chunks).`);
+      }catch(err){
+        toast($('indexStatus'), `Failed: ${err.message}`, false);
+      }
+    });
+
+    $('btnIndexFile').addEventListener('click', async ()=>{
+      const file = $('pdfFile').files[0];
+      if(!file){ alert('Choose a PDF file.'); return; }
+      $('indexStatus').textContent = 'Uploading…';
+      try{
+        const fd = new FormData(); fd.append('file', file); fd.append('label', file.name);
+        const r = await fetch(`${state.baseUrl}/med/pdfs`, { method:'POST', body: fd });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error || r.statusText);
+        toast($('indexStatus'), `Indexed "${j.label}" (${j.chunks} chunks).`);
+      }catch(err){
+        toast($('indexStatus'), `Failed: ${err.message}`, false);
+      }
+    });
+
+    $('btnMarkLearned').addEventListener('click', async ()=>{
+      const topic = state.pickedTopic || sanitize($('currentTopic').textContent);
+      if(!topic){ alert('No topic selected.'); return; }
+      try{
+        const r = await fetch(`${state.baseUrl}/med/topics`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ user_id: state.userId, topic })
+        });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error || r.statusText);
+        toast($('markStatus'), `Marked learned: ${topic}`);
+        await loadCompleted();
+      }catch(err){
+        toast($('markStatus'), `Failed: ${err.message}`, false);
+      }
+    });
+
+    // ---------- Test Mode (local cloze generator from hits) ----------
+    function buildClozeFromText(text){
+      // Pick a key term (ALLCAPS, numbers, long words) to blank.
+      const candidates = [...new Set(
+        (text.match(/\b([A-Z]{3,}|[A-Za-z]{6,}|\d+(\.\d+)?\s?(mg|mmol\/L|L|g|mcg|units|%))\b/g) || [])
+      )].filter(w => w.length>=4 && w.length<=30).slice(0,12);
+
+      if(candidates.length===0) return null;
+      const answer = candidates[Math.floor(Math.random()*candidates.length)];
+      const stem = text.replace(answer, '_____');
+      return { stem, answer };
+    }
+
+    $('btnBuildQuestions').addEventListener('click', ()=>{
+      const hits = state.lastHits.length ? state.lastHits : [];
+      const used = hits.slice(0, Math.min(10, hits.length));
+      const qs = [];
+      used.forEach(h=>{
+        const q = buildClozeFromText(h.text);
+        if(q) qs.push(q);
+      });
+      state.questions = qs;
+      state.qIndex = 0;
+      $('qCount').textContent = `${qs.length} question(s) built`;
+      renderQuestion();
+    });
+
+    function renderQuestion(){
+      const area = $('testArea');
+      area.innerHTML='';
+      if(!state.questions.length){
+        area.innerHTML = `<span class="muted">No questions yet. Run a search in Learn Mode, then click “Build Questions”.</span>`;
+        return;
+      }
+      const q = state.questions[state.qIndex];
+      const wrap = document.createElement('div');
+      wrap.className='stack';
+      wrap.innerHTML = `
+        <div class="quote">Listen up. ${state.qIndex+1}/${state.questions.length}. ${q.stem}</div>
+        <div class="row">
+          <input id="ans" placeholder="Your answer" size="40" />
+          <button id="btnSubmit" class="primary">Submit</button>
+          <button id="btnReveal" class="ghost">Give up</button>
+        </div>
+        <div id="feedback" class="muted"></div>
+        <div class="footerbar">
+          <span class="muted">Mean attending mode: terse, unforgiving corrections.</span>
+          <div>
+            <button id="btnPrev" class="ghost">Prev</button>
+            <button id="btnNext" class="ghost">Next</button>
+          </div>
+        </div>
+      `;
+      area.appendChild(wrap);
+
+      const feedback = $('feedback');
+      const check = ()=>{
+        const val = sanitize($('ans').value).toLowerCase();
+        const ok = val && q.answer.toLowerCase().includes(val);
+        if(ok){
+          feedback.innerHTML = `<span class="ok">Correct.</span>`;
+          setTimeout(()=>{ nextQ(); }, 700);
+        }else{
+          feedback.innerHTML = `<span class="bad">Wrong. The answer is <span class="kbd">${q.answer}</span>. Learn it.</span>`;
+        }
+      };
+      $('btnSubmit').onclick = check;
+      $('btnReveal').onclick = ()=>{ feedback.innerHTML = `Answer: <span class="kbd">${q.answer}</span>`; };
+      const nextQ = ()=>{ if(state.qIndex < state.questions.length-1){ state.qIndex++; renderQuestion(); } };
+      const prevQ = ()=>{ if(state.qIndex > 0){ state.qIndex--; renderQuestion(); } };
+      $('btnNext').onclick = nextQ;
+      $('btnPrev').onclick = prevQ;
+    }
+
+    // ---------- Init ----------
+    (function init(){
+      setConnected(false);
+      showMode('pick');
+      // Pre-seed a tiny TOC example to demo
+      $('tocInput').value =
+`- Cardiology > Ischemia > NSTEMI
+- Cardiology > Arrhythmia > Atrial fibrillation
+- Pulmonology > COPD > Exacerbation
+- Nephrology > AKI > Prerenal azotemia`;
+      $('btnParseTOC').click();
+      loadCompleted();
+    })();
+  </script>
+</body>
+</html>
