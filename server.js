@@ -35,9 +35,19 @@ const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-4.1";
 // If not set, it will fallback to BASE_MODEL.
 const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5.1";
 
+// helper: some models (gpt-5.x, o-series) don't accept temperature on Responses API
+function supportsTemperature(model) {
+  return !/^gpt-5(\.|-)/i.test(model); // false for any gpt-5.*
+}
 
-
-
+// wrapper: build the request and include temperature only when supported
+async function responsesCall({ model, messages, temperature }) {
+  const req = { model, input: messages };
+  if (temperature !== undefined && supportsTemperature(model)) {
+    req.temperature = temperature;
+  }
+  return await openai.responses.create(req);
+}
 // Difficulty ladder
 const DIFF = ["MSI1","MSI2","MSI3","MSI4","R1","R2","R3","R4","R5","Attending"];
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -927,14 +937,15 @@ Rules:
 - Prefer DOI or PubMed for trials; Google-hosted PDFs are OK if official.
 - NEVER return obvious 404s or search result pages. If uncertain, leave the url empty.
 `;
-  const resp = await openai.responses.create({
-    model: STRICT_MODEL,
-    temperature: 0,
-    input: [
+  const resp = await responsesCall({
+    model: STRICT_MODEL,              // set OPENAI_STRICT_MODEL=gpt-5.1 on Render
+    messages: [
       { role: "system", content: system },
-      { role: "user", content: JSON.stringify({ items }) }
+      { role: "user",   content: JSON.stringify({ items }) }
     ]
+    // no temperature for 5.x (wrapper omits it automatically)
   });
+
   const parsed = parseResponsesJSON(resp);
   return Array.isArray(parsed?.links) ? parsed.links : [];
 }
