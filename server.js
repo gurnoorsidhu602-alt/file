@@ -28,6 +28,26 @@ const redis = new Redis({
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const PORT = process.env.PORT || 3000;
 
+// --- Models ---
+// Cheaper default for most tasks:
+const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-4.1";
+// Use a smarter model ONLY for URL selection to reduce 404s; set env to "gpt-5.1" (or whatever you have)
+// If not set, it will fallback to BASE_MODEL.
+const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || BASE_MODEL;
+
+// Small helper to parse OpenAI "responses" JSON blocks (keep if you already have one)
+function parseResponsesJSON(resp) {
+  try {
+    const parts = resp?.output?.[0]?.content || resp?.output_text || resp?.choices?.[0]?.message?.content || "";
+    const text = typeof parts === "string" ? parts : parts?.map?.(p => p?.text || "").join("") || "";
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1));
+    return JSON.parse(text);
+  } catch { return null; }
+}
+
+
 // Difficulty ladder
 const DIFF = ["MSI1","MSI2","MSI3","MSI4","R1","R2","R3","R4","R5","Attending"];
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -829,14 +849,30 @@ function searchNoteSnippets(topic, k = 8) {
   }
 }
 
-// One function to ask OpenAI for the entire learn plan.
-// Returns {guidelines:[], trials:[], objectives:[]}
+// Optional grounding from your indexed PDFs (works even if empty)
+function searchNoteSnippets(topic, k = 8) {
+  try {
+    const rows = medDb.prepare(`
+      SELECT pc.text AS text
+      FROM pdf_chunks_fts
+      JOIN pdf_chunks pc ON pc.rowid = pdf_chunks_fts.rowid
+      WHERE pdf_chunks_fts MATCH ?
+      ORDER BY bm25(pdf_chunks_fts)
+      LIMIT ?
+    `).all(topic, k);
+    return rows.map(r => r.text);
+  } catch {
+    return [];
+  }
+}
+
+// Build the plan (cheaper model) – guidelines, trials, objectives
 async function buildLearnPlanAI(topic, noteSnippets = []) {
   const system = `
 You are an evidence-based Internal Medicine educator.
-Build a LEARNING PLAN for the requested topic. Be comprehensive but concise.
+Create a LEARNING PLAN for the topic with three arrays: "guidelines", "trials", "objectives".
+Return STRICT JSON only:
 
-You MUST return STRICT JSON with this schema (no prose outside JSON):
 {
   "guidelines":[
     {"region":"Canada|USA|International","org":"","year":2020,"title":"","why":"","link":""}
@@ -846,35 +882,32 @@ You MUST return STRICT JSON with this schema (no prose outside JSON):
   ],
   "objectives":[
     {"objective":"","rationale":"",
-      "resources":[
-        {"type":"guideline","ref":""},
-        {"type":"trial","ref":""},
-        {"type":"other","title":"","link":""}
-      ]
-    }
+     "resources":[
+       {"type":"guideline","ref":""},
+       {"type":"trial","ref":""},
+       {"type":"other","title":"","link":""}
+     ]}
   ]
 }
 
 RULES
-- Prefer CANADIAN society guidance first (e.g., CCS/CTS/CMAJ/etc.); if none, provide USA (ACC/AHA/ACP/IDSA/etc.), then International.
-- "link" may be empty if unsure (front end will add search links).
-- Trials must be landmark/seminal (include negative trials if influential).
-- Objectives should be extensive and cover pathophys, dx, risk stratification, mgmt, complications, follow-up.
-- Under each objective, list relevant resources: reference trials/guidelines by exact title or name in your own output arrays.
-- If you see ambiguous subtopics, include them in objectives anyway.
-- Keep JSON valid. Do not include markdown or commentary.`;
+- Prefer CANADIAN guidelines first (CCS/CTS/CMAJ/SOGC/IDSA Canada/etc), else USA (ACC/AHA/ACP/IDSA/etc), then International.
+- Trials MUST be landmark/seminal (include influential negative trials when relevant).
+- Objectives should be extensive: pathophysiology, dx, risk stratification, mgmt (ED/inpatient/outpatient), complications, follow-up.
+- Under each objective, list resources that match items in the "guidelines" or "trials" arrays (use their exact titles/names in "ref").
+- If you provide "link", it MUST be a stable landing page, DOI or PMID; if unsure, leave "link" empty. NO dead paths.
+`;
 
   const userPayload = {
     topic,
-    note_snippets: noteSnippets, // optional context from user notes
+    note_snippets: noteSnippets,
     prefer_regions: ["Canada","USA","International"],
-    want_objectives: "extensive",
     max_guidelines: 10,
     max_trials: 12
   };
 
   const resp = await openai.responses.create({
-    model: "gpt-4.1",
+    model: BASE_MODEL,
     temperature: 0,
     input: [
       { role: "system", content: system },
@@ -884,11 +917,107 @@ RULES
 
   const parsed = parseResponsesJSON(resp);
   if (!parsed || !Array.isArray(parsed.guidelines) || !Array.isArray(parsed.trials) || !Array.isArray(parsed.objectives)) {
-    // Fail gracefully with empty arrays
     return { guidelines: [], trials: [], objectives: [] };
   }
   return parsed;
 }
+// Validate a URL (HEAD first, fallback GET), short timeout
+async function urlOk(url, timeoutMs = 7000) {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    // HEAD can be blocked; try GET if HEAD not ok
+    let r = await fetch(url, { method: "HEAD", redirect: "follow", signal: ctrl.signal });
+    if (!r.ok) {
+      r = await fetch(url, { method: "GET", redirect: "follow", signal: ctrl.signal });
+    }
+    clearTimeout(t);
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Ask a smarter model for canonical links (only for items missing/invalid URLs)
+async function aiSuggestCanonicalLinks(kind, items) {
+  // items: [{i, title/org/year} or {i, name/year}]
+  if (!items.length) return [];
+  const system = `
+You are a meticulous research assistant whose ONLY job is to provide canonical, non-404 links.
+For ${kind}, return stable landing pages (home guideline pages) or DOI/PMID links.
+Return STRICT JSON only: {"links":[{"i":0,"url":""}, ...]}  
+Rules:
+- Prefer society's canonical landing page for guidelines (not PDF deep-links if unstable).
+- Prefer DOI or PubMed for trials; Google-hosted PDFs are OK if official.
+- NEVER return obvious 404s or search result pages. If uncertain, leave the url empty.
+`;
+  const resp = await openai.responses.create({
+    model: STRICT_MODEL,
+    temperature: 0,
+    input: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify({ items }) }
+    ]
+  });
+  const parsed = parseResponsesJSON(resp);
+  return Array.isArray(parsed?.links) ? parsed.links : [];
+}
+
+// Fix/verify links: if invalid -> ask AI for a canonical URL -> verify -> else fall back to search links
+async function improvePlanLinks(plan, topic) {
+  const order = { Canada: 0, USA: 1, International: 2 };
+  plan.guidelines.sort((a,b) => (order[a.region] ?? 99) - (order[b.region] ?? 99) || (b.year||0) - (a.year||0));
+
+  // Verify given links
+  const invalidGuides = [];
+  for (let i=0;i<plan.guidelines.length;i++){
+    const g = plan.guidelines[i];
+    if (g.link && await urlOk(g.link)) continue;
+    invalidGuides.push({ i, title: g.title || "", org: g.org || "", year: g.year || "", region: g.region || "" });
+    g.link = ""; // clear for now
+  }
+  const invalidTrials = [];
+  for (let i=0;i<plan.trials.length;i++){
+    const t = plan.trials[i];
+    if (t.link && await urlOk(t.link)) continue;
+    invalidTrials.push({ i, name: t.name || "", year: t.year || "" });
+    t.link = "";
+  }
+
+  // Ask smarter model only for the missing ones
+  if (invalidGuides.length){
+    const links = await aiSuggestCanonicalLinks("guidelines", invalidGuides);
+    for (const l of links) {
+      const g = plan.guidelines[l.i];
+      if (!g) continue;
+      if (l.url && await urlOk(l.url)) g.link = l.url;
+    }
+  }
+  if (invalidTrials.length){
+    const links = await aiSuggestCanonicalLinks("trials", invalidTrials);
+    for (const l of links) {
+      const t = plan.trials[l.i];
+      if (!t) continue;
+      if (l.url && await urlOk(l.url)) t.link = l.url;
+    }
+  }
+
+  // Final fallbacks: search links that won't 404 (search pages are intentional here)
+  const gSearch = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+  const pmid = (q) => `https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(q)}`;
+  const scholar = (q) => `https://scholar.google.com/scholar?q=${encodeURIComponent(q)}`;
+
+  for (const g of plan.guidelines) {
+    if (!g.link) g.link = gSearch(`${g.title || topic} ${g.org || ""} guideline`);
+  }
+  for (const t of plan.trials) {
+    if (!t.link) t.link = pmid(`${t.name || topic}`);
+  }
+
+  return plan;
+}
+
 
 
 // ------------------------------ ADMIN NUKE (kept) ---------------------------
@@ -1570,18 +1699,16 @@ app.get('/api/history', async (req, res) => {
 
 // --- Learn Plan API ---
 // POST /med/learn-plan { topic, user_id? } -> guidelines, trials, objectives
+
+// POST /med/learn-plan { topic, user_id? }
 app.post('/med/learn-plan', async (req, res) => {
   try {
     const topic = String(req.body?.topic || "").trim();
     if (!topic) return res.status(400).json({ error: "topic required" });
 
-    // Optional: pull a few note snippets to ground the AI (works even if no PDFs indexed)
     const snippets = searchNoteSnippets(topic, 8);
-    const plan = await buildLearnPlanAI(topic, snippets);
-
-    // Sort guidelines Canada -> USA -> International
-    const order = { Canada: 0, USA: 1, International: 2 };
-    plan.guidelines.sort((a,b) => (order[a.region] ?? 99) - (order[b.region] ?? 99) || (b.year||0) - (a.year||0));
+    let plan = await buildLearnPlanAI(topic, snippets);
+    plan = await improvePlanLinks(plan, topic);
 
     res.json({ ok: true, topic, ...plan, snippets_count: snippets.length });
   } catch (e) {
@@ -1589,15 +1716,16 @@ app.post('/med/learn-plan', async (req, res) => {
   }
 });
 
-// (Handy) GET wrapper to test in browser: /med/learn-plan?topic=Acute%20Coronary%20Syndrome
+// GET /med/learn-plan?topic=...
 app.get('/med/learn-plan', async (req, res) => {
   try {
     const topic = String(req.query?.topic || "").trim();
     if (!topic) return res.status(400).json({ error: "topic required" });
+
     const snippets = searchNoteSnippets(topic, 8);
-    const plan = await buildLearnPlanAI(topic, snippets);
-    const order = { Canada: 0, USA: 1, International: 2 };
-    plan.guidelines.sort((a,b) => (order[a.region] ?? 99) - (order[b.region] ?? 99) || (b.year||0) - (a.year||0));
+    let plan = await buildLearnPlanAI(topic, snippets);
+    plan = await improvePlanLinks(plan, topic);
+
     res.json({ ok: true, topic, ...plan, snippets_count: snippets.length });
   } catch (e) {
     res.status(500).json({ error: String(e) });
