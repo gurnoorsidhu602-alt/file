@@ -33,6 +33,7 @@
     .kbd{background:#0c132c;border:1px solid var(--border);padding:2px 6px;border-radius:6px}
     .linkbar a{margin-right:10px}
     .list li{margin:6px 0}
+    .disclaimer{font-size:13px; color:var(--muted); padding:8px 12px; border:1px dashed var(--border); border-radius:10px; background:#0e1633}
   </style>
 </head>
 <body>
@@ -74,10 +75,7 @@
       <div class="card">
         <div class="section-title">Completed Topics</div>
         <div id="completedList" class="stack"></div>
-        <div class="footerbar">
-          <span class="muted">GET /med/topics</span>
-          <button id="btnRefreshTopics" class="ghost">Refresh</button>
-        </div>
+        <div class="row"><button id="btnRefreshTopics" class="ghost">Refresh</button></div>
       </div>
 
       <div class="card">
@@ -135,7 +133,12 @@
       <div class="card stack hidden" id="modeLearn">
         <div class="section-title">Learn Mode</div>
 
-        <div class="row">
+        <div class="disclaimer">
+          Heads up: assembling guidelines, trials, and objectives involves live checks.  
+          It can take a few moments — that’s normal.
+        </div>
+
+        <div class="row" style="margin-top:6px">
           <span class="muted">Current topic:</span>
           <span id="currentTopic" class="tag">—</span>
           <button id="btnChangeTopic" class="ghost">Change</button>
@@ -162,17 +165,16 @@
         <div class="stack">
           <div class="row">
             <input id="searchQuery" size="48" placeholder="Optional: search your notes (e.g., 'ACS' OR NSTEMI)" />
-            <button id="btnSearch" class="primary">GET /med/pdfs/search</button>
+            <button id="btnSearch" class="primary">Search Notes</button>
           </div>
           <div id="searchInfo" class="muted"></div>
           <div id="hits" class="stack"></div>
         </div>
 
-        <div class="footerbar">
-          <div class="muted">When you’ve learned it, mark complete.</div>
-          <button id="btnMarkLearned" class="primary">POST /med/topics</button>
+        <div class="row">
+          <button id="btnMarkLearned" class="primary">Mark as learned</button>
+          <span id="markStatus" class="muted"></span>
         </div>
-        <div id="markStatus" class="muted"></div>
       </div>
 
       <!-- TEST -->
@@ -190,7 +192,6 @@
   </main>
 
   <script>
-    // ---------- State ----------
     const state = {
       baseUrl: 'https://file-iy1w.onrender.com',
       userId: 'Gurnoor',
@@ -206,8 +207,6 @@
       lastHits: [],
       questions: [],
       qIndex: 0,
-
-      // flip to true if you want AI questions always (ignoring hits)
       preferAI: false
     };
 
@@ -228,11 +227,7 @@
     $('btnPick').onclick  = () => selectMode('pick');
     $('btnLearn').onclick = () => selectMode('learn');
     $('btnTest').onclick  = () => selectMode('test');
-    function selectMode(which){
-      show($('modePick'), which==='pick');
-      show($('modeLearn'), which==='learn');
-      show($('modeTest'), which==='test');
-    }
+    function selectMode(which){ show($('modePick'), which==='pick'); show($('modeLearn'), which==='learn'); show($('modeTest'), which==='test'); }
 
     // Bootstrap
     async function connectAndBootstrap(){
@@ -273,7 +268,6 @@
       try{
         const r = await fetch(`${state.baseUrl}/med/toc`);
         const j = await r.json(); if(!r.ok) throw new Error(j.error || r.statusText);
-
         state.discToSub = new Map(); state.subToTopics = new Map(); state.allTopics = new Set();
         (j.items||[]).forEach(it=>{
           const { discipline:d, sub, topic:t } = it; if(!d||!sub||!t) return;
@@ -290,9 +284,7 @@
       }catch(err){ s.textContent = `Failed to load TOC: ${err.message}`; s.style.color='var(--danger)'; }
     }
     function populateDisciplines(){
-      selDisc.innerHTML=''; [...state.discToSub.keys()].sort().forEach(d=>{
-        const o=document.createElement('option'); o.value=d; o.textContent=d; selDisc.appendChild(o);
-      });
+      selDisc.innerHTML=''; [...state.discToSub.keys()].sort().forEach(d=>{ const o=document.createElement('option'); o.value=d; o.textContent=d; selDisc.appendChild(o); });
       selSub.innerHTML=''; selSub.disabled=true; $('btnRandomSub').disabled=true;
       selTopic.innerHTML=''; selTopic.disabled=true; $('btnRandomTopic').disabled=true;
     }
@@ -308,15 +300,18 @@
       const subs=[...selSub.selectedOptions].map(o=>o.value);
       selTopic.innerHTML='';
       const topics=new Set();
-      discs.forEach(d=>subs.forEach(s=>(state.subToTopics.get(`${d}::${s}`)||new Set()).forEach(t=>{
-        if(!state.completed.has(t)) topics.add(t);
-      })));
+      discs.forEach(d=>{
+        subs.forEach(s=>{
+          const key = `${d}::${s}`;
+          (state.subToTopics.get(key)||new Set()).forEach(t=>{ if(!state.completed.has(t)) topics.add(t); });
+        });
+      });
       [...topics].sort().forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent=t; selTopic.appendChild(o); });
       selTopic.disabled = topics.size===0; $('btnRandomTopic').disabled = topics.size===0;
     };
     $('btnClearSelections').onclick = ()=>{ populateDisciplines(); $('pickResult').innerHTML=''; };
 
-    // Pick + Randoms
+    // Pick & randomizers
     $('btnPickFromSelections').onclick = ()=>{
       const chosen=[...selTopic.selectedOptions].map(o=>o.value);
       const pool = chosen.length ? chosen : [...state.allTopics].filter(t=>!state.completed.has(t));
@@ -399,7 +394,7 @@
       list.forEach(g=>{
         const title=`${g.title||''}`.trim(); const org=g.org?` (${g.org})`:'';
         const meta=[g.region,g.year].filter(Boolean).join(' · ');
-        const link=g.link||gSearch(`${title} ${g.org||''} guideline`);
+        const link=g.link || gSearch(`${title} ${g.org||''} guideline`);
         const li=document.createElement('li');
         li.innerHTML=`<div><b>${title}</b>${org} — <span class="muted">${meta}</span></div><div class="linkbar"><a href="${link}" target="_blank">Open</a></div>${g.why?`<div class="muted">${g.why}</div>`:''}`;
         ul.appendChild(li);
@@ -409,7 +404,7 @@
       const box=$('trialsBox'); box.innerHTML=''; if(!list.length){ box.innerHTML='<span class="muted">None found by AI.</span>'; return; }
       const ul=document.createElement('ul'); ul.className='list';
       list.forEach(t=>{
-        const link=t.link||scholar(`${t.name||''} ${state.pickedTopic||''}`);
+        const link=t.link || scholar(`${t.name||''} ${state.pickedTopic||''}`);
         const meta=[t.year,t.design,t.n].filter(Boolean).join(' · ');
         const li=document.createElement('li');
         li.innerHTML=`<div><b>${t.name||'Trial'}</b> — <span class="muted">${meta}</span></div><div class="muted">${t.one_liner||t.result||''}</div><div class="linkbar"><a href="${link}" target="_blank">Open</a><a href="${pmidSearch(t.name||'')}" target="_blank">PubMed</a><a href="${scholar(t.name||'')}" target="_blank">Scholar</a></div>`;
@@ -440,7 +435,7 @@
       });
     }
 
-    // Notes search (optional)
+    // Notes search
     $('btnSearch').onclick = async ()=>{
       const q = sanitize($('searchQuery').value) || state.pickedTopic || '';
       if(!q){ alert('Enter a query or pick a topic first.'); return; }
@@ -457,7 +452,31 @@
       hits.forEach((h,i)=>{ const card=document.createElement('div'); card.className='quote'; card.innerHTML=`[${i+1}] ${h.text}`; area.appendChild(card); });
     }
 
-    // TEST: build questions (hits → cloze; else AI)
+    // Mark learned (fixed wiring + disabled state)
+    $('btnMarkLearned').addEventListener('click', async ()=>{
+      const btn = $('btnMarkLearned');
+      const topic = state.pickedTopic || $('currentTopic').textContent.trim();
+      if(!topic){ alert('No topic selected.'); return; }
+      btn.disabled = true; btn.textContent = 'Saving…'; $('markStatus').textContent = '';
+      try{
+        const r = await fetch(`${state.baseUrl}/med/topics`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ user_id: state.userId, topic })
+        });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error || r.statusText);
+        $('markStatus').textContent = `Marked learned: ${topic}`;
+        $('markStatus').style.color = 'var(--ok)';
+        await loadCompleted();
+      }catch(err){
+        $('markStatus').textContent = `Failed: ${err.message}`;
+        $('markStatus').style.color = 'var(--danger)';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Mark as learned';
+      }
+    });
+
+    // TEST: hits->cloze or AI fallback (unchanged logic)
     function cloze(text){
       const cands=[...new Set((text.match(/\b([A-Z]{3,}|[A-Za-z]{6,}|\d+(?:\.\d+)?\s?(?:mg|mmol\/L|L|g|mcg|units|%))\b/g)||[]))].filter(w=>w.length>=4&&w.length<=30).slice(0,12);
       if(!cands.length) return null; const answer=cands[Math.floor(Math.random()*cands.length)]; const stem=text.replace(answer,'_____'); return { stem, answer };
@@ -466,18 +485,13 @@
       const topic = state.pickedTopic || $('testTopic').textContent.trim();
       if(!topic){ alert('Pick a topic first.'); return; }
 
-      // If we have PDF hits and you don't prefer AI, build cloze; otherwise call server AI.
       if (!state.preferAI && state.lastHits.length){
         const used = state.lastHits.slice(0, Math.min(12, state.lastHits.length));
-        state.questions = used.map(h => {
-          const z = cloze(h.text);
-          return z ? { q: z.stem, answer: z.answer, explain: "" } : null;
-        }).filter(Boolean);
+        state.questions = used.map(h => { const z=cloze(h.text); return z?{ q:z.stem, answer:z.answer, explain:"" }:null; }).filter(Boolean);
         state.qIndex = 0; $('qCount').textContent = `${state.questions.length} question(s) built from notes`;
         return renderQuestion();
       }
 
-      // AI questions
       try{
         $('qCount').textContent = 'building (AI)…';
         const r = await fetch(`${state.baseUrl}/med/test-questions`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ topic, n: 12 }) });
@@ -494,8 +508,7 @@
     function renderQuestion(){
       const area=$('testArea'); area.innerHTML='';
       if(!state.questions.length){ area.innerHTML = `<span class="muted">No questions yet.</span>`; return; }
-      const q = state.questions[state.qIndex];
-      const stem = q.q || q.stem || '';
+      const q = state.questions[state.qIndex]; const stem = q.q || q.stem || '';
       const wrap=document.createElement('div'); wrap.className='stack';
       wrap.innerHTML = `
         <div class="quote">Listen up. ${state.qIndex+1}/${state.questions.length}. ${stem}</div>
@@ -505,34 +518,25 @@
           <button id="btnReveal" class="ghost">Give up</button>
         </div>
         <div id="feedback" class="muted"></div>
-        <div class="footerbar">
-          <div class="muted">Mean attending mode: brisk corrections.</div>
-          <div>
-            <button id="btnPrev" class="ghost">Prev</button>
-            <button id="btnNext" class="ghost">Next</button>
-          </div>
+        <div class="row">
+          <button id="btnPrev" class="ghost">Prev</button>
+          <button id="btnNext" class="ghost">Next</button>
         </div>`;
       area.appendChild(wrap);
-
       const feedback = $('feedback');
       const nextQ = ()=>{ if(state.qIndex < state.questions.length-1){ state.qIndex++; renderQuestion(); } };
       const prevQ = ()=>{ if(state.qIndex > 0){ state.qIndex--; renderQuestion(); } };
-      const correct = (val, target) => {
-        const v = (val||'').trim().toLowerCase();
-        const t = (target||'').trim().toLowerCase();
-        return v && (t.includes(v) || v.includes(t));
-      };
-      document.getElementById('btnSubmit').onclick = ()=>{
-        const val = document.getElementById('ans').value;
+      const correct = (val, target) => { const v=(val||'').trim().toLowerCase(); const t=(target||'').trim().toLowerCase(); return v && (t.includes(v) || v===t); };
+      $('btnSubmit').onclick = ()=>{
+        const val = $('ans').value;
         if (correct(val, q.answer)) { feedback.innerHTML = `<span class="ok">Correct.</span>`; setTimeout(nextQ, 700); }
-        else { feedback.innerHTML = `<span class="bad">Wrong.</span> ${q.explain ? `<div>${q.explain}</div>`:''} <div class="muted">Answer: <span class="kbd">${q.answer}</span></div>`; }
+        else { feedback.innerHTML = `<span class="bad">Wrong.</span> ${q.explain?`<div>${q.explain}</div>`:''} <div class="muted">Answer: <span class="kbd">${q.answer}</span></div>`; }
       };
-      document.getElementById('btnReveal').onclick = ()=>{ feedback.innerHTML = `Answer: <span class="kbd">${q.answer}</span>${q.explain?`<div>${q.explain}</div>`:''}`; };
-      document.getElementById('btnNext').onclick = nextQ;
-      document.getElementById('btnPrev').onclick = prevQ;
+      $('btnReveal').onclick = ()=>{ feedback.innerHTML = `Answer: <span class="kbd">${q.answer}</span>${q.explain?`<div>${q.explain}</div>`:''}`; };
+      $('btnNext').onclick = nextQ; $('btnPrev').onclick = prevQ;
     }
 
-    // Preconnect
+    // Preconnect dot
     (async function preconnect(){
       try{
         const r = await fetch(`https://file-iy1w.onrender.com/med/topics`);
