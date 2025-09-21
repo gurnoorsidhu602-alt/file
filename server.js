@@ -722,6 +722,84 @@ Return STRICT JSON:
     res.status(500).json({ error: String(e) });
   }
 });
+// ====== AI Pimp Questions ======
+
+async function buildPimpQuestionsAI(topic, noteSnippets = [], n = 12) {
+  const system = `
+You are a senior Internal Medicine attending running a fast ward round.
+Create HARD, pimp-style questions. Tone: brisk, a bit mean, but professional.
+Difficulty should PROGRESS from hard to brutal. Keep stems short and clinical.
+Return STRICT JSON ONLY:
+{"questions":[{"q":"","answer":"","explain":""}]}
+- "q": the question stem
+- "answer": the expected concise answer
+- "explain": one-paragraph correction/explanation if the learner is wrong
+- Create ${n} total. No extra prose.
+`;
+
+  const user = {
+    topic,
+    note_snippets: noteSnippets.slice(0, 12), // optional grounding
+    constraints: {
+      progressive_difficulty: true,
+      number: n,
+      brevity_in_stems: true,
+      focus: "diagnosis, algorithms, must-not-miss complications, risk stratification, therapeutics, monitoring, contraindications"
+    }
+  };
+
+  const resp = await openai.responses.create({
+    model: "gpt-4.1-mini",
+    temperature: 0,
+    input: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(user) }
+    ]
+  });
+
+  const parsed = parseResponsesJSON(resp);
+  if (!parsed || !Array.isArray(parsed.questions)) return { questions: [] };
+  // Normalize and trim
+  const qs = parsed.questions.map(q => ({
+    q: String(q.q || "").trim(),
+    answer: String(q.answer || "").trim(),
+    explain: String(q.explain || "").trim()
+  })).filter(q => q.q && q.answer);
+  return { questions: qs.slice(0, n) };
+}
+
+// POST /med/test-questions  { topic, n? }
+app.post('/med/test-questions', async (req, res) => {
+  try {
+    const topic = String(req.body?.topic || "").trim();
+    const n = Math.max(4, Math.min(20, Number(req.body?.n || 12)));
+    if (!topic) return res.status(400).json({ error: "topic required" });
+
+    const snippets = searchNoteSnippets(topic, 12);
+    const out = await buildPimpQuestionsAI(topic, snippets, n);
+    if (!out.questions.length) return res.status(500).json({ error: "failed to generate questions" });
+    res.json({ ok: true, topic, count: out.questions.length, questions: out.questions });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Handy GET wrapper for quick testing in a browser:
+//   /med/test-questions?topic=Acute%20Coronary%20Syndrome&n=10
+app.get('/med/test-questions', async (req, res) => {
+  try {
+    const topic = String(req.query?.topic || "").trim();
+    const n = Math.max(4, Math.min(20, Number(req.query?.n || 12)));
+    if (!topic) return res.status(400).json({ error: "topic required" });
+    const snippets = searchNoteSnippets(topic, 12);
+    const out = await buildPimpQuestionsAI(topic, snippets, n);
+    if (!out.questions.length) return res.status(500).json({ error: "failed to generate questions" });
+    res.json({ ok: true, topic, count: out.questions.length, questions: out.questions });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 
 // --- Learn-plan helpers (place under HARDCODED_TOC) ---
 
