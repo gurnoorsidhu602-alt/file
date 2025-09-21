@@ -641,6 +641,19 @@ function tocItemsFromTree(tree) {
   return out;
 }
 
+// Normalize topic names so "Approach To X" matches "X"
+function normalizeTopicName(s = "") {
+  return String(s)
+    .toLowerCase()
+    // strip common prefixes
+    .replace(/^(approach\s*to|evaluation\s*of|diagnosis\s*of|management\s*of|treatment\s*of|overview\s*of)\s+/i, "")
+    // collapse punctuation/whitespace
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
 // === Add under HARDCODED_TOC ===
 
 // Internal Medicine disciplines (for "High-Yield (IM)")
@@ -664,84 +677,71 @@ function collectIMCandidates(excludeSet = new Set()) {
 }
 
 // High-Yield (IM) via AI
+// POST /med/high-yield-im { user_id, n? }
 app.post('/med/high-yield-im', async (req, res) => {
   try {
-    const user_id = String(req.body?.user_id || "").trim();
-    const want = Math.max(1, Math.min(10, Number(req.body?.n || 1)));
+    const user_id = String(req.body?.user_id || "Gurnoor");
+    const n = Math.max(1, Math.min(10, Number(req.body?.n || 1)));
 
-    // Exclude user's completed topics
-    let exclude = new Set();
-    if (user_id) {
-      const rows = medDb.prepare(
-        `SELECT topic FROM completed_topics WHERE user_id = ?`
-      ).all(user_id);
-      exclude = new Set(rows.map(r => r.topic));
+    // 1) Build eligible pool from your hard-coded TOC
+    //    (TOC_ITEMS must be the array of {discipline, sub, topic} you already serve at /med/toc)
+    const allTopics = Array.from(new Set(TOC_ITEMS.map(it => it.topic))).sort();
+
+    // 2) Exclude completed (normalized)
+    const completed = getCompletedTopicsForUser(user_id);
+    const completedNorm = new Set(completed.map(normalizeTopicName));
+    const eligible = allTopics.filter(t => !completedNorm.has(normalizeTopicName(t)));
+
+    if (!eligible.length) {
+      return res.json({ ok: true, ranked: [], pick: null, reason: "No eligible topics (all completed)." });
     }
 
-    // Collect IM candidates
-    const candidates = collectIMCandidates(exclude);
-    if (!candidates.length) {
-      return res.status(404).json({ error: "no eligible internal medicine topics" });
-    }
-
-    // Keep token usage sane
-    const limited = candidates.slice(0, 200);
-
-    const system = `You are a seasoned Internal Medicine attending.
-Rank topics by "high-yield" value for med learners (exam relevance, admissions frequency, emergency impact, bread-and-butter).
+    // 3) Ask AI to rank **from the eligible list only**
+    const system = `
+You are a clerkship director selecting HIGH-YIELD Internal Medicine study topics.
+From the provided list ONLY, rank topics (most to least high-yield for IM).
 Return STRICT JSON:
-{"ranked":[{"topic":"","discipline":"","sub":"","reason":"","score":0}]}
-- Use only the provided candidates.
-- "score" is 1–10 (10 = most high-yield).
-- Provide a short "reason".
-- Do not invent topics.`;
+{"ranked":[{"topic":"","reason":""}]}.
+Do NOT invent topics not in the list.
+Prefer common inpatient issues, critical emergencies, and algorithm-heavy entities.
+`;
+    const user = { topics: eligible, max: Math.min(20, eligible.length) };
 
-    const userPayload = { candidates: limited, want };
+    const resp = await responsesCall({
+      model: BASE_MODEL, // keep cheap model here
+      messages: [
+        { role: "system", content: system },
+        { role: "user",   content: JSON.stringify(user) }
+      ],
+      temperature: 0
+    });
 
-    let ranked = null;
-    try {
-      const resp = await openai.responses.create({
-        model: "gpt-4.1-mini",
-        temperature: 0,
-        input: [
-          { role: "system", content: system },
-          { role: "user", content: JSON.stringify(userPayload) }
-        ]
+    let out = parseResponsesJSON(resp) || {};
+    let ranked = Array.isArray(out.ranked) ? out.ranked : [];
+
+    // 4) Safety: filter again after AI (and drop any out-of-list items)
+    const eligibleSet = new Set(eligible);
+    ranked = ranked
+      .filter(x => x && x.topic && eligibleSet.has(x.topic))
+      .filter(x => !completedNorm.has(normalizeTopicName(x.topic)));
+
+    // 5) Fallback if AI returns nothing usable
+    if (!ranked.length) {
+      const fallback = eligible[Math.floor(Math.random() * eligible.length)];
+      return res.json({
+        ok: true,
+        ranked: [{ topic: fallback, reason: "Random fallback from eligible (AI gave no usable output)." }],
+        pick: { topic: fallback, reason: "Random fallback." }
       });
-      const parsed = parseResponsesJSON(resp);
-      if (parsed && Array.isArray(parsed.ranked)) {
-        // Validate against our candidate pool
-        const byTopic = new Map(limited.map(x => [x.topic, x]));
-        ranked = parsed.ranked
-          .map(r => {
-            const match = byTopic.get(String(r.topic || ""));
-            if (!match) return null;
-            return {
-              topic: match.topic,
-              discipline: match.discipline,
-              sub: match.sub,
-              reason: String(r.reason || ""),
-              score: Number.isFinite(Number(r.score)) ? Number(r.score) : 0
-            };
-          })
-          .filter(Boolean)
-          .slice(0, want);
-      }
-    } catch (e) {
-      // fall through to fallback
     }
 
-    if (!ranked || ranked.length === 0) {
-      // Fallback: random (rare; only if AI fails)
-      const shuffled = limited.sort(() => Math.random() - 0.5).slice(0, want);
-      ranked = shuffled.map(x => ({ ...x, reason: "fallback: random", score: 5 }));
-    }
-
-    res.json({ ok: true, pick: ranked[0], ranked });
+    const pick = ranked[0];
+    res.json({ ok: true, ranked: ranked.slice(0, n), pick });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
 });
+
 // ====== AI Pimp Questions ======
 
 async function buildPimpQuestionsAI(topic, noteSnippets = [], n = 12) {
