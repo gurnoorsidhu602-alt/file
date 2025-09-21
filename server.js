@@ -1049,6 +1049,52 @@ app.get('/med/pdfs/search', (req, res) => {
   }
 });
 
+// ==== Med Learner: ensure standard PDF is indexed on startup ====
+// Prefer ENV so you can swap the file without changing code.
+const STANDARD_PDF_URL =
+  process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
+const STANDARD_PDF_LABEL =
+  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
+
+// Optional: prevent accidental duplicate labels from different deploys
+medDb.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pdf_label_unique
+  ON pdf_docs(label) WHERE label IS NOT NULL;
+`);
+
+// Returns true if a doc with this label already exists
+function pdfExistsByLabel(label) {
+  const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
+  return !!row;
+}
+
+async function ensureStandardPdfIndexed() {
+  try {
+    if (!STANDARD_PDF_URL) {
+      console.warn('[MedLearner] STANDARD_PDF_URL not set; skipping auto-index.');
+      return;
+    }
+    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) {
+      console.log(`[MedLearner] Standard PDF already indexed: ${STANDARD_PDF_LABEL}`);
+      return;
+    }
+    console.log(`[MedLearner] Fetching standard PDF from ${STANDARD_PDF_URL}`);
+    const resp = await fetch(STANDARD_PDF_URL);
+    if (!resp.ok) {
+      console.error(`[MedLearner] Failed to fetch standard PDF: ${resp.status}`);
+      return;
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const { docId, nChunks } = await indexPdfBuffer(buf, STANDARD_PDF_LABEL);
+    console.log(`[MedLearner] Indexed standard PDF "${STANDARD_PDF_LABEL}" as ${docId} (${nChunks} chunks).`);
+  } catch (err) {
+    console.error('[MedLearner] Error ensuring standard PDF:', err);
+  }
+}
+
+// Kick it off at boot—non-blocking
+ensureStandardPdfIndexed();
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // START
