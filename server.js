@@ -621,6 +621,109 @@ function tocItemsFromTree(tree) {
   return out;
 }
 
+// === Add under HARDCODED_TOC ===
+
+// Internal Medicine disciplines (for "High-Yield (IM)")
+const INTERNAL_MED_DISC_SET = new Set([
+  "Cardiology","Endocrinology","Gastroenterology","Hematology",
+  "Infectious Disease","Nephrology","Neurology","Respirology","Rheumatology"
+]);
+
+function collectIMCandidates(excludeSet = new Set()) {
+  const out = [];
+  for (const [disc, subs] of Object.entries(HARDCODED_TOC)) {
+    if (!INTERNAL_MED_DISC_SET.has(disc)) continue;
+    for (const [sub, topics] of Object.entries(subs)) {
+      for (const topic of topics) {
+        if (excludeSet.has(topic)) continue;
+        out.push({ discipline: disc, sub, topic });
+      }
+    }
+  }
+  return out;
+}
+
+// High-Yield (IM) via AI
+app.post('/med/high-yield-im', async (req, res) => {
+  try {
+    const user_id = String(req.body?.user_id || "").trim();
+    const want = Math.max(1, Math.min(10, Number(req.body?.n || 1)));
+
+    // Exclude user's completed topics
+    let exclude = new Set();
+    if (user_id) {
+      const rows = medDb.prepare(
+        `SELECT topic FROM completed_topics WHERE user_id = ?`
+      ).all(user_id);
+      exclude = new Set(rows.map(r => r.topic));
+    }
+
+    // Collect IM candidates
+    const candidates = collectIMCandidates(exclude);
+    if (!candidates.length) {
+      return res.status(404).json({ error: "no eligible internal medicine topics" });
+    }
+
+    // Keep token usage sane
+    const limited = candidates.slice(0, 200);
+
+    const system = `You are a seasoned Internal Medicine attending.
+Rank topics by "high-yield" value for med learners (exam relevance, admissions frequency, emergency impact, bread-and-butter).
+Return STRICT JSON:
+{"ranked":[{"topic":"","discipline":"","sub":"","reason":"","score":0}]}
+- Use only the provided candidates.
+- "score" is 1–10 (10 = most high-yield).
+- Provide a short "reason".
+- Do not invent topics.`;
+
+    const userPayload = { candidates: limited, want };
+
+    let ranked = null;
+    try {
+      const resp = await openai.responses.create({
+        model: "gpt-4.1-mini",
+        temperature: 0,
+        input: [
+          { role: "system", content: system },
+          { role: "user", content: JSON.stringify(userPayload) }
+        ]
+      });
+      const parsed = parseResponsesJSON(resp);
+      if (parsed && Array.isArray(parsed.ranked)) {
+        // Validate against our candidate pool
+        const byTopic = new Map(limited.map(x => [x.topic, x]));
+        ranked = parsed.ranked
+          .map(r => {
+            const match = byTopic.get(String(r.topic || ""));
+            if (!match) return null;
+            return {
+              topic: match.topic,
+              discipline: match.discipline,
+              sub: match.sub,
+              reason: String(r.reason || ""),
+              score: Number.isFinite(Number(r.score)) ? Number(r.score) : 0
+            };
+          })
+          .filter(Boolean)
+          .slice(0, want);
+      }
+    } catch (e) {
+      // fall through to fallback
+    }
+
+    if (!ranked || ranked.length === 0) {
+      // Fallback: random (rare; only if AI fails)
+      const shuffled = limited.sort(() => Math.random() - 0.5).slice(0, want);
+      ranked = shuffled.map(x => ({ ...x, reason: "fallback: random", score: 5 }));
+    }
+
+    res.json({ ok: true, pick: ranked[0], ranked });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+
 // ------------------------------ ADMIN NUKE (kept) ---------------------------
 app.delete('/admin/wipe', async (req, res) => {
   try {
