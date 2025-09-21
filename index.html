@@ -29,6 +29,7 @@
     @media (max-width:980px){ .grid{grid-template-columns:1fr} select[multiple]{min-width:100%} }
     .overlay{position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center}
     .modal{width:min(560px,92vw); background:var(--card); border:1px solid var(--border); border-radius:16px; padding:20px}
+    .kbd{background:#0c132c;border:1px solid var(--border);padding:2px 6px;border-radius:6px}
   </style>
 </head>
 <body>
@@ -77,7 +78,7 @@
       </div>
 
       <div class="card">
-        <div class="section-title">TOC (from standard PDF)</div>
+        <div class="section-title">TOC (from server)</div>
         <div id="tocStatus" class="muted">Loading…</div>
         <div class="row">
           <span class="muted">Disciplines:</span> <span id="discCount" class="tag">0</span>
@@ -91,22 +92,37 @@
       <!-- PICK -->
       <div class="card stack" id="modePick">
         <div class="section-title">Pick Mode</div>
+
         <div class="row">
           <div class="stack">
-            <div class="muted">1) Disciplines</div>
+            <div class="row">
+              <div class="muted">1) Disciplines</div>
+              <button id="btnRandomDisc" class="ghost" title="Random discipline">🎲 Random</button>
+            </div>
             <select id="selDisc" multiple></select>
           </div>
+
           <div class="stack">
-            <div class="muted">2) Sub-disciplines</div>
+            <div class="row">
+              <div class="muted">2) Sub-disciplines</div>
+              <button id="btnRandomSub" class="ghost" title="Random sub-discipline" disabled>🎲 Random</button>
+            </div>
             <select id="selSub" multiple disabled></select>
           </div>
+
           <div class="stack">
-            <div class="muted">3) Topics</div>
+            <div class="row">
+              <div class="muted">3) Topics</div>
+              <button id="btnRandomTopic" class="ghost" title="Random topic" disabled>🎲 Random</button>
+            </div>
             <select id="selTopic" multiple disabled></select>
           </div>
         </div>
+
         <div class="row">
           <button id="btnPickFromSelections" class="primary">Pick from Selections</button>
+          <button id="btnRandomAny" class="ghost">🎲 Random Any (exclude completed)</button>
+          <button id="btnHighYieldIM" class="ghost">⚡ High-Yield (IM)</button>
           <button id="btnClearSelections" class="ghost">Clear</button>
         </div>
         <div id="pickResult" class="stack"></div>
@@ -180,6 +196,8 @@
     const show = (el, on=true) => el.classList.toggle('hidden', !on);
     const sanitize = s => (s||'').trim();
 
+    const selDisc = $('selDisc'), selSub = $('selSub'), selTopic = $('selTopic');
+
     // ---------- Login ----------
     $('btnStart').onclick = async () => {
       state.userId = sanitize($('loginUser').value) || 'Gurnoor';
@@ -215,7 +233,7 @@
         state.connected = false; dot.textContent = 'disconnected'; dot.style.color = 'var(--muted)';
       }
       await loadCompleted();
-      await fetchTOC();        // <-- new: TOC from /med/toc
+      await fetchTOC();        // TOC from /med/toc
       selectMode('pick');
     }
 
@@ -240,9 +258,7 @@
     $('btnLoadTopics').onclick = loadCompleted;
     $('btnRefreshTopics').onclick = loadCompleted;
 
-    // ---------- NEW: fetch TOC from /med/toc ----------
-    const selDisc = $('selDisc'), selSub = $('selSub'), selTopic = $('selTopic');
-
+    // ---------- Fetch TOC ----------
     async function fetchTOC(){
       const s = $('tocStatus');
       s.textContent = 'Loading…';
@@ -278,6 +294,7 @@
       }
     }
 
+    // ---------- Populate / selection flow ----------
     function populateDisciplines(){
       selDisc.innerHTML = '';
       const discs = [...state.discToSub.keys()].sort((a,b)=>a.localeCompare(b));
@@ -285,13 +302,13 @@
         const opt = document.createElement('option'); opt.value=d; opt.textContent=d;
         selDisc.appendChild(opt);
       });
-      selSub.innerHTML=''; selSub.disabled = true;
-      selTopic.innerHTML=''; selTopic.disabled = true;
+      selSub.innerHTML=''; selSub.disabled = true; $('btnRandomSub').disabled = true;
+      selTopic.innerHTML=''; selTopic.disabled = true; $('btnRandomTopic').disabled = true;
     }
 
     selDisc.onchange = ()=>{
       const chosen = [...selDisc.selectedOptions].map(o=>o.value);
-      selSub.innerHTML=''; selTopic.innerHTML=''; selTopic.disabled=true;
+      selSub.innerHTML=''; selTopic.innerHTML=''; selTopic.disabled=true; $('btnRandomTopic').disabled = true;
 
       const subs = new Set();
       chosen.forEach(d => (state.discToSub.get(d)||new Set()).forEach(s=>subs.add(s)));
@@ -300,6 +317,7 @@
         selSub.appendChild(opt);
       });
       selSub.disabled = subs.size===0;
+      $('btnRandomSub').disabled = subs.size===0;
     };
 
     selSub.onchange = ()=>{
@@ -320,6 +338,7 @@
         selTopic.appendChild(opt);
       });
       selTopic.disabled = topics.size===0;
+      $('btnRandomTopic').disabled = topics.size===0;
     };
 
     $('btnClearSelections').onclick = ()=>{ populateDisciplines(); $('pickResult').innerHTML=''; };
@@ -331,13 +350,74 @@
       renderPickConfirmation(pool[0]);
     };
 
-    function renderPickConfirmation(topic){
+    // ---------- Randomizers ----------
+    function setSingle(selectEl, value){
+      [...selectEl.options].forEach(o => o.selected = (o.value === value));
+      selectEl.dispatchEvent(new Event('change'));
+    }
+    $('btnRandomDisc').onclick = ()=>{
+      const discs = [...state.discToSub.keys()];
+      if(!discs.length) return;
+      const pick = discs[Math.floor(Math.random()*discs.length)];
+      setSingle(selDisc, pick);
+    };
+    $('btnRandomSub').onclick = ()=>{
+      const discs = [...selDisc.selectedOptions].map(o=>o.value);
+      if(!discs.length) return;
+      const subs = new Set();
+      discs.forEach(d => (state.discToSub.get(d)||new Set()).forEach(s=>subs.add(s)));
+      const arr = [...subs];
+      if(!arr.length) return;
+      const pick = arr[Math.floor(Math.random()*arr.length)];
+      setSingle(selSub, pick);
+    };
+    $('btnRandomTopic').onclick = ()=>{
+      const discs = [...selDisc.selectedOptions].map(o=>o.value);
+      const subs  = [...selSub.selectedOptions].map(o=>o.value);
+      const topics = new Set();
+      discs.forEach(d => subs.forEach(s => (state.subToTopics.get(`${d}::${s}`)||new Set()).forEach(t => {
+        if(!state.completed.has(t)) topics.add(t);
+      })));
+      const arr = [...topics];
+      if(!arr.length){ alert('No eligible topics in this selection.'); return; }
+      const pick = arr[Math.floor(Math.random()*arr.length)];
+      renderPickConfirmation(pick);
+    };
+    $('btnRandomAny').onclick = ()=>{
+      const pool = [...state.allTopics].filter(t=>!state.completed.has(t));
+      if(!pool.length){ alert('No eligible topics.'); return; }
+      const pick = pool[Math.floor(Math.random()*pool.length)];
+      renderPickConfirmation(pick);
+    };
+
+    // ---------- High-Yield (IM) via server AI ----------
+    $('btnHighYieldIM').onclick = async ()=>{
+      const body = { user_id: state.userId, n: 1 };
+      try{
+        const r = await fetch(`${state.baseUrl}/med/high-yield-im`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(body)
+        });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error || 'AI pick failed');
+        const pick = j.pick || (j.ranked && j.ranked[0]);
+        if(!pick) throw new Error('No AI pick returned');
+        renderPickConfirmation(pick.topic, pick.reason);
+      }catch(err){
+        alert(`High-Yield pick failed: ${err.message}`);
+      }
+    };
+
+    // ---------- Confirm pick ----------
+    function renderPickConfirmation(topic, reason){
       state.pickedTopic = topic;
       const box = $('pickResult'); box.innerHTML='';
       const wrap = document.createElement('div');
       wrap.className='stack';
+      const reasonHtml = reason ? `<div class="muted">AI rationale: ${reason}</div>` : '';
       wrap.innerHTML = `
         <div class="quote">Topic Selected: ${topic}\nWould you like to confirm this topic?</div>
+        ${reasonHtml}
         <div class="row">
           <button id="btnConfirmPick" class="primary">Yes</button>
           <button id="btnRejectPick">No</button>
@@ -359,7 +439,7 @@
     function buildGuidelineLinks(topic){
       const links = $('extLinks'); links.innerHTML='';
       const enc = encodeURIComponent(topic);
-      const a = (href, label) => { const el=document.createElement('a'); el.href=href; el.target='_blank'; el.rel='noopener'; el.textContent=label; return el; };
+      const a = (href, label) => { const el=document.createElement('a'); el.href=href; el.target='_blank'; el.rel='noopener'; el.textContent=label; el.style.marginRight='10px'; return el; };
       links.appendChild(a(`https://www.google.com/search?q=${enc}+site:cmaj.ca+guideline`, "CMAJ guideline"));
       links.appendChild(a(`https://www.google.com/search?q=${enc}+site:ccs.ca+guideline`, "CCS (Canada)"));
       links.appendChild(a(`https://www.google.com/search?q=${enc}+site:cts-sct.ca+guideline`, "CTS (Canada)"));
