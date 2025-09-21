@@ -326,6 +326,123 @@ async function applyScoreDelta(username, delta, wasCorrect) {
   return newScore;
 }
 
+// ==== Med Learner: ensure standard PDF is indexed on startup ====
+// Prefer ENV so you can swap the file without changing code.
+const STANDARD_PDF_URL =
+  process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
+const STANDARD_PDF_LABEL =
+  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
+
+// Optional: prevent accidental duplicate labels from different deploys
+medDb.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pdf_label_unique
+  ON pdf_docs(label) WHERE label IS NOT NULL;
+`);
+
+// Returns true if a doc with this label already exists
+function pdfExistsByLabel(label) {
+  const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
+  return !!row;
+}
+
+async function ensureStandardPdfIndexed() {
+  try {
+    if (!STANDARD_PDF_URL) {
+      console.warn('[MedLearner] STANDARD_PDF_URL not set; skipping auto-index.');
+      return;
+    }
+    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) {
+      console.log(`[MedLearner] Standard PDF already indexed: ${STANDARD_PDF_LABEL}`);
+      return;
+    }
+    console.log(`[MedLearner] Fetching standard PDF from ${STANDARD_PDF_URL}`);
+    const resp = await fetch(STANDARD_PDF_URL);
+    if (!resp.ok) {
+      console.error(`[MedLearner] Failed to fetch standard PDF: ${resp.status}`);
+      return;
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const { docId, nChunks } = await indexPdfBuffer(buf, STANDARD_PDF_LABEL);
+    console.log(`[MedLearner] Indexed standard PDF "${STANDARD_PDF_LABEL}" as ${docId} (${nChunks} chunks).`);
+  } catch (err) {
+    console.error('[MedLearner] Error ensuring standard PDF:', err);
+  }
+}
+
+// Kick it off at boot—non-blocking
+ensureStandardPdfIndexed();
+
+// ==== Med Learner: TOC endpoint derived from the standard PDF ====
+const STANDARD_PDF_LABEL =
+  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
+
+app.get('/med/toc', (req, res) => {
+  try {
+    const label = req.query.label || STANDARD_PDF_LABEL;
+
+    // Pull all chunk text for the labeled doc
+    const rows = medDb.prepare(`
+      SELECT pc.text
+      FROM pdf_chunks pc
+      JOIN pdf_docs pd ON pd.id = pc.doc_id
+      WHERE pd.label = ?
+    `).all(label);
+
+    if (!rows.length) {
+      return res.status(404).json({ error: `No chunks found for label "${label}". Is the PDF indexed?` });
+    }
+
+    const items = []; // { discipline, sub, topic }
+
+    const push = (disc, sub, topic) => {
+      disc = (disc || '').trim();
+      sub  = (sub  || '').trim();
+      topic= (topic|| '').trim();
+      if (!disc || !sub || !topic) return;
+      items.push({ discipline: disc, sub, topic });
+    };
+
+    // Parse lines into Discipline > Sub > Topic with a few tolerant patterns
+    for (const { text } of rows) {
+      const lines = String(text || '')
+        .split(/\r?\n/)
+        .map(s => s.replace(/^\s*[-*•]\s*/, '').trim())
+        .filter(Boolean);
+
+      for (const s of lines) {
+        // 1) Strict ">" separators
+        let m = s.match(/^([^>]{2,}?)\s*>\s*([^>]{2,}?)\s*>\s*(.+)$/);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+
+        // 2) Colon / em-dash / hyphen separators
+        m = s.match(/^(.+?)\s*[:—-]\s*(.+?)\s*[:—-]\s*(.+)$/);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+
+        // 3) Labeled headings within a line
+        m = s.match(/Discipline[:\s-]+([A-Za-z/ &-]+).+Sub[-\s]?discipline[:\s-]+([A-Za-z/ &-]+).+Topic[:\s-]+(.+)/i);
+        if (m) { push(m[1], m[2], m[3]); continue; }
+      }
+    }
+
+    if (!items.length) {
+      return res.status(200).json({ ok: true, items: [], counts: { disciplines: 0, subs: 0, topics: 0 } });
+    }
+
+    // Build counts
+    const discSet = new Set(items.map(i => i.discipline));
+    const subSet  = new Set(items.map(i => `${i.discipline}::${i.sub}`));
+    const topicSet= new Set(items.map(i => i.topic));
+
+    return res.json({
+      ok: true,
+      label,
+      items, // [{discipline, sub, topic}]
+      counts: { disciplines: discSet.size, subs: subSet.size, topics: topicSet.size }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // put this helper near your other helpers
 // SAFE: never throws, only parses when a string clearly looks like JSON.
@@ -1049,123 +1166,7 @@ app.get('/med/pdfs/search', (req, res) => {
   }
 });
 
-// ==== Med Learner: ensure standard PDF is indexed on startup ====
-// Prefer ENV so you can swap the file without changing code.
-const STANDARD_PDF_URL =
-  process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
-const STANDARD_PDF_LABEL =
-  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
 
-// Optional: prevent accidental duplicate labels from different deploys
-medDb.exec(`
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_pdf_label_unique
-  ON pdf_docs(label) WHERE label IS NOT NULL;
-`);
-
-// Returns true if a doc with this label already exists
-function pdfExistsByLabel(label) {
-  const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
-  return !!row;
-}
-
-async function ensureStandardPdfIndexed() {
-  try {
-    if (!STANDARD_PDF_URL) {
-      console.warn('[MedLearner] STANDARD_PDF_URL not set; skipping auto-index.');
-      return;
-    }
-    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) {
-      console.log(`[MedLearner] Standard PDF already indexed: ${STANDARD_PDF_LABEL}`);
-      return;
-    }
-    console.log(`[MedLearner] Fetching standard PDF from ${STANDARD_PDF_URL}`);
-    const resp = await fetch(STANDARD_PDF_URL);
-    if (!resp.ok) {
-      console.error(`[MedLearner] Failed to fetch standard PDF: ${resp.status}`);
-      return;
-    }
-    const buf = Buffer.from(await resp.arrayBuffer());
-    const { docId, nChunks } = await indexPdfBuffer(buf, STANDARD_PDF_LABEL);
-    console.log(`[MedLearner] Indexed standard PDF "${STANDARD_PDF_LABEL}" as ${docId} (${nChunks} chunks).`);
-  } catch (err) {
-    console.error('[MedLearner] Error ensuring standard PDF:', err);
-  }
-}
-
-// Kick it off at boot—non-blocking
-ensureStandardPdfIndexed();
-
-// ==== Med Learner: TOC endpoint derived from the standard PDF ====
-const STANDARD_PDF_LABEL =
-  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
-
-app.get('/med/toc', (req, res) => {
-  try {
-    const label = req.query.label || STANDARD_PDF_LABEL;
-
-    // Pull all chunk text for the labeled doc
-    const rows = medDb.prepare(`
-      SELECT pc.text
-      FROM pdf_chunks pc
-      JOIN pdf_docs pd ON pd.id = pc.doc_id
-      WHERE pd.label = ?
-    `).all(label);
-
-    if (!rows.length) {
-      return res.status(404).json({ error: `No chunks found for label "${label}". Is the PDF indexed?` });
-    }
-
-    const items = []; // { discipline, sub, topic }
-
-    const push = (disc, sub, topic) => {
-      disc = (disc || '').trim();
-      sub  = (sub  || '').trim();
-      topic= (topic|| '').trim();
-      if (!disc || !sub || !topic) return;
-      items.push({ discipline: disc, sub, topic });
-    };
-
-    // Parse lines into Discipline > Sub > Topic with a few tolerant patterns
-    for (const { text } of rows) {
-      const lines = String(text || '')
-        .split(/\r?\n/)
-        .map(s => s.replace(/^\s*[-*•]\s*/, '').trim())
-        .filter(Boolean);
-
-      for (const s of lines) {
-        // 1) Strict ">" separators
-        let m = s.match(/^([^>]{2,}?)\s*>\s*([^>]{2,}?)\s*>\s*(.+)$/);
-        if (m) { push(m[1], m[2], m[3]); continue; }
-
-        // 2) Colon / em-dash / hyphen separators
-        m = s.match(/^(.+?)\s*[:—-]\s*(.+?)\s*[:—-]\s*(.+)$/);
-        if (m) { push(m[1], m[2], m[3]); continue; }
-
-        // 3) Labeled headings within a line
-        m = s.match(/Discipline[:\s-]+([A-Za-z/ &-]+).+Sub[-\s]?discipline[:\s-]+([A-Za-z/ &-]+).+Topic[:\s-]+(.+)/i);
-        if (m) { push(m[1], m[2], m[3]); continue; }
-      }
-    }
-
-    if (!items.length) {
-      return res.status(200).json({ ok: true, items: [], counts: { disciplines: 0, subs: 0, topics: 0 } });
-    }
-
-    // Build counts
-    const discSet = new Set(items.map(i => i.discipline));
-    const subSet  = new Set(items.map(i => `${i.discipline}::${i.sub}`));
-    const topicSet= new Set(items.map(i => i.topic));
-
-    return res.json({
-      ok: true,
-      label,
-      items, // [{discipline, sub, topic}]
-      counts: { disciplines: discSet.size, subs: subSet.size, topics: topicSet.size }
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 ////////////////////////////////////////////////////////////////////////////////
 // START
