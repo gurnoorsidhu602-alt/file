@@ -319,62 +319,149 @@ async function ensureStandardPdfIndexed() {
 }
 ensureStandardPdfIndexed();
 
-// ==== Med Learner: TOC endpoint derived from the standard PDF ====
+// ===== MED LEARNER: TOC endpoint (handles ●/○ bullets + wrapped lines) =====
 app.get('/med/toc', (req, res) => {
   try {
-    const label = req.query.label || STANDARD_PDF_LABEL;
+    const label = req.query.label || (process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1');
+    const wantDebug = String(req.query.debug || '0') === '1';
 
+    // 1) Pull all text for the labeled doc (in order)
     const rows = medDb.prepare(`
       SELECT pc.text
       FROM pdf_chunks pc
       JOIN pdf_docs pd ON pd.id = pc.doc_id
       WHERE pd.label = ?
+      ORDER BY pc.ord
     `).all(label);
 
     if (!rows.length) {
       return res.status(404).json({ error: `No chunks found for label "${label}". Is the PDF indexed?` });
     }
 
+    // 2) Split into raw lines
+    const rawLines = [];
+    for (const { text } of rows) {
+      String(text || '').split(/\r?\n/).forEach(line => rawLines.push(line));
+    }
+
+    // 3) Consolidate wrapped lines into bullet entries
+    //    We keep the lead bullet (● or ○) and append subsequent non-bullet lines.
+    const BULLET_RE = /^\s*([●○])\s*(.*)$/; // \u25CF \u25CB
+    const entries = []; // [{bullet:'●'|'○', text:'...'}]
+    let pending = null;
+
+    for (let i = 0; i < rawLines.length; i++) {
+      let line = rawLines[i] || '';
+      // trim dot-leaders + page numbers (rare in your file, but safe)
+      line = line.replace(/\.{2,}\s*\d+\s*$/, '');
+      // collapse whitespace
+      line = line.replace(/\s{2,}/g, ' ').trim();
+
+      if (!line) continue;
+
+      const m = line.match(BULLET_RE);
+      if (m) {
+        // push previous pending
+        if (pending && pending.text.trim()) entries.push(pending);
+        const bullet = m[1];
+        const text = (m[2] || '').trim();
+        if (!text) {
+          pending = null; // ignore empty bullets
+        } else {
+          pending = { bullet, text };
+        }
+      } else {
+        // continuation of previous bullet line (soft wrap)
+        if (pending) {
+          pending.text += ' ' + line;
+        } else {
+          // no active bullet; ignore orphan content
+        }
+      }
+    }
+    if (pending && pending.text.trim()) entries.push(pending);
+
+    if (wantDebug) {
+      return res.json({ ok: true, label, sample_count: Math.min(entries.length, 200), sample: entries.slice(0,200) });
+    }
+
+    // 4) Interpret hierarchy:
+    //    ● at top-level = Discipline, ○ = Sub, ● when a sub is active = Topic.
+    //    Ambiguity: a new Discipline also starts with ●; we detect it if the next
+    //    significant entry is a ○ (subhead) OR there is no active sub.
     const items = [];
-    const push = (disc, sub, topic) => {
-      disc = (disc || '').trim();
-      sub  = (sub  || '').trim();
-      topic= (topic|| '').trim();
+    let currentDisc = null;
+    let currentSub  = null;
+
+    const pushItem = (disc, sub, topic) => {
+      disc  = (disc  || '').trim();
+      sub   = (sub   || '').trim();
+      topic = (topic || '').trim();
       if (disc && sub && topic) items.push({ discipline: disc, sub, topic });
     };
 
-    for (const { text } of rows) {
-      const lines = String(text || '')
-        .split(/\r?\n/)
-        .map(s => s.replace(/^\s*[-*•]\s*/, '').trim())
-        .filter(Boolean);
+    const nextNonEmpty = (fromIdx) => {
+      for (let j = fromIdx + 1; j < entries.length; j++) {
+        const e = entries[j];
+        if (e && e.text && e.text.trim()) return e;
+      }
+      return null;
+    };
 
-      for (const s of lines) {
-        let m = s.match(/^([^>]{2,}?)\s*>\s*([^>]{2,}?)\s*>\s*(.+)$/);
-        if (m) { push(m[1], m[2], m[3]); continue; }
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (!e.text) continue;
 
-        m = s.match(/^(.+?)\s*[:—-]\s*(.+?)\s*[:—-]\s*(.+)$/);
-        if (m) { push(m[1], m[2], m[3]); continue; }
+      if (e.bullet === '○') {
+        // Sub-discipline
+        currentSub = e.text;
+        if (!currentDisc) {
+          // If a sub appears before a discipline (rare), treat as a new discipline
+          currentDisc = 'General';
+        }
+        continue;
+      }
 
-        m = s.match(/Discipline[:\s-]+([A-Za-z/ &-]+).+Sub[-\s]?discipline[:\s-]+([A-Za-z/ &-]+).+Topic[:\s-]+(.+)/i);
-        if (m) { push(m[1], m[2], m[3]); continue; }
+      if (e.bullet === '●') {
+        const next = nextNonEmpty(i);
+        const isNewDiscipline = !currentSub || (next && next.bullet === '○');
+
+        if (isNewDiscipline) {
+          // New discipline heading
+          currentDisc = e.text;
+          currentSub  = null;
+        } else {
+          // Topic under the current sub
+          if (currentDisc && currentSub) {
+            pushItem(currentDisc, currentSub, e.text);
+          }
+        }
       }
     }
 
-    const discSet  = new Set(items.map(i => i.discipline));
-    const subSet   = new Set(items.map(i => `${i.discipline}::${i.sub}`));
-    const topicSet = new Set(items.map(i => i.topic));
+    // 5) De-dup + counts
+    const uniq = [];
+    const seen = new Set();
+    for (const it of items) {
+      const k = `${it.discipline}__${it.sub}__${it.topic}`;
+      if (!seen.has(k)) { seen.add(k); uniq.push(it); }
+    }
+
+    const discs  = new Set(uniq.map(i => i.discipline));
+    const subs   = new Set(uniq.map(i => `${i.discipline}::${i.sub}`));
+    const topics = new Set(uniq.map(i => i.topic));
 
     res.json({
       ok: true,
       label,
-      items,
-      counts: { disciplines: discSet.size, subs: subSet.size, topics: topicSet.size }
+      items: uniq,
+      counts: { disciplines: discs.size, subs: subs.size, topics: topics.size }
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
 
 // ---------- Response parsing helpers ----------
 function parseResponsesJSON(resp) {
