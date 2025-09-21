@@ -726,10 +726,12 @@ Return STRICT JSON:
 // --- Learn-plan helpers (place under HARDCODED_TOC) ---
 
 // If you already added this earlier for high-yield, keep one copy only.
+/*
 const INTERNAL_MED_DISC_SET = new Set([
   "Cardiology","Endocrinology","Gastroenterology","Hematology",
   "Infectious Disease","Nephrology","Neurology","Respirology","Rheumatology"
 ]);
+*/
 
 // Simple FTS search into your indexed notes (if any) to provide context to the AI.
 // It’s OK if you haven’t indexed anything yet; the endpoint will still work.
