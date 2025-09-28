@@ -683,11 +683,13 @@ app.post('/med/high-yield-im', async (req, res) => {
     const user_id = String(req.body?.user_id || "Gurnoor");
     const n = Math.max(1, Math.min(10, Number(req.body?.n || 1)));
 
-    // 1) Build eligible pool from your hard-coded TOC
-    //    (TOC_ITEMS must be the array of {discipline, sub, topic} you already serve at /med/toc)
-    const allTopics = Array.from(new Set(TOC_ITEMS.map(it => it.topic))).sort();
+    // Build eligible pool from the hard-coded TOC
+    // (previously used TOC_ITEMS which didn't exist -> ReferenceError)
+    const allTopics = Array.from(
+      new Set(tocItemsFromTree(HARDCODED_TOC).map(it => it.topic))
+    ).sort();
 
-    // 2) Exclude completed (normalized)
+    // Exclude completed (normalized)
     const completed = getCompletedTopicsForUser(user_id);
     const completedNorm = new Set(completed.map(normalizeTopicName));
     const eligible = allTopics.filter(t => !completedNorm.has(normalizeTopicName(t)));
@@ -696,7 +698,7 @@ app.post('/med/high-yield-im', async (req, res) => {
       return res.json({ ok: true, ranked: [], pick: null, reason: "No eligible topics (all completed)." });
     }
 
-    // 3) Ask AI to rank **from the eligible list only**
+    // Ask AI to rank **from the eligible list only**
     const system = `
 You are a clerkship director selecting HIGH-YIELD Internal Medicine study topics.
 From the provided list ONLY, rank topics (most to least high-yield for IM).
@@ -708,7 +710,7 @@ Prefer common inpatient issues, critical emergencies, and algorithm-heavy entiti
     const user = { topics: eligible, max: Math.min(20, eligible.length) };
 
     const resp = await responsesCall({
-      model: BASE_MODEL, // keep cheap model here
+      model: BASE_MODEL,
       messages: [
         { role: "system", content: system },
         { role: "user",   content: JSON.stringify(user) }
@@ -719,13 +721,13 @@ Prefer common inpatient issues, critical emergencies, and algorithm-heavy entiti
     let out = parseResponsesJSON(resp) || {};
     let ranked = Array.isArray(out.ranked) ? out.ranked : [];
 
-    // 4) Safety: filter again after AI (and drop any out-of-list items)
+    // Safety: filter again after AI (and drop any out-of-list items)
     const eligibleSet = new Set(eligible);
     ranked = ranked
       .filter(x => x && x.topic && eligibleSet.has(x.topic))
       .filter(x => !completedNorm.has(normalizeTopicName(x.topic)));
 
-    // 5) Fallback if AI returns nothing usable
+    // Fallback if AI returns nothing usable
     if (!ranked.length) {
       const fallback = eligible[Math.floor(Math.random() * eligible.length)];
       return res.json({
@@ -741,6 +743,7 @@ Prefer common inpatient issues, critical emergencies, and algorithm-heavy entiti
     res.status(500).json({ error: String(e) });
   }
 });
+
 
 // ====== AI Pimp Questions ======
 
