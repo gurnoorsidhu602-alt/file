@@ -684,18 +684,28 @@ app.post('/med/high-yield-im', async (req, res) => {
     const n = Math.max(1, Math.min(10, Number(req.body?.n || 1)));
 
     // Build eligible pool from the hard-coded TOC
-    // (previously used TOC_ITEMS which didn't exist -> ReferenceError)
     const allTopics = Array.from(
       new Set(tocItemsFromTree(HARDCODED_TOC).map(it => it.topic))
     ).sort();
 
-    // Exclude completed (normalized)
-    const completed = getCompletedTopicsForUser(user_id);
+    // --- INLINE fetch of completed topics for this user (replaces missing helper) ---
+    const completedRows = medDb
+      .prepare(`SELECT topic FROM completed_topics WHERE user_id = ?`)
+      .all(user_id);
+    const completed = completedRows.map(r => r.topic);
     const completedNorm = new Set(completed.map(normalizeTopicName));
-    const eligible = allTopics.filter(t => !completedNorm.has(normalizeTopicName(t)));
+
+    const eligible = allTopics.filter(
+      t => !completedNorm.has(normalizeTopicName(t))
+    );
 
     if (!eligible.length) {
-      return res.json({ ok: true, ranked: [], pick: null, reason: "No eligible topics (all completed)." });
+      return res.json({
+        ok: true,
+        ranked: [],
+        pick: null,
+        reason: "No eligible topics (all completed)."
+      });
     }
 
     // Ask AI to rank **from the eligible list only**
@@ -743,6 +753,7 @@ Prefer common inpatient issues, critical emergencies, and algorithm-heavy entiti
     res.status(500).json({ error: String(e) });
   }
 });
+
 
 
 // ====== AI Pimp Questions ======
