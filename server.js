@@ -11,6 +11,8 @@ import Database from 'better-sqlite3';
 import multer from 'multer';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { v4 as uuid, v4 as uuidv4 } from 'uuid';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 ////////////////////////////////////////////////////////////////////////////////
 // CONFIG & INIT
@@ -22,13 +24,23 @@ app.options('*', cors()); // handle CORS preflight
 
 app.use(express.json());
 
+// Serve the frontends from the same Render Web Service as the API.
+// This avoids hard-coded backend URLs and CORS/fetch failures.
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/index.html', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/learner', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
+app.get('/learner.html', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
+app.get('/medlearner', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
+
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN
 });
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-key' });
 const PORT = process.env.PORT || 3000;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // --- Models ---
 // Cheaper default for most tasks:
@@ -784,10 +796,10 @@ Return STRICT JSON ONLY:
     }
   };
 
-  const resp = await openai.responses.create({
-    model: "gpt-4.1-mini",
+  const resp = await responsesCall({
+    model: process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini",
     temperature: 0,
-    input: [
+    messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(user) }
     ]
@@ -907,10 +919,10 @@ RULES
     max_trials: 12
   };
 
-  const resp = await openai.responses.create({
+  const resp = await responsesCall({
     model: BASE_MODEL,
     temperature: 0,
-    input: [
+    messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
     ]
@@ -1103,6 +1115,7 @@ const kUser = (u) => `user:${u}`;
 const kExcl = (u) => `excl:${u}`;
 const kSess = (s) => `sess:${s}`;
 const kSessItems = (s) => `sess:${s}:items`;
+const kHistory = (u) => `history:${u}`;
 
 // DEBUGGERS (kept)
 app.get("/admin/raw-items", async (req, res) => {
@@ -1285,24 +1298,36 @@ async function getSessionItems(sessionId) {
   return items;
 }
 
-async function pushSessionItem(sessionId, item) { await redis.rpush(kSessItems(sessionId), item); }
+function parseMaybeJSON(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (!t) return null;
+  if (t.startsWith("{") || t.startsWith("[")) {
+    try { return JSON.parse(t); } catch { return null; }
+  }
+  return null;
+}
+
+async function pushSessionItem(sessionId, item) {
+  await redis.rpush(kSessItems(sessionId), JSON.stringify(item));
+}
 
 async function updateLastSessionItem(sessionId, patch) {
   const len = await redis.llen(kSessItems(sessionId));
   if (len === 0) return;
 
   const raw = await redis.lindex(kSessItems(sessionId), len - 1);
-  let last = null;
-
-  if (typeof raw === "string") {
-    const t = raw.trim();
-    if (t.startsWith("{") || t.startsWith("[")) { try { last = JSON.parse(t); } catch {} }
-  } else if (raw && typeof raw === "object" && !Array.isArray(r)) { last = raw; }
-
+  const last = parseMaybeJSON(raw);
   if (!last) return;
 
   const updated = { ...last, ...patch };
-  await redis.lset(kSessItems(sessionId), len - 1, updated);
+  await redis.lset(kSessItems(sessionId), len - 1, JSON.stringify(updated));
+}
+
+async function pushHistory(username, item) {
+  await redis.lpush(kHistory(username), JSON.stringify(item));
+  await redis.ltrim(kHistory(username), 0, 999);
 }
 
 // Delete a PDF by label (kept from your version)
@@ -1351,10 +1376,10 @@ Ensure the difficulty scales with MSI1→Attending. Avoid duplicates of provided
 
   const userPayload = { topic: topic || "random", difficulty: difficulty || "MSI3", avoid_examples: avoid };
 
-  const resp = await openai.responses.create({
-    model: "gpt-4.1-mini",
+  const resp = await responsesCall({
+    model: process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini",
     temperature: 0.7,
-    input: [
+    messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
     ]
@@ -1388,10 +1413,10 @@ Return ONLY JSON:
 
   let parsed = null;
   try {
-    const resp = await openai.responses.create({
-      model: "gpt-4.1-mini",
+    const resp = await responsesCall({
+      model: process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini",
       temperature: 0,
-      input: [
+      messages: [
         { role: "system", content: system },
         { role: "user", content: JSON.stringify(userPayload) }
       ]
@@ -1428,10 +1453,10 @@ Return JSON ONLY:
     }))
   };
 
-  const resp = await openai.responses.create({
-    model: "gpt-4.1",
+  const resp = await responsesCall({
+    model: BASE_MODEL,
     temperature: 0,
-    input: [
+    messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
     ]
@@ -1486,6 +1511,7 @@ app.get('/api/exclusions/count', async (req, res) => {
   try {
     const { username } = req.query;
     if (!username) return res.status(400).json({ error: "username required" });
+    if (!(await userExists(String(username)))) return res.status(404).json({ error: "User not found" });
     const count = await exclusionsCount(String(username));
     res.json({ count });
   } catch (e) {
@@ -1630,6 +1656,60 @@ app.post('/api/answer', async (req, res) => {
     res.json({ correct: is_correct, explanation, nextDifficulty: nextDiff, points_delta, score: score_after });
   } catch (e) {
     res.status(500).json({ error: "Failed to grade answer", detail: String(e) });
+  }
+});
+
+
+// Save the session questions into the user's exclusion list and generate feedback
+app.post('/api/conclude', async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+    const meta = await getSessionMeta(String(sessionId));
+    if (!meta) return res.status(404).json({ error: "Session not found" });
+
+    const username = meta.username;
+    const items = await getSessionItems(String(sessionId));
+    const asked = items.filter(it => it && it.question).map(it => String(it.question));
+    const answered = items.filter(it => it && it.question && Object.prototype.hasOwnProperty.call(it, 'user_answer'));
+
+    // Add only genuinely new questions to exclusions so repeated clicks do not inflate numbering.
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const existing = await getExclusions(username);
+    const existingNorm = new Set((existing || []).map(norm));
+    const toAdd = [];
+    for (const q of asked) {
+      const nq = norm(q);
+      if (nq && !existingNorm.has(nq)) {
+        existingNorm.add(nq);
+        toAdd.push(q);
+      }
+    }
+    if (toAdd.length) await pushExclusions(username, toAdd);
+
+    const session_points = answered.reduce((sum, it) => sum + Number(it.points_delta || 0), 0);
+    let feedback = "No answered questions yet.";
+    let rating = meta.start_diff || "MSI3";
+    if (answered.length) {
+      const summary = await aiSummarizeSession({ transcript: answered, startDifficulty: meta.start_diff });
+      feedback = summary.feedback;
+      rating = summary.rating;
+    }
+
+    await redis.hset(kSess(String(sessionId)), { concluded_at: Date.now(), rating });
+    const new_count = await exclusionsCount(username);
+    res.json({
+      ok: true,
+      added: toAdd.length,
+      new_count,
+      next_number: new_count + 1,
+      session_points,
+      feedback,
+      rating
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to conclude session", detail: String(e) });
   }
 });
 
