@@ -1043,7 +1043,7 @@ app.delete('/admin/wipe', async (req, res) => {
     }
     const dry = String(req.query.dry || "0") === "1";
 
-    const patterns = ["user:*","session:*","sessionitem:*","exclusions:*","history:*"];
+    const patterns = ["user:*","sess:*","sess:*:items","excl:*","history:*","leaderboard:*"];
     let deleted = 0;
 
     async function delChunked(keys) {
@@ -1372,7 +1372,10 @@ async function aiGenerateQuestion({ topic, difficulty, avoidList }) {
 Return ONLY JSON like: {"question":"..."}.
 Question must be answerable in ONE word or ONE short sentence.
 The questions should be difficult questions designed to mimic questions an attending physician would ask (or "pimp") a medical student or resident.
-Ensure the difficulty scales with MSI1→Attending. Avoid duplicates of provided examples.`;
+Ensure the difficulty scales with MSI1→Attending. Avoid duplicates of provided examples.
+Quality control is mandatory: do not generate physiologically contradictory or internally inconsistent stems.
+If the topic involves acid-base, electrolytes, endocrine physiology, pharmacology, or hemodynamics, verify the expected answer before returning the question.
+Do not ask a question whose correct answer depends on a false premise unless the question explicitly asks the learner to identify the inconsistency.`;
 
   const userPayload = { topic: topic || "random", difficulty: difficulty || "MSI3", avoid_examples: avoid };
 
@@ -1393,21 +1396,53 @@ Ensure the difficulty scales with MSI1→Attending. Avoid duplicates of provided
 async function aiGradeAnswer({ question, userAnswer, difficulty }) {
   if (process.env.MOCK_AI === "1") {
     const golds = {
-      "First-line treatment for status asthmaticus?": "nebulized saba and ipratropium",
+      "First-line treatment for status asthmaticus?": "nebulized SABA plus ipratropium, systemic steroids, oxygen and magnesium if severe",
       "Antidote for organophosphate poisoning?": "atropine and pralidoxime",
-      "Next step for suspected PE in a hemodynamically stable patient?": "ctpa",
-      "Diagnostic test of choice for C. difficile infection?": "stool pcr",
+      "Next step for suspected PE in a hemodynamically stable patient?": "CTPA if not low-risk/PERC negative",
+      "Diagnostic test of choice for C. difficile infection?": "stool NAAT or toxin testing depending on local algorithm",
       "Target INR for mechanical mitral valve?": "3.0"
     };
     const gold = (golds[question] || "").toLowerCase().trim();
     const ans  = String(userAnswer || "").toLowerCase().trim();
-    const is_correct = gold && (ans === gold || gold.includes(ans) || ans.includes(gold));
-    return { is_correct, explanation: is_correct ? "" : (gold ? `Correct: ${gold}.` : "Reviewed."), difficulty_delta: is_correct ? 1 : 0 };
+    let credit = 0;
+    if (gold && (ans === gold || gold.includes(ans) || ans.includes(gold))) credit = 1;
+    else if (gold && ans && gold.split(/\W+/).some(w => w.length > 4 && ans.includes(w))) credit = 0.5;
+    const verdict = credit >= 0.85 ? "correct" : (credit > 0 ? "partial" : "incorrect");
+    return {
+      verdict,
+      credit,
+      is_correct: credit >= 0.85,
+      explanation: credit >= 0.85 ? "" : (gold ? `Expected: ${gold}.` : "Reviewed."),
+      difficulty_delta: credit >= 0.85 ? 1 : (credit >= 0.35 ? 0 : -1),
+      invalid_question: false
+    };
   }
 
-  const system = `Grade medical answers tersely.
-Return ONLY JSON:
-{"is_correct": true|false, "explanation": "1-3 sentences if incorrect else empty", "difficulty_delta": -1|0|1}`;
+  const system = `You are a strict but fair medical answer grader for a one-line clinical pimp simulator.
+Return ONLY valid JSON with this exact shape:
+{
+  "verdict": "correct" | "partial" | "incorrect" | "invalid",
+  "credit": 0.0,
+  "explanation": "1-3 concise sentences",
+  "difficulty_delta": -1 | 0 | 1,
+  "invalid_question": false
+}
+
+Core grading rules:
+- Award continuous partial credit from 0 to 1.
+- credit=1 means the core answer is correct, even if wording is imperfect.
+- credit 0.60-0.85 means the answer is very close or captures the key mechanism but misses an important qualifier.
+- credit 0.30-0.59 means partially correct but materially incomplete.
+- credit 0.05-0.29 means a small relevant fragment only.
+- credit=0 means wrong, unrelated, or unsafe.
+- Use verdict="partial" for any defensible partial answer where 0 < credit < 0.85.
+- Use verdict="correct" when credit >= 0.85.
+- Use verdict="incorrect" when credit = 0.
+- If the learner challenges a false premise and the challenge is valid, mark correct or partial depending on quality.
+- If the stem itself is ambiguous, impossible, internally inconsistent, or based on a false physiologic premise, set verdict="invalid", invalid_question=true, credit=0, difficulty_delta=0, and explain the corrected concept.
+- Do not punish the learner for a defensible answer to an invalid or ambiguous stem.
+- Be especially careful with acid-base, electrolytes, endocrine physiology, pharmacology, and hemodynamics.
+- Keep explanations precise and high-yield. If the learner is close, say exactly what was missing.`;
 
   const userPayload = { question, userAnswer, difficulty };
 
@@ -1423,19 +1458,78 @@ Return ONLY JSON:
     });
     parsed = parseResponsesJSON(resp);
   } catch (e) {
-    return { is_correct: false, explanation: "Grader unavailable; keeping same difficulty.", difficulty_delta: 0 };
+    return { verdict: "incorrect", credit: 0, is_correct: false, explanation: "Grader unavailable; keeping same difficulty.", difficulty_delta: 0, invalid_question: false };
   }
 
-  if (!parsed || (parsed.is_correct === undefined && parsed.explanation === undefined)) {
-    return { is_correct: false, explanation: "Grader returned unexpected format.", difficulty_delta: 0 };
+  if (!parsed || typeof parsed !== "object") {
+    return { verdict: "incorrect", credit: 0, is_correct: false, explanation: "Grader returned unexpected format.", difficulty_delta: 0, invalid_question: false };
   }
 
-  const is_correct = !!parsed.is_correct;
+  const invalid_question = !!parsed.invalid_question || parsed.verdict === "invalid";
+  let credit = Number(parsed.credit);
+
+  // Backward compatibility if a model accidentally returns the older boolean format.
+  if (!Number.isFinite(credit)) {
+    if (invalid_question) credit = 0;
+    else if (parsed.is_correct === true) credit = 1;
+    else credit = 0;
+  }
+  credit = Math.max(0, Math.min(1, credit));
+
+  let verdict = String(parsed.verdict || "").toLowerCase();
+  if (invalid_question) verdict = "invalid";
+  else if (!["correct", "partial", "incorrect"].includes(verdict)) {
+    verdict = credit >= 0.85 ? "correct" : (credit > 0 ? "partial" : "incorrect");
+  }
+  if (!invalid_question) {
+    if (credit >= 0.85) verdict = "correct";
+    else if (credit > 0) verdict = "partial";
+    else verdict = "incorrect";
+  }
+
+  const is_correct = verdict === "correct";
   const explanation = typeof parsed.explanation === "string" ? parsed.explanation : "";
-  let delta = Number(parsed.difficulty_delta);
-  if (![ -1, 0, 1 ].includes(delta)) delta = is_correct ? 1 : 0;
 
-  return { is_correct, explanation, difficulty_delta: delta };
+  let delta = Number(parsed.difficulty_delta);
+  if (![ -1, 0, 1 ].includes(delta)) {
+    delta = invalid_question ? 0 : (credit >= 0.85 ? 1 : (credit >= 0.35 ? 0 : -1));
+  }
+
+  return { verdict, credit, is_correct, explanation, difficulty_delta: delta, invalid_question };
+}
+
+
+async function aiDiscussAnswer({ question, userAnswer, grading, dialogue, message }) {
+  if (process.env.MOCK_AI === "1") {
+    return "That is a fair challenge. If the stem is internally inconsistent, treat it as a flawed question rather than a true miss.";
+  }
+
+  const system = `You are a rigorous but helpful clinical educator inside a pimp-question simulator.
+The learner may challenge the explanation, ask why partial credit was assigned, or request a mechanism.
+Respond directly and honestly.
+If the original grading, credit fraction, or explanation appears wrong, admit it plainly and explain the corrected physiology.
+Do not protect the previous answer if it is incorrect.
+When discussing partial credit, explain what the learner got right, what was missing, and what would make it full credit.
+Keep the reply concise, high-yield, and mechanistic when useful.`;
+
+  const payload = {
+    question,
+    userAnswer,
+    grading,
+    priorDialogue: Array.isArray(dialogue) ? dialogue.slice(-8) : [],
+    learnerMessage: message
+  };
+
+  const resp = await responsesCall({
+    model: process.env.OPENAI_BASE_MODEL || "gpt-4.1",
+    temperature: 0,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(payload) }
+    ]
+  });
+
+  return (resp.output_text || resp.output?.[0]?.content?.[0]?.text || "").trim() || "I could not generate a clarification.";
 }
 
 async function aiSummarizeSession({ transcript, startDifficulty }) {
@@ -1449,6 +1543,8 @@ Return JSON ONLY:
       question: t.question,
       userAnswer: t.user_answer ?? "",
       correct: !!t.is_correct,
+      verdict: t.verdict || (t.is_correct ? "correct" : "incorrect"),
+      credit: Number(t.credit || 0),
       explanation: t.explanation ?? ""
     }))
   };
@@ -1618,16 +1714,42 @@ app.post('/api/answer', async (req, res) => {
     if (items.length === 0) return res.status(400).json({ error: "No question to grade" });
     const last = items[items.length - 1];
 
-    const { is_correct, explanation, difficulty_delta } = await aiGradeAnswer({
+    const graded = await aiGradeAnswer({
       question: last.question,
       userAnswer: answer,
       difficulty: last.final_difficulty
     });
 
+    const {
+      verdict,
+      credit,
+      is_correct,
+      explanation,
+      difficulty_delta,
+      invalid_question
+    } = graded;
+
     const nextDiff = bumpDifficulty(last.final_difficulty, difficulty_delta);
 
     const { correct, wrong } = pointsFor(last.final_difficulty);
-    const points_delta = is_correct ? correct : -wrong;
+    const max_points = correct;
+    const penalty_points = wrong;
+
+    // Scoring policy:
+    // - correct: full positive points
+    // - partial: continuous positive points from 0 to full points
+    // - incorrect: original negative penalty
+    // - invalid/ambiguous question: neutral, no penalty
+    let points_delta = 0;
+    if (invalid_question || verdict === "invalid") {
+      points_delta = 0;
+    } else if (verdict === "correct") {
+      points_delta = max_points;
+    } else if (verdict === "partial" || (credit > 0 && credit < 0.85)) {
+      points_delta = Math.round(max_points * Math.max(0, Math.min(1, credit)));
+    } else {
+      points_delta = -penalty_points;
+    }
 
     const score_after = await applyScoreDelta(username, points_delta, is_correct);
 
@@ -1638,8 +1760,13 @@ app.post('/api/answer', async (req, res) => {
       difficulty: last.final_difficulty,
       user_answer: answer,
       is_correct,
+      verdict,
+      credit,
       explanation,
+      invalid_question,
       points_delta,
+      max_points,
+      penalty_points,
       score_after,
       asked_at: askedAt,
     });
@@ -1647,15 +1774,79 @@ app.post('/api/answer', async (req, res) => {
     await updateLastSessionItem(sessionId, {
       user_answer: answer,
       is_correct,
+      verdict,
+      credit,
       explanation,
+      invalid_question,
       final_difficulty: nextDiff,
       points_delta,
-      score_after
+      max_points,
+      penalty_points,
+      score_after,
+      dialogue: []
     });
 
-    res.json({ correct: is_correct, explanation, nextDifficulty: nextDiff, points_delta, score: score_after });
+    res.json({
+      correct: is_correct,
+      verdict,
+      credit,
+      explanation,
+      invalid_question,
+      nextDifficulty: nextDiff,
+      points_delta,
+      max_points,
+      penalty_points,
+      score: score_after
+    });
   } catch (e) {
     res.status(500).json({ error: "Failed to grade answer", detail: String(e) });
+  }
+});
+
+
+// Optional follow-up dialogue after an answer has been graded.
+app.post('/api/discuss', async (req, res) => {
+  try {
+    const { sessionId, message } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+    if (!message || typeof message !== "string") return res.status(400).json({ error: "message required" });
+
+    const meta = await getSessionMeta(String(sessionId));
+    if (!meta) return res.status(404).json({ error: "Session not found" });
+
+    const items = await getSessionItems(String(sessionId));
+    if (!items.length) return res.status(400).json({ error: "No active question" });
+    const last = items[items.length - 1];
+    if (!Object.prototype.hasOwnProperty.call(last, 'user_answer')) {
+      return res.status(400).json({ error: "Answer the question before starting discussion" });
+    }
+
+    const dialogue = Array.isArray(last.dialogue) ? last.dialogue : [];
+    const grading = {
+      is_correct: !!last.is_correct,
+      verdict: last.verdict || (last.is_correct ? "correct" : "incorrect"),
+      credit: Number(last.credit || 0),
+      explanation: last.explanation || "",
+      invalid_question: !!last.invalid_question,
+      points_delta: Number(last.points_delta || 0),
+      max_points: Number(last.max_points || 0),
+      penalty_points: Number(last.penalty_points || 0)
+    };
+
+    const reply = await aiDiscussAnswer({
+      question: last.question,
+      userAnswer: last.user_answer || "",
+      grading,
+      dialogue,
+      message: String(message)
+    });
+
+    const updatedDialogue = [...dialogue, { role: "user", content: String(message), at: Date.now() }, { role: "assistant", content: reply, at: Date.now() }];
+    await updateLastSessionItem(String(sessionId), { dialogue: updatedDialogue });
+
+    res.json({ ok: true, reply });
+  } catch (e) {
+    res.status(500).json({ error: "Discussion failed", detail: String(e) });
   }
 });
 
