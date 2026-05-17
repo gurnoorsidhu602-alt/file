@@ -1,132 +1,183 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
+  <meta charset="utf-8" />
   <title>One Line Pimp Simulator</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root{
-      --bg:#0a0a14; --panel1:#12122a; --panel2:#19194a; --ink:#eef0ff; --muted:#9aa3c7;
-      --accent:#7c7cff; --ok:#3ee089; --bad:#ff6e86; --border:#2a2a5a; --chip:#1c1c3b; --pill:#23235a;
+      --bg:#090b0f;
+      --bg-2:#0c1016;
+      --panel:#10141c;
+      --panel-2:#0d1118;
+      --panel-3:#141a24;
+      --ink:#eef2f7;
+      --muted:#9aa4b2;
+      --muted-2:#687283;
+      --line:rgba(255,255,255,.075);
+      --line-2:rgba(255,255,255,.13);
+      --accent:#8fb3ff;
+      --accent-strong:#4f7cff;
+      --accent-soft:rgba(143,179,255,.105);
+      --ok:#69d6a3;
+      --ok-soft:rgba(105,214,163,.10);
+      --warn:#e5bb6a;
+      --warn-soft:rgba(229,187,106,.105);
+      --bad:#e98592;
+      --bad-soft:rgba(233,133,146,.105);
+      --shadow:0 10px 34px rgba(0,0,0,.28);
+      --radius:14px;
+      --radius-sm:10px;
     }
     *{box-sizing:border-box}
-    html,body{height:100%}
+    html,body{min-height:100%}
     body{
-      margin:0;color:var(--ink);
+      margin:0;
+      color:var(--ink);
       background:
-        radial-gradient(900px 600px at 20% -10%,rgba(124,124,255,.12),transparent),
-        radial-gradient(900px 600px at 120% 10%,rgba(142,225,255,.08),transparent),
-        var(--bg);
-      font:16px/1.6 system-ui, Segoe UI, Roboto, sans-serif;
-      letter-spacing:.2px;
+        radial-gradient(680px 380px at 16% -10%, rgba(143,179,255,.095), transparent 65%),
+        radial-gradient(650px 360px at 110% 5%, rgba(105,214,163,.055), transparent 62%),
+        linear-gradient(180deg,var(--bg),var(--bg-2));
+      font:13.5px/1.48 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      letter-spacing:.005em;
     }
-
+    button,input,select,textarea{font:inherit}
     header{
       position:sticky;top:0;z-index:20;
-      background:linear-gradient(180deg, rgba(18,18,40,.92), rgba(18,18,40,.75));
-      backdrop-filter:blur(10px);
-      border-bottom:1px solid var(--border);
+      background:rgba(9,11,15,.78);
+      backdrop-filter:blur(16px);
+      border-bottom:1px solid var(--line);
     }
-    .nav{max-width:1200px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:12px}
+    .nav{max-width:1120px;margin:0 auto;padding:8px 18px;display:flex;align-items:center;gap:10px}
+    .brand{display:flex;align-items:center;gap:9px;min-width:0}
+    .mark{width:20px;height:20px;border-radius:7px;background:linear-gradient(135deg,#91b2ff,#63d9a6);box-shadow:0 0 0 4px rgba(143,179,255,.055)}
+    .app-title{font-weight:700;letter-spacing:-.02em;white-space:nowrap}
+    .select-wrap select{
+      color:var(--ink);background:rgba(16,20,28,.86);border:1px solid var(--line);
+      border-radius:9px;padding:5px 28px 5px 9px;min-width:200px;outline:none;appearance:none;
+    }
+    .status-dot{width:7px;height:7px;border-radius:50%;background:#576173;border:1px solid #717a89}
+    .status-dot.ok{background:var(--ok);border-color:rgba(105,214,163,.78);box-shadow:0 0 0 3px rgba(105,214,163,.10)}
     .spacer{flex:1}
-    .bubble{width:10px;height:10px;border-radius:50%;background:#6a6a9c;border:1px solid #4a4a86}
-    .bubble.ok{background:var(--ok);box-shadow:0 0 0 2px rgba(62,224,137,.15)}
-    .chip{padding:6px 10px;border-radius:12px;background:var(--chip);border:1px solid var(--border);display:flex;align-items:center;gap:8px;color:var(--muted)}
-    .chip strong{color:var(--ink)}
+    .top-stat{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--line);border-radius:999px;background:rgba(16,20,28,.68);color:var(--muted);white-space:nowrap;font-size:12.5px}
+    .top-stat strong{color:var(--ink);font-size:13px}
 
-    /* ---------- SHELL GRID ---------- */
-    .shell{
-      max-width:1200px;margin:18px auto;padding:0 14px;
-      display:grid;grid-template-columns:300px 1fr;gap:16px;
-      transition:grid-template-columns .2s ease;
-    }
-    .shell.no-sidebar{grid-template-columns:1fr;} /* when sidebar collapses */
+    .shell{max-width:1120px;margin:14px auto;padding:0 18px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px}
+    .shell.no-sidebar{grid-template-columns:minmax(0,1fr)}
+    .sidebar{position:sticky;top:62px;align-self:start}
+    .sidebar.hidden{display:none}
+    .card{background:linear-gradient(180deg,rgba(16,20,28,.96),rgba(13,17,24,.96));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px}
+    #stage{transition:max-width .18s ease, margin .18s ease;min-width:0}
+    #stage.compact{max-width:600px;margin:0 auto}
+    #stage.wide{max-width:900px;margin:0 auto}
 
-    .sidebar{position:sticky;top:64px;align-self:start;transition:opacity .2s ease, transform .2s ease}
-    .sidebar.hidden{display:none;} /* remove from layout so main can center */
-
-    .card{
-      background:linear-gradient(180deg,var(--panel1),var(--panel2));
-      border:1px solid var(--border);border-radius:18px;padding:18px;
-      box-shadow:0 12px 40px rgba(0,0,0,.35);
-    }
-
-    /* ---------- MAIN / STAGE ---------- */
-    #stage{transition:max-width .2s ease, margin .2s ease, transform .2s ease;}
-    #stage.wide{max-width:960px;margin:0 auto;}       /* center & widen during QA/Summary */
-    #stage.compact{max-width:720px;margin:0 auto;}    /* setup screens */
-    @media (max-width:960px){ #stage.wide,#stage.compact{max-width:100%} }
-
-    /* controls */
-    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
-    input,select{
-      width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);
-      background:#0f0f27;color:var(--ink);outline:none
-    }
-    input:focus,select:focus{box-shadow:0 0 0 2px rgba(124,124,255,.25)}
-    .btn{
-      background:linear-gradient(180deg,#252559,#1d1d49);border:1px solid var(--border);
-      color:var(--ink);padding:10px 14px;border-radius:12px;cursor:pointer;
-      box-shadow:0 8px 20px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.02);
-      transition:transform .04s ease, background .2s ease;
-    }
-    .btn:hover{background:linear-gradient(180deg,#2b2b66,#232356)}
-    .btn:active{transform:translateY(1px)}
-    .btn:disabled{opacity:.6;cursor:not-allowed}
-    .btn.accent{background:linear-gradient(180deg,#6a6aff,#5858ff);border-color:#5a5aff}
-    .btn.ok{background:linear-gradient(180deg,#25b56a,#1ea45f);border-color:#1b8a52}
-    .btn.warn{background:linear-gradient(180deg,#f45d7b,#e44d6c);border-color:#d24662}
-    .btn.ghost{background:transparent}
-
-    /* leaderboard */
-    .leaderboard table{width:100%;border-collapse:separate;border-spacing:0 8px}
-    .leaderboard th{font-weight:600;color:#cfd6ff;text-align:left;font-size:14px;padding:6px 10px}
-    .leaderboard td{background:#111134;border:1px solid var(--border);padding:10px;border-left:none;border-right:none}
-    .leaderboard .rank{width:44px;text-align:center;background:#16164a;border-radius:12px;border:1px solid var(--border)}
+    h1,h2,h3{margin:0;line-height:1.14;letter-spacing:-.025em}
+    h2{font-size:24px;margin-bottom:6px;font-weight:760}
+    h3{font-size:14px;font-weight:730}
+    .subcopy{color:var(--muted);max-width:62ch;margin:0 0 12px}
     .muted{color:var(--muted)}
-    .pill{display:inline-flex;align-items:center;gap:8px;padding:4px 10px;border-radius:999px;border:1px solid var(--border);color:#bfc6ff;background:var(--pill)}
+    .muted2{color:var(--muted-2)}
+    .kicker{text-transform:uppercase;letter-spacing:.12em;color:var(--muted-2);font-size:11px;font-weight:740;margin-bottom:8px}
+    .row{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+    .split{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .stack{display:grid;gap:10px}
+    .grid-2{display:grid;grid-template-columns:1fr 180px;gap:10px}
+    .hidden{display:none!important}
+    label{display:block;color:var(--muted);font-size:12.5px;margin-bottom:5px}
+    input,textarea,select.field{
+      width:100%;color:var(--ink);background:#0b0f16;border:1px solid var(--line);border-radius:10px;outline:none;
+      padding:8px 10px;
+    }
+    textarea{resize:vertical;min-height:64px}
+    input:focus,textarea:focus,select.field:focus{border-color:rgba(143,179,255,.58);box-shadow:0 0 0 2px rgba(143,179,255,.105)}
 
-    /* QA specifics */
-    .qnum{font-weight:900;font-size:28px;margin-top:6px}
-    #question{font-size:22px;line-height:1.65;margin-top:6px;max-width:70ch}
-    .result{margin-top:12px;padding:12px;border-radius:12px;border:1px solid var(--border)}
-    .result.ok{background:rgba(62,224,137,.10);border-color:rgba(62,224,137,.45)}
-    .result.bad{background:rgba(255,110,134,.08);border-color:rgba(255,110,134,.40)}
-    .delta{font-weight:800}
-    .delta.pos{color:var(--ok)}
-    .delta.neg{color:var(--bad)}
-    .hidden{display:none}
+    .btn{
+      display:inline-flex;align-items:center;justify-content:center;gap:6px;
+      border:1px solid var(--line-2);border-radius:9px;background:#151b25;color:var(--ink);
+      padding:5px 9px;min-height:30px;cursor:pointer;box-shadow:none;
+      transition:background .14s ease,border-color .14s ease,transform .035s ease,color .14s ease,opacity .14s ease;
+      font-weight:620;font-size:13px;line-height:1.2;
+    }
+    .btn:hover{background:#1a2230;border-color:rgba(255,255,255,.17)}
+    .btn:active{transform:translateY(1px)}
+    .btn:disabled{opacity:.48;cursor:not-allowed}
+    .btn.primary{background:#1d2a44;border-color:rgba(143,179,255,.33);color:#e6edff}
+    .btn.primary:hover{background:#243552}
+    .btn.success{background:#1d2a44;border-color:rgba(143,179,255,.33);color:#e6edff}
+    .btn.success:hover{background:#243552}
+    .btn.danger{background:#241820;border-color:rgba(233,133,146,.26);color:#f4d5da}
+    .btn.danger:hover{background:#2c1b24}
+    .btn.ghost{background:transparent;border-color:var(--line);color:var(--muted)}
+    .btn.ghost:hover{color:var(--ink);background:rgba(255,255,255,.035)}
+    .btn.sm{font-size:12px;padding:4px 7px;min-height:26px;border-radius:8px;font-weight:610}
 
-    /* subtle entry animations */
-    .step{opacity:0;transform:translateY(8px)}
-    .step.show{opacity:1;transform:none;transition:opacity .25s, transform .25s}
-    .pop{animation:pop .22s ease both}
-    @keyframes pop{from{opacity:0;transform:scale(.985)} to{opacity:1;transform:scale(1)}}
+    .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border:1px solid rgba(143,179,255,.22);border-radius:999px;background:var(--accent-soft);color:#dce7ff;font-weight:710;font-size:12px}
+    .scoreline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:11px}
+    .mini-stat{background:rgba(255,255,255,.026);border:1px solid var(--line);border-radius:11px;padding:9px}
+    .mini-stat span{display:block;color:var(--muted);font-size:11.5px}.mini-stat strong{display:block;font-size:17px;margin-top:1px}
+
+    .leaderboard h3{margin-bottom:2px}.leaderboard table{width:100%;border-collapse:separate;border-spacing:0 5px;font-size:12.5px}.leaderboard th{color:var(--muted);text-align:left;font-weight:650;padding:2px 6px}.leaderboard td{background:rgba(255,255,255,.028);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px}.leaderboard td:first-child{border-left:1px solid var(--line);border-radius:8px 0 0 8px;width:32px;text-align:center;font-weight:760;color:#d8e2ff}.leaderboard td:last-child{border-right:1px solid var(--line);border-radius:0 8px 8px 0}
+
+    .qa-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+    .q-label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:13.5px;margin-bottom:7px}
+    .qnum{font-size:26px;font-weight:820;letter-spacing:-.04em;margin:0 0 5px}
+    #question{font-size:19px;line-height:1.48;letter-spacing:-.01em;max-width:72ch;margin-bottom:13px}
+    .answer-panel{background:rgba(255,255,255,.022);border:1px solid var(--line);border-radius:12px;padding:10px}
+    .actions{display:flex;gap:7px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:8px}
+
+    .result{margin-top:10px;border:1px solid var(--line);border-radius:12px;padding:10px;background:rgba(255,255,255,.028)}
+    .result.ok{background:var(--ok-soft);border-color:rgba(105,214,163,.30)}
+    .result.partial{background:var(--warn-soft);border-color:rgba(229,187,106,.32)}
+    .result.bad{background:var(--bad-soft);border-color:rgba(233,133,146,.30)}
+    .result.invalid{background:rgba(143,179,255,.08);border-color:rgba(143,179,255,.30)}
+    .result-title{display:flex;align-items:center;gap:7px;font-weight:790;margin-bottom:4px}
+    .credit-badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11.5px;color:var(--muted);font-weight:650;background:rgba(255,255,255,.028)}
+    .delta{font-weight:790;margin-top:6px}.delta.pos{color:var(--ok)}.delta.neg{color:var(--bad)}.delta.neutral{color:var(--warn)}
+
+    .discussion{margin-top:10px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.02);overflow:hidden}
+    .discussion-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.018)}
+    .discussion-top strong{font-size:13.5px}
+    .discussion-top p{margin:1px 0 0;color:var(--muted);font-size:12px}
+    .chat-log{display:grid;gap:7px;max-height:260px;overflow:auto;padding:10px}
+    .empty-chat{color:var(--muted);font-size:12.5px;border:1px dashed var(--line);border-radius:10px;padding:9px;background:rgba(0,0,0,.06)}
+    .msg{max-width:84%;padding:8px 10px;border-radius:11px;white-space:pre-wrap;font-size:13px;line-height:1.45}
+    .msg.user{justify-self:end;background:rgba(143,179,255,.115);border:1px solid rgba(143,179,255,.24)}
+    .msg.ai{justify-self:start;background:rgba(255,255,255,.035);border:1px solid var(--line);color:#e5ebf8}
+    .quick-prompts{display:flex;gap:6px;flex-wrap:wrap;padding:0 10px 9px}
+    .quick-prompts .btn{border-radius:999px;background:transparent;color:#c7d4ef}
+    .chat-compose{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;padding:0 10px 10px}
+    .chat-compose textarea{min-height:42px;max-height:118px;padding:8px 10px}
+    .discussion-status{padding:0 10px 9px;color:var(--muted);font-size:12.5px}
+
+    .history-list{display:grid;gap:8px}.history-item{padding:10px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.028)}
+    .step{opacity:0;transform:translateY(5px)}.step.show{opacity:1;transform:none;transition:opacity .16s ease,transform .16s ease}.pop{animation:pop .16s ease both}@keyframes pop{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+    @media(max-width:900px){.shell{grid-template-columns:1fr;padding:0 12px}.sidebar{position:static}.grid-2{grid-template-columns:1fr}.nav{padding:8px 12px;flex-wrap:wrap}.spacer{display:none}.scoreline{grid-template-columns:1fr}.chat-compose{grid-template-columns:1fr}.msg{max-width:96%}#question{font-size:18px}#stage.wide{max-width:100%}}
   </style>
 </head>
 <body>
 <header>
   <div class="nav">
-    <div class="chip">
-      <span class="muted">AI</span>
-      <select id="aiSelect" style="background:#0f0f27;border:1px solid var(--border);color:var(--ink);border-radius:10px;padding:6px 8px">
-        <option value="pimp">One Line Pimp Simulator</option>
-      </select>
-      <span id="conn" class="bubble" title="connection"></span>
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <div class="select-wrap">
+        <select id="aiSelect" aria-label="Simulator">
+          <option value="pimp">One Line Pimp Simulator</option>
+        </select>
+      </div>
+      <span id="conn" class="status-dot" title="connection"></span>
     </div>
     <div class="spacer"></div>
-    <div class="chip" id="scoreChip" style="display:none;"><span class="muted">Score</span> <strong id="scoreVal">0</strong></div>
-    <div class="chip" id="userChip" style="display:none;"><span class="muted">User</span> <strong id="userVal">—</strong></div>
+    <div class="top-stat" id="scoreChip" style="display:none"><span>Score</span><strong id="scoreVal">0</strong></div>
+    <div class="top-stat" id="userChip" style="display:none"><span>User</span><strong id="userVal">—</strong></div>
   </div>
 </header>
 
 <div id="shell" class="shell">
-  <!-- Sidebar collapses completely during QA/Summary -->
   <aside id="sidebar" class="sidebar">
     <div class="card leaderboard">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <h3 style="margin:0">Global Leaderboard</h3><span class="pill">Top 10</span>
+      <div class="split" style="margin-bottom:8px">
+        <h3>Global leaderboard</h3>
+        <span class="pill">Top 10</span>
       </div>
       <div id="lbEmpty" class="muted">Fetching leaderboard…</div>
       <table id="lbTable" class="hidden">
@@ -136,285 +187,329 @@
     </div>
   </aside>
 
-  <!-- Main stage changes width depending on step -->
   <main id="stage" class="card step show compact">
-    <!-- CONNECT -->
     <section id="step-connect">
-      <h2 style="margin:0 0 6px">Welcome</h2>
-      <p id="connectMsg" class="muted">We’ll check the server connection automatically.</p>
-      <div style="margin-top:12px"><button class="btn accent" id="goUserType" disabled>Continue</button></div>
+      <div class="kicker">Connection</div>
+      <h2>Welcome</h2>
+      <p id="connectMsg" class="subcopy">Checking the server connection.</p>
+      <button class="btn primary" id="goUserType" disabled>Continue</button>
     </section>
 
-    <!-- USER TYPE -->
     <section id="step-user-type" class="hidden">
-      <h2 style="margin:0 0 8px">Who are you?</h2>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn accent" id="btnNewUser">I’m new</button>
+      <div class="kicker">Sign in</div>
+      <h2>Who are you?</h2>
+      <p class="subcopy">Choose a username so your leaderboard score and exclusion list can be saved.</p>
+      <div class="row">
+        <button class="btn primary" id="btnNewUser">I’m new</button>
         <button class="btn" id="btnExistingUser">I’ve been here</button>
       </div>
     </section>
 
-    <!-- NEW USER -->
     <section id="step-new" class="hidden">
-      <h2 style="margin:0 0 8px">Create new user</h2>
-      <label>Username (case sensitive)</label>
-      <input id="newUsername" placeholder="e.g., Gurnoor"/>
-      <div style="margin-top:12px;display:flex;gap:10px">
-        <button class="btn accent" id="createUser">Create</button>
+      <div class="kicker">New user</div>
+      <h2>Create user</h2>
+      <label>Username</label>
+      <input id="newUsername" placeholder="e.g., Gurnoor" autocomplete="off" />
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="createUser">Create</button>
         <button class="btn ghost" data-back="user-type">Back</button>
       </div>
-      <div id="newUserMsg" class="muted" style="margin-top:8px;"></div>
+      <div id="newUserMsg" class="muted" style="margin-top:10px"></div>
     </section>
 
-    <!-- EXISTING USER -->
     <section id="step-existing" class="hidden">
-      <h2 style="margin:0 0 8px">Sign in</h2>
-      <label>Username (case sensitive)</label>
-      <input id="existingUsername" placeholder="Your exact username"/>
-      <div style="margin-top:12px;display:flex;gap:10px">
-        <button class="btn accent" id="useExisting">Continue</button>
+      <div class="kicker">Existing user</div>
+      <h2>Sign in</h2>
+      <label>Username</label>
+      <input id="existingUsername" placeholder="Your exact username" autocomplete="off" />
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="useExisting">Continue</button>
         <button class="btn ghost" data-back="user-type">Back</button>
       </div>
-      <div id="existingMsg" class="muted" style="margin-top:8px;"></div>
+      <div id="existingMsg" class="muted" style="margin-top:10px"></div>
     </section>
 
-    <!-- DASHBOARD -->
     <section id="step-dashboard" class="hidden">
-      <h2 style="margin:0 0 6px">Session setup</h2>
-      <div class="muted" id="exclInfo" style="margin-bottom:10px;"></div>
-      <label>Topic</label>
-      <input id="topic" value="random" placeholder="random or e.g., cardiology"/>
-      <div style="height:8px"></div>
-      <label>Starting difficulty</label>
-      <select id="difficulty">
-        <option>MSI1</option><option>MSI2</option><option selected>MSI3</option><option>MSI4</option>
-        <option>R1</option><option>R2</option><option>R3</option><option>R4</option><option>R5</option><option>Attending</option>
-      </select>
-      <div style="margin-top:12px;display:flex;gap:10px">
-        <button class="btn accent" id="startSession">Launch session</button>
-        <button class="btn" id="goHistory">See previous questions</button>
+      <div class="kicker">Session setup</div>
+      <h2>Build a session</h2>
+      <p id="exclInfo" class="subcopy">Loading your exclusion list.</p>
+      <div class="grid-2">
+        <div>
+          <label>Topic</label>
+          <input id="topic" value="random" placeholder="random or e.g., cardiology" />
+        </div>
+        <div>
+          <label>Starting difficulty</label>
+          <select id="difficulty" class="field">
+            <option>MSI1</option><option>MSI2</option><option selected>MSI3</option><option>MSI4</option>
+            <option>R1</option><option>R2</option><option>R3</option><option>R4</option><option>R5</option><option>Attending</option>
+          </select>
+        </div>
       </div>
-      <div class="muted" id="settingsMsg" style="margin-top:8px;"></div>
+      <div class="scoreline">
+        <div class="mini-stat"><span>Current score</span><strong id="dashScore">0</strong></div>
+        <div class="mini-stat"><span>Answered</span><strong id="dashAnswered">0</strong></div>
+        <div class="mini-stat"><span>Accuracy</span><strong id="dashAccuracy">—</strong></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn primary" id="startSession">Launch session</button>
+        <button class="btn ghost" id="goHistory">Previous questions</button>
+      </div>
+      <div class="muted" id="settingsMsg" style="margin-top:10px"></div>
     </section>
 
-    <!-- HISTORY -->
     <section id="step-history" class="hidden">
-      <h2 style="margin:0 0 8px">Previously asked questions</h2>
-      <div id="historyList" style="min-height:140px"></div>
-      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+      <div class="kicker">History</div>
+      <h2>Previously asked questions</h2>
+      <div id="historyList" class="history-list" style="min-height:120px"></div>
+      <div class="row" style="margin-top:12px">
         <button class="btn" id="reloadHistory">Reload</button>
         <button class="btn ghost" data-back="dashboard">Back</button>
       </div>
-      <div id="historyMsg" class="muted" style="margin-top:8px;"></div>
+      <div id="historyMsg" class="muted" style="margin-top:10px"></div>
     </section>
 
-    <!-- QA -->
     <section id="step-qa" class="hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="muted">Question</span>
-          <span id="pillDiff" class="pill">—</span>
+      <div class="qa-head">
+        <div>
+          <div class="q-label">Question <span id="pillDiff" class="pill">—</span></div>
+          <div id="qHeader" class="qnum">#—</div>
         </div>
-        <div class="chip"><span class="muted">Score</span> <strong id="scoreVal2">0</strong></div>
+        <div class="top-stat"><span>Score</span><strong id="scoreVal2">0</strong></div>
       </div>
-      <div id="qHeader" class="qnum">#—</div>
       <div id="question"></div>
 
-      <div style="margin-top:14px">
+      <div class="answer-panel">
         <label>Your answer</label>
-        <input id="answer" placeholder="One word or short sentence…"/>
-      </div>
-
-      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn ok" id="submitAnswer">Submit</button>
-        <button class="btn warn" id="btnSaveAndFeedback">Save & Get Feedback</button>
+        <input id="answer" placeholder="One word or short sentence…" autocomplete="off" />
+        <div class="actions">
+          <div class="row">
+            <button class="btn primary" id="submitAnswer">Submit</button>
+            <button class="btn ghost" id="btnSaveAndFeedback">End + feedback</button>
+          </div>
+          <button class="btn ghost" data-back="dashboard">End session</button>
+        </div>
       </div>
 
       <div id="resultBox" class="result hidden"></div>
 
-      <div style="margin-top:10px;display:flex;gap:10px;align-items:center;justify-content:space-between;">
-        <button id="btnProceed" class="btn accent hidden">Next question</button>
-        <button class="btn ghost" data-back="dashboard">End session</button>
+      <div class="actions" id="postAnswerActions" style="display:none">
+        <div class="row">
+          <button id="btnProceed" class="btn primary hidden">Next question</button>
+          <button id="showDiscussion" class="btn ghost hidden">Clarify</button>
+        </div>
+      </div>
+
+      <div id="discussionBox" class="discussion hidden">
+        <div class="discussion-top">
+          <div>
+            <strong>Question discussion</strong>
+            <p>Challenge the grading or ask for a cleaner explanation.</p>
+          </div>
+          <button class="btn sm ghost" id="toggleDiscussion">Collapse</button>
+        </div>
+        <div id="chatLog" class="chat-log">
+          <div id="emptyChat" class="empty-chat">No follow-up yet. Start with one of the prompts below or type your own.</div>
+        </div>
+        <div class="quick-prompts">
+          <button class="btn sm" data-discuss="I think the question or explanation may be physiologically inconsistent. Can you reassess it?">Challenge explanation</button>
+          <button class="btn sm" data-discuss="Explain the mechanism step by step.">Mechanism</button>
+          <button class="btn sm" data-discuss="What is the highest-yield exam distinction here?">High-yield distinction</button>
+          <button class="btn sm" data-discuss="How much credit should my answer receive and why?">Credit rationale</button>
+        </div>
+        <div class="chat-compose">
+          <textarea id="discussionInput" placeholder="Ask a follow-up…"></textarea>
+          <button class="btn primary" id="sendDiscussion">Send</button>
+        </div>
+        <div id="discussionStatus" class="discussion-status"></div>
       </div>
     </section>
 
-    <!-- SUMMARY -->
     <section id="step-summary" class="hidden">
-      <h2 style="margin:0 0 6px">Session Summary</h2>
-      <div id="sumStats" class="muted"></div>
-      <div id="sumFeedback" style="margin-top:10px"></div>
-      <div id="sumRating" style="font-size:28px;font-weight:900;margin-top:6px"></div>
-      <div style="margin-top:14px;display:flex;gap:10px">
-        <button class="btn accent" data-back="dashboard">OK</button>
-      </div>
+      <div class="kicker">Summary</div>
+      <h2>Session summary</h2>
+      <p id="sumStats" class="subcopy"></p>
+      <div id="sumFeedback" class="result"></div>
+      <div id="sumRating" style="font-size:26px;font-weight:850;margin-top:12px"></div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" data-back="dashboard">Done</button></div>
     </section>
   </main>
 </div>
 
 <script>
-  const params = new URLSearchParams(window.location.search);
-  const DEFAULT_API_BASE = params.get('api') || localStorage.getItem('apiBase') || (window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin);
-  if (params.get('api')) localStorage.setItem('apiBase', params.get('api'));
-  const SERVERS = { pimp: DEFAULT_API_BASE.replace(/\/$/, '') };
-  const state = { base:"", connected:false, username:"", sessionId:"", qNumber:null, difficulty:"", awaitingProceed:false, score:0, currentStep:"connect" };
-
+  const SERVERS = { pimp: window.location.origin };
+  const state = { base:'', connected:false, username:'', sessionId:'', qNumber:null, difficulty:'', awaitingProceed:false, score:0, currentStep:'connect', discussionOpen:false };
   const $ = id => document.getElementById(id);
   const errMsg = e => e?.detail || e?.error || e?.message || 'Unexpected error';
-  function setConn(ok){ state.connected = ok; $('conn').classList.toggle('ok', ok); }
-  function setUser(u){ state.username=u; $('userVal').textContent=u; $('userChip').style.display='flex'; }
-  function updateScore(v){ state.score=+v||0; $('scoreVal').textContent=state.score; $('scoreVal2').textContent=state.score; $('scoreChip').style.display='flex'; }
-  async function api(path,opts={}){ const r=await fetch(state.base+path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}}); const t=await r.text(); let d; try{d=JSON.parse(t);}catch{d={raw:t}}; if(!r.ok) throw d; return d; }
-
-  const steps=["connect","user-type","new","existing","dashboard","history","qa","summary"];
-  function showStep(name){
-    state.currentStep=name;
-    steps.forEach(k=>{ const s=$('step-'+k); if(!s) return; s.classList.add('hidden'); s.classList.remove('show'); });
-    const target=$('step-'+name);
-    if(target){ target.classList.remove('hidden'); requestAnimationFrame(()=>target.classList.add('show')); }
-
-    // layout tweaks
-    const hideSidebar = (name==="qa" || name==="summary");
-    $('sidebar').classList.toggle('hidden', hideSidebar);
-    $('shell').classList.toggle('no-sidebar', hideSidebar);
-    $('stage').classList.toggle('wide', hideSidebar);
-    $('stage').classList.toggle('compact', !hideSidebar);
-
-    // richer question typography only in QA
-    if(name==="qa"){ $('question').style.fontSize='22px'; $('question').style.maxWidth='70ch'; }
+  function escapeHtml(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function setConn(ok){ state.connected=ok; $('conn').classList.toggle('ok', ok); }
+  function setUser(u){ state.username=u; $('userVal').textContent=u; $('userChip').style.display='inline-flex'; }
+  function updateScore(v){ state.score=Number(v)||0; $('scoreVal').textContent=state.score; $('scoreVal2').textContent=state.score; $('dashScore').textContent=state.score; $('scoreChip').style.display='inline-flex'; }
+  async function api(path,opts={}){
+    const r=await fetch(state.base+path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}});
+    const t=await r.text(); let d; try{d=JSON.parse(t);}catch{d={raw:t}}; if(!r.ok) throw d; return d;
   }
 
   async function connectAndBoot(){
-    state.base = SERVERS[$('aiSelect').value];
-    setConn(false); $('goUserType').disabled = true; $('connectMsg').textContent='Checking connection…';
-    fetchLeaderboard();
-    try{ const r=await api('/health'); setConn(!!r.ok); $('connectMsg').textContent=r.ok?'Connection established.':'Server responded but not healthy.'; $('goUserType').disabled=!r.ok; }
-    catch(e){ setConn(false); $('connectMsg').textContent='Connection failed: '+errMsg(e); }
+    state.base=SERVERS[$('aiSelect').value] || window.location.origin;
+    $('connectMsg').textContent='Checking connection…'; $('goUserType').disabled=true; setConn(false);
+    try{
+      const r=await fetch(state.base+'/health');
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok || j.ok===false) throw new Error(j.error || 'Health check failed');
+      setConn(true); $('connectMsg').textContent='Connected. Ready to start.'; $('goUserType').disabled=false; await loadLeaderboard();
+    }catch(e){ $('connectMsg').textContent='Connection failed: '+errMsg(e); }
   }
 
-  async function fetchLeaderboard(){
+  function showStep(name){
+    state.currentStep=name;
+    ['connect','user-type','new','existing','dashboard','history','qa','summary'].forEach(s=>$('step-'+s).classList.add('hidden'));
+    $('step-'+name).classList.remove('hidden');
+    $('stage').classList.remove('show'); void $('stage').offsetWidth; $('stage').classList.add('show');
+    const wide = name==='qa' || name==='summary';
+    $('stage').classList.toggle('wide', wide); $('stage').classList.toggle('compact', !wide);
+    $('sidebar').classList.toggle('hidden', wide); $('shell').classList.toggle('no-sidebar', wide);
+    if(name==='dashboard') prepDashboard();
+  }
+
+  async function loadLeaderboard(){
     try{
-      const r = await api('/api/leaderboard?limit=10');
-      const rows = Array.isArray(r) ? r : (r.leaderboard || []);
-      if(!rows.length){ $('lbEmpty').textContent='No scores yet.'; return; }
-      $('lbEmpty').classList.add('hidden'); $('lbTable').classList.remove('hidden');
+      const r=await api('/api/leaderboard'); const rows=r.rows||r.leaderboard||[];
       const body=$('lbBody'); body.innerHTML='';
-      rows.forEach((row,i)=>{
-        const uname = row.username ?? row.member ?? (Array.isArray(row)?row[0]:undefined) ?? '—';
-        const pts = Number(row.score ?? (Array.isArray(row)?row[1]:undefined) ?? 0);
+      if(!rows.length){ $('lbEmpty').textContent='No scores yet.'; $('lbTable').classList.add('hidden'); return; }
+      $('lbEmpty').textContent=''; $('lbTable').classList.remove('hidden');
+      rows.slice(0,10).forEach((x,i)=>{
+        const uname=x.username||x.member||'—'; const score=Number(x.score||0);
         const tr=document.createElement('tr');
-        tr.innerHTML=`<td class="rank">${row.rank ?? (i+1)}</td><td>${uname}</td><td><strong>${pts.toLocaleString()}</strong></td><td id="lb-answered-${i}"><span class="muted">…</span></td>`;
+        tr.innerHTML=`<td>${i+1}</td><td>${escapeHtml(uname)}</td><td><strong>${score}</strong></td><td id="lb-answered-${i}"><span class="muted">…</span></td>`;
         body.appendChild(tr);
-        if(uname && uname!=='—'){
-          api('/api/score?username='+encodeURIComponent(uname))
-            .then(s=>$('lb-answered-'+i).innerHTML=`<strong>${Number(s.answered||0)}</strong>`)
-            .catch(()=>$('lb-answered-'+i).innerHTML=`<span class="muted">n/a</span>`);
-        }
+        if(uname && uname!=='—') api('/api/score?username='+encodeURIComponent(uname)).then(s=>{ const el=$('lb-answered-'+i); if(el) el.innerHTML=`<strong>${Number(s.answered||0)}</strong>`; }).catch(()=>{ const el=$('lb-answered-'+i); if(el) el.textContent='n/a'; });
       });
     }catch(e){ $('lbEmpty').textContent='Failed to load leaderboard: '+errMsg(e); }
   }
 
   async function prepDashboard(){
+    if(!state.username) return;
     try{ const r=await api('/api/exclusions/count?username='+encodeURIComponent(state.username)); $('exclInfo').textContent=`You have ${r.count} question(s) in your exclusion list.`; }
     catch(e){ $('exclInfo').textContent='Could not fetch exclusions: '+errMsg(e); }
-    try{ const s=await api('/api/score?username='+encodeURIComponent(state.username)); updateScore(s.score||0); } catch{}
+    try{ const s=await api('/api/score?username='+encodeURIComponent(state.username)); updateScore(s.score||0); $('dashAnswered').textContent=Number(s.answered||0); $('dashAccuracy').textContent=s.answered ? `${Math.round((s.accuracy||0)*100)}%` : '—'; } catch{}
+    loadLeaderboard();
   }
 
   async function loadHistory(){
     $('historyMsg').textContent='Loading…';
     try{
-      const r=await api('/api/history?username='+encodeURIComponent(state.username));
-      const items=r.items||[]; const box=$('historyList');
+      const r=await api('/api/history?username='+encodeURIComponent(state.username)); const items=r.items||[]; const box=$('historyList');
       if(!items.length) box.innerHTML='<span class="muted">No history yet.</span>';
       else{
-        const ul=document.createElement('ul'); ul.style.margin='0'; ul.style.paddingLeft='18px';
-        items.forEach(it=>{ const li=document.createElement('li'); const d=it.difficulty?` <span class="pill">${it.difficulty}</span>`:''; li.innerHTML=`<div>${(it.q||it.question||'—')}${d}</div>`; ul.appendChild(li); });
-        box.innerHTML=''; box.appendChild(ul);
+        box.innerHTML='';
+        items.forEach(it=>{
+          const verdict=it.verdict ? ` <span class="pill">${escapeHtml(it.verdict)}</span>` : '';
+          const credit=Number.isFinite(Number(it.credit)) ? ` <span class="pill">${Math.round(Number(it.credit)*100)}%</span>` : '';
+          const div=document.createElement('div'); div.className='history-item';
+          div.innerHTML=`<div>${escapeHtml(it.q||it.question||'—')}</div><div class="row" style="margin-top:7px"><span class="pill">${escapeHtml(it.difficulty||'')}</span>${verdict}${credit}</div>`;
+          box.appendChild(div);
+        });
       }
       $('historyMsg').textContent='';
     }catch(e){ $('historyMsg').textContent='Failed to load history: '+errMsg(e); }
   }
 
   async function startSession(){
-    const topic = $('topic').value.trim() || 'random';
-    const startingDifficulty = $('difficulty').value;
-    try{
-      const r=await api('/api/sessions',{method:'POST', body:JSON.stringify({ username:state.username, topic, startingDifficulty })});
-      state.sessionId=r.sessionId; state.difficulty=r.difficulty; $('pillDiff').textContent=state.difficulty;
-      showStep('qa'); await nextQuestion();
-    }catch(e){ $('settingsMsg').textContent='Failed to start session: '+errMsg(e); }
+    const topic=$('topic').value.trim()||'random'; const startingDifficulty=$('difficulty').value; $('settingsMsg').textContent='';
+    try{ const r=await api('/api/sessions',{method:'POST',body:JSON.stringify({username:state.username,topic,startingDifficulty})}); state.sessionId=r.sessionId; state.difficulty=r.difficulty; $('pillDiff').textContent=state.difficulty; showStep('qa'); await nextQuestion(); }
+    catch(e){ $('settingsMsg').textContent='Failed to start session: '+errMsg(e); }
+  }
+
+  function resetDiscussion(){
+    $('chatLog').innerHTML='<div id="emptyChat" class="empty-chat">No follow-up yet. Start with one of the prompts below or type your own.</div>';
+    $('discussionStatus').textContent=''; $('discussionInput').value=''; $('discussionBox').classList.add('hidden'); $('showDiscussion').classList.add('hidden'); $('postAnswerActions').style.display='none'; state.discussionOpen=false;
+  }
+  function appendMsg(who,text){
+    const empty=$('emptyChat'); if(empty) empty.remove();
+    const div=document.createElement('div'); div.className='msg '+(who==='user'?'user':'ai'); div.textContent=text;
+    $('chatLog').appendChild(div); $('chatLog').scrollTop=$('chatLog').scrollHeight;
+  }
+  function openDiscussion(){ $('discussionBox').classList.remove('hidden'); $('showDiscussion').classList.add('hidden'); state.discussionOpen=true; $('discussionInput').focus(); }
+  function hideDiscussion(){ $('discussionBox').classList.add('hidden'); $('showDiscussion').classList.remove('hidden'); state.discussionOpen=false; }
+  async function sendDiscussion(messageOverride){
+    const message=(messageOverride||$('discussionInput').value).trim(); if(!message) return;
+    openDiscussion(); appendMsg('user',message); $('discussionInput').value=''; $('discussionStatus').textContent='Thinking…'; $('sendDiscussion').disabled=true;
+    try{ const r=await api('/api/discuss',{method:'POST',body:JSON.stringify({sessionId:state.sessionId,message})}); appendMsg('ai', r.reply || 'No reply returned.'); $('discussionStatus').textContent=''; }
+    catch(e){ appendMsg('ai','Discussion failed: '+errMsg(e)); $('discussionStatus').textContent=''; }
+    finally{ $('sendDiscussion').disabled=false; $('discussionInput').focus(); }
   }
 
   async function nextQuestion(){
     try{
-      const r=await api('/api/next',{method:'POST', body:JSON.stringify({ sessionId:state.sessionId })});
+      resetDiscussion();
+      const r=await api('/api/next',{method:'POST',body:JSON.stringify({sessionId:state.sessionId})});
       state.qNumber=r.q_number; state.difficulty=r.difficulty;
-      $('qHeader').textContent=`#${state.qNumber}`; $('pillDiff').textContent=r.difficulty;
-      $('question').textContent=r.question; $('answer').value='';
+      $('qHeader').textContent=`#${state.qNumber}`; $('pillDiff').textContent=r.difficulty; $('question').textContent=r.question; $('answer').value='';
       $('resultBox').classList.add('hidden'); $('btnProceed').classList.add('hidden'); state.awaitingProceed=false;
-      $('answer').focus();
-      $('question').classList.remove('pop'); void $('question').offsetWidth; $('question').classList.add('pop');
-      $('qHeader').classList.remove('pop'); void $('qHeader').offsetWidth; $('qHeader').classList.add('pop');
-    }catch(e){
-      const box=$('resultBox'); box.className='result bad'; box.textContent='Failed to get next question: '+errMsg(e); box.classList.remove('hidden');
-    }
+      $('answer').disabled=false; $('submitAnswer').disabled=false; $('answer').focus();
+      ['question','qHeader'].forEach(id=>{ $(id).classList.remove('pop'); void $(id).offsetWidth; $(id).classList.add('pop'); });
+    }catch(e){ const box=$('resultBox'); box.className='result bad'; box.textContent='Failed to get next question: '+errMsg(e); box.classList.remove('hidden'); }
   }
 
-  function renderResult(correct, explanation, pointsDelta, nextDifficulty){
-    const box=$('resultBox'); const pos=(+pointsDelta||0)>=0;
-    const deltaHtml=`<div class="delta ${pos?'pos':'neg'}">${pos?'+':''}${pointsDelta||0} pts</div>`;
-    if(correct){ box.className='result ok'; box.innerHTML=`<div><strong>Correct.</strong></div>${deltaHtml}`; }
-    else{ box.className='result bad'; box.innerHTML=`<div><strong>Incorrect.</strong> ${explanation?('<span class="muted">'+explanation+'</span>'):''}</div>${deltaHtml}`; }
-    if(nextDifficulty) $('pillDiff').textContent=nextDifficulty;
+  function renderResult(payload){
+    const box=$('resultBox');
+    const verdict=payload.verdict || (payload.invalid_question?'invalid':(payload.correct?'correct':'incorrect'));
+    const credit=Number(payload.credit ?? (payload.correct?1:0));
+    const points=Number(payload.points_delta||0);
+    const max=Number(payload.max_points||0);
+    let cls='bad', title='Incorrect', subtitle='';
+    if(payload.invalid_question || verdict==='invalid'){ cls='invalid'; title='Question flagged as ambiguous or flawed'; subtitle='No penalty applied.'; }
+    else if(verdict==='correct'){ cls='ok'; title='Correct'; subtitle='Full credit.'; }
+    else if(verdict==='partial'){ cls='partial'; title='Partially correct'; subtitle=`${Math.round(credit*100)}% credit.`; }
+    else { cls='bad'; title='Incorrect'; subtitle='Penalty applied.'; }
+    const deltaClass=points>0?'pos':(points<0?'neg':'neutral');
+    const maxText=max ? ` / ${max}` : '';
+    box.className='result '+cls;
+    box.innerHTML=`
+      <div class="result-title"><span>${escapeHtml(title)}</span><span class="credit-badge">${escapeHtml(subtitle)}</span></div>
+      ${payload.explanation?`<div class="muted">${escapeHtml(payload.explanation)}</div>`:''}
+      <div class="delta ${deltaClass}">${points>0?'+':''}${points} pts${maxText}</div>
+    `;
+    if(payload.nextDifficulty) $('pillDiff').textContent=payload.nextDifficulty;
     box.classList.remove('hidden'); box.classList.remove('pop'); void box.offsetWidth; box.classList.add('pop');
+    $('postAnswerActions').style.display='flex'; $('showDiscussion').classList.remove('hidden');
   }
 
   async function submitAnswer(){
-    if(state.awaitingProceed) return;
-    const answer=$('answer').value.trim();
-    if(!answer){ $('answer').focus(); return; }
+    if(state.awaitingProceed) return; const answer=$('answer').value.trim(); if(!answer){ $('answer').focus(); return; }
     try{
-      const r=await api('/api/answer',{method:'POST', body:JSON.stringify({ sessionId:state.sessionId, answer })});
-      renderResult(r.correct, r.explanation, r.points_delta, r.nextDifficulty);
-      if(typeof r.score!=='undefined') updateScore(r.score);
-      $('btnProceed').classList.remove('hidden'); state.awaitingProceed=true;
-    }catch(e){
-      const box=$('resultBox'); box.className='result bad'; box.textContent='Grading failed: '+errMsg(e); box.classList.remove('hidden');
-    }
+      const r=await api('/api/answer',{method:'POST',body:JSON.stringify({sessionId:state.sessionId,answer})});
+      renderResult(r); if(typeof r.score!=='undefined') updateScore(r.score); $('btnProceed').classList.remove('hidden'); state.awaitingProceed=true; $('answer').disabled=true; $('submitAnswer').disabled=true; loadLeaderboard();
+    }catch(e){ const box=$('resultBox'); box.className='result bad'; box.textContent='Grading failed: '+errMsg(e); box.classList.remove('hidden'); }
   }
 
   async function concludeWithFeedback(){
     if(!state.sessionId) return;
-    try{
-      const r=await api('/api/conclude',{method:'POST', body:JSON.stringify({ sessionId:state.sessionId })});
-      $('sumStats').innerHTML=`New exclusion count: <strong>${r.new_count}</strong> · Next number: <strong>${r.next_number}</strong>` + (typeof r.session_points!=='undefined'?` · Session points: <strong>${r.session_points}</strong>`:'');
-      $('sumFeedback').textContent=r.feedback||''; $('sumRating').textContent=r.rating||'';
-      showStep('summary');
-    }catch(e){ alert('Failed to save & get feedback: '+errMsg(e)); }
+    try{ const r=await api('/api/conclude',{method:'POST',body:JSON.stringify({sessionId:state.sessionId})}); $('sumStats').innerHTML=`New exclusion count: <strong>${r.new_count}</strong> · Next number: <strong>${r.next_number}</strong>`+(typeof r.session_points!=='undefined'?` · Session points: <strong>${r.session_points}</strong>`:''); $('sumFeedback').textContent=r.feedback||''; $('sumRating').textContent=r.rating||''; showStep('summary'); }
+    catch(e){ alert('Failed to save & get feedback: '+errMsg(e)); }
   }
 
-  // events
   $('aiSelect').addEventListener('change', connectAndBoot);
   window.addEventListener('load', ()=>{ connectAndBoot(); showStep('connect'); });
   $('goUserType').addEventListener('click', ()=>showStep('user-type'));
   $('btnNewUser').addEventListener('click', ()=>showStep('new'));
   $('btnExistingUser').addEventListener('click', ()=>showStep('existing'));
   document.querySelectorAll('[data-back]').forEach(b=>b.addEventListener('click',e=>showStep(e.currentTarget.getAttribute('data-back'))));
-  $('createUser').addEventListener('click', async ()=>{
-    const u=$('newUsername').value.trim(); if(!u){ $('newUserMsg').textContent='Please enter a username.'; return; }
-    try{ await api('/api/users',{method:'POST', body:JSON.stringify({ username:u })}); setUser(u); $('newUserMsg').textContent=`User "${u}" created.`; await prepDashboard(); showStep('dashboard'); }
-    catch(e){ $('newUserMsg').textContent=errMsg(e); }
-  });
-  $('useExisting').addEventListener('click', async ()=>{
-    const u=$('existingUsername').value.trim(); if(!u){ $('existingMsg').textContent='Please enter your username.'; return; }
-    try{ await api('/api/exclusions/count?username='+encodeURIComponent(u)); setUser(u); $('existingMsg').textContent=`Welcome back, ${u}.`; await prepDashboard(); showStep('dashboard'); }
-    catch(e){ $('existingMsg').textContent=errMsg(e); }
-  });
+  $('createUser').addEventListener('click', async()=>{ const u=$('newUsername').value.trim(); if(!u){$('newUserMsg').textContent='Please enter a username.';return;} try{ await api('/api/users',{method:'POST',body:JSON.stringify({username:u})}); setUser(u); $('newUserMsg').textContent=`User "${u}" created.`; await prepDashboard(); showStep('dashboard'); }catch(e){ $('newUserMsg').textContent=errMsg(e); } });
+  $('useExisting').addEventListener('click', async()=>{ const u=$('existingUsername').value.trim(); if(!u){$('existingMsg').textContent='Please enter your username.';return;} try{ await api('/api/exclusions/count?username='+encodeURIComponent(u)); setUser(u); $('existingMsg').textContent=`Welcome back, ${u}.`; await prepDashboard(); showStep('dashboard'); }catch(e){ $('existingMsg').textContent=errMsg(e); } });
   $('startSession').addEventListener('click', startSession);
-  $('goHistory').addEventListener('click', async ()=>{ await loadHistory(); showStep('history'); });
+  $('goHistory').addEventListener('click', async()=>{ await loadHistory(); showStep('history'); });
   $('reloadHistory').addEventListener('click', loadHistory);
   $('submitAnswer').addEventListener('click', submitAnswer);
   $('btnProceed').addEventListener('click', nextQuestion);
   $('btnSaveAndFeedback').addEventListener('click', concludeWithFeedback);
+  $('showDiscussion').addEventListener('click', openDiscussion);
+  $('toggleDiscussion').addEventListener('click', hideDiscussion);
+  $('sendDiscussion').addEventListener('click', ()=>sendDiscussion());
+  $('discussionInput').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendDiscussion(); } });
+  document.querySelectorAll('[data-discuss]').forEach(b=>b.addEventListener('click',e=>sendDiscussion(e.currentTarget.getAttribute('data-discuss'))));
+  $('answer').addEventListener('keydown', e=>{ if(e.key==='Enter') submitAnswer(); });
 </script>
 </body>
 </html>
