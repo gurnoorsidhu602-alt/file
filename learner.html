@@ -59,7 +59,7 @@
     <h1>Med Learner</h1>
     <div class="pill">
       <span class="muted">Base URL</span>
-      <input id="baseUrl" value="https://file-iy1w.onrender.com" size="36" />
+      <input id="baseUrl" value="" size="36" />
       <button id="btnPing">Connect</button>
       <span id="connDot" class="tag">disconnected</span>
     </div>
@@ -179,8 +179,12 @@
 
   <script>
     // ---------- State ----------
+    const params = new URLSearchParams(window.location.search);
+    const DEFAULT_API_BASE = params.get('api') || localStorage.getItem('apiBase') || (window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin);
+    if (params.get('api')) localStorage.setItem('apiBase', params.get('api'));
+
     const state = {
-      baseUrl: 'https://file-iy1w.onrender.com',
+      baseUrl: DEFAULT_API_BASE.replace(/\/$/, ''),
       userId: 'Gurnoor',
       toc: [],               // [{discipline, group, topic}]
       tocByDiscipline: {},   // map discipline -> topics
@@ -211,7 +215,7 @@
     function sanitize(s){ return (s||'').trim(); }
 
     // ---------- Base / user ----------
-    $('baseUrl').addEventListener('input', e => state.baseUrl = sanitize(e.target.value));
+    $('baseUrl').addEventListener('input', e => { state.baseUrl = sanitize(e.target.value).replace(/\/$/, ''); localStorage.setItem('apiBase', state.baseUrl); });
     $('userId').addEventListener('input', e => state.userId = sanitize(e.target.value) || 'Gurnoor');
 
     $('btnPing').addEventListener('click', async () => {
@@ -572,6 +576,7 @@ Would you like to confirm this topic?
 
     // ---------- Init ----------
     (function init(){
+      $('baseUrl').value = state.baseUrl;
       setConnected(false);
       showMode('pick');
       // Pre-seed a tiny TOC example to demo
