@@ -252,11 +252,14 @@
 </div>
 
 <script>
-  const SERVERS = { pimp: "https://file-iy1w.onrender.com" };
+  const params = new URLSearchParams(window.location.search);
+  const DEFAULT_API_BASE = params.get('api') || localStorage.getItem('apiBase') || (window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin);
+  if (params.get('api')) localStorage.setItem('apiBase', params.get('api'));
+  const SERVERS = { pimp: DEFAULT_API_BASE.replace(/\/$/, '') };
   const state = { base:"", connected:false, username:"", sessionId:"", qNumber:null, difficulty:"", awaitingProceed:false, score:0, currentStep:"connect" };
 
   const $ = id => document.getElementById(id);
-  const errMsg = e => e?.detail || e?.error || 'Unexpected error';
+  const errMsg = e => e?.detail || e?.error || e?.message || 'Unexpected error';
   function setConn(ok){ state.connected = ok; $('conn').classList.toggle('ok', ok); }
   function setUser(u){ state.username=u; $('userVal').textContent=u; $('userChip').style.display='flex'; }
   function updateScore(v){ state.score=+v||0; $('scoreVal').textContent=state.score; $('scoreVal2').textContent=state.score; $('scoreChip').style.display='flex'; }
