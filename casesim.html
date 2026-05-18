@@ -56,6 +56,7 @@
   <button class="btn ghost sm" onclick="location.href='/'">Pimp Simulator</button>
   <button class="btn ghost sm" onclick="location.href='/learner'">Med Learner</button>
   <div class="spacer"></div>
+  <span id="clockChip" class="chip hidden"><span id="clockDay">—</span> <strong id="clockTime">—</strong></span>
   <span id="sessionChip" class="chip hidden">Session <strong id="sessionShort">—</strong></span>
   <button id="btnPage" class="btn sm hidden">Page me / advance</button>
   <a id="lockLink" class="btn ghost sm hidden" href="#" target="_blank" rel="noopener">Download locked file</a>
@@ -120,13 +121,27 @@
 <script>
 const API_BASE = window.location.origin;
 const tabs = ['Labs','Investigations','Vitals','Nursing Notes','Medications/MAR','Notes','Orders'];
-const state = { sessionId:null, patient:null, activity:[], orderHistory:[], activeTab:'Labs', report:null, activeLabCategory:'Hematology', noteMode:'list', selectedNoteId:null, exclusionLoaded:false };
+const state = { sessionId:null, patient:null, activity:[], orderHistory:[], currentTime:'', currentDayLabel:'', activeTab:'Labs', report:null, activeLabCategory:'Hematology', noteMode:'list', selectedNoteId:null, exclusionLoaded:false };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(msg, bad=false){ const t=$('toast'); t.textContent=msg; t.style.borderColor=bad?'rgba(255,107,126,.42)':'var(--line2)'; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),4200); }
 async function api(path, opts={}){ const r=await fetch(API_BASE+path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}}); const txt=await r.text(); let j; try{j=JSON.parse(txt)}catch{j={raw:txt}}; if(!r.ok) throw j; return j; }
 function err(e){ return e?.detail || e?.error || e?.message || String(e || 'Error'); }
 function fmtTime(x){ return esc(x || ''); }
+function formatClockTime(x){
+  const s=String(x||'');
+  const m=s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+  if(!m) return s || '—';
+  return `${m[4]}:${m[5]}`;
+}
+function renderClock(){
+  const chip=$('clockChip');
+  if(!chip) return;
+  if(!state.currentTime){ chip.classList.add('hidden'); return; }
+  $('clockDay').textContent=state.currentDayLabel || '';
+  $('clockTime').textContent=formatClockTime(state.currentTime);
+  chip.classList.remove('hidden');
+}
 function setBusy(el, on, text){ el.disabled=!!on; if(text!==undefined) el.textContent=text; }
 
 $('exclusionFile').addEventListener('change', async e=>{
@@ -156,10 +171,11 @@ async function startCase(){
 }
 
 function applyCase(j){
-  state.sessionId=j.sessionId; state.patient=j.patient; state.activity=j.activity||[]; state.orderHistory=j.orderHistory||[];
+  state.sessionId=j.sessionId; state.patient=j.patient; state.activity=j.activity||[]; state.orderHistory=j.orderHistory||[]; state.currentTime=j.currentTime||state.currentTime||''; state.currentDayLabel=j.currentDayLabel||state.currentDayLabel||'';
   $('sessionChip').classList.remove('hidden'); $('sessionShort').textContent=String(state.sessionId).slice(0,8);
   $('lockLink').href='/case/sessions/'+encodeURIComponent(state.sessionId)+'/lockfile'; $('lockLink').classList.remove('hidden');
   $('btnPage').classList.remove('hidden'); $('btnConcludeTop').classList.remove('hidden');
+  renderClock();
   renderAll();
 }
 async function refreshCase(){ if(!state.sessionId) return; try{ const j=await api('/case/sessions/'+state.sessionId); applyCase(j); toast('Chart refreshed.'); }catch(e){ toast(err(e),true); } }
@@ -310,7 +326,7 @@ function renderNoteDetail(){
   $('createNoteBtn').onclick=()=>{state.noteMode='create'; state.selectedNoteId=null; renderNotes();};
 }
 function renderNoteCreator(){
-  const now=new Date().toISOString().slice(0,16).replace('T',' ');
+  const now=state.currentTime || new Date().toISOString().slice(0,16).replace('T',' ');
   let html=`<div class="panel"><div class="note-view-head"><div><h2>Create provider note</h2><div class="muted">Use the heading button for underlined headings. Use bullet list for point-form charting.</div></div><button id="backNoteList" class="btn ghost sm">← Back to notes</button></div>`;
   html+=`<div class="grid3"><div><label>Note type</label><select id="noteType"><option>Progress note</option><option>Consult note</option><option>Admission note</option><option>Procedure note</option><option>Discharge summary</option><option>Event note</option></select></div><div><label>Service</label><input id="noteService" value="Internal Medicine"></div><div><label>Provider name</label><input id="noteProvider" value="Learner"></div></div>`;
   html+=`<div class="grid2" style="margin-top:10px"><div><label>Title</label><input id="noteTitle" value="Learner progress note"></div><div><label>Timestamp</label><input id="noteTimestamp" value="${esc(now)}"></div></div>`;
