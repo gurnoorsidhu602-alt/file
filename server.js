@@ -2320,14 +2320,7 @@ async function aiGenerateCaseSession({ mode, specialty, difficulty, exclusionTex
         investigations: [{ id: uuid(), datetime:"2026-05-17 19:10", group:"Imaging", title:"CT abdomen/pelvis with contrast", status:"Final", report:"No bowel obstruction. No appendicitis. No free air. Small physiologic pelvic free fluid. Solid organs unremarkable." }],
         nursingNotes: [{ datetime:"2026-05-17 18:25", author:"RN", text:"Patient reports diffuse abdominal pain with nausea. Vomited twice in ED. Ambulating independently." }],
         medications: [{ id: uuid(), name:"Ondansetron", dose:"4 mg", route:"IV", frequency:"once", status:"active", start:"2026-05-17 18:30", stop:"", comments:"administered" }],
-        notes: [{ id: uuid(), datetime:"2026-05-17 18:15", service:"Emergency Medicine", providerName:"Dr. Chen", noteType:"Consult request", type:"Consult request", author:"Dr. Chen", title:"Internal Medicine consult request", text:"Reason for consult
-Persistent abdominal pain with hyponatremia.
-
-HPI
-29F with severe diffuse abdominal pain and vomiting. CT abdomen negative. Sodium 126 mmol/L.
-
-Request
-Please assess for admission and ongoing workup." }],
+        notes: [{ id: uuid(), datetime:"2026-05-17 18:15", service:"Emergency Medicine", providerName:"Dr. Chen", noteType:"Consult request", type:"Consult request", author:"Dr. Chen", title:"Internal Medicine consult request", text:"Reason for consult\nPersistent abdominal pain with hyponatremia.\n\nHPI\n29F with severe diffuse abdominal pain and vomiting. CT abdomen negative. Sodium 126 mmol/L.\n\nRequest\nPlease assess for admission and ongoing workup." }],
         orders: []
       }),
       activity: [{ at: nowIso(), type: "system", text: "Case generated. Locked diagnosis stored server-side." }],
