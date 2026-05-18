@@ -28,6 +28,26 @@
     aside{border-right:1px solid var(--line);background:rgba(13,17,24,.66);overflow:auto}.side-head{padding:12px;border-bottom:1px solid var(--line)}.patient-list{display:grid;gap:6px;padding:10px}.patient{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03);padding:10px;text-align:left}.patient.active{border-color:rgba(145,183,255,.42);background:rgba(145,183,255,.10)}.patient-name{font-weight:780}.patient-meta{color:var(--muted);font-size:12px;margin-top:2px}.patient-complaint{font-size:12px;color:#c7d2e3;margin-top:7px}
     main{min-width:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);overflow:hidden}.banner{padding:12px 14px;border-bottom:1px solid var(--line);background:rgba(11,17,26,.64)}.banner-top{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}.demog{font-size:20px;font-weight:830}.banner-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.tabs{display:flex;gap:2px;overflow:auto;border-bottom:1px solid var(--line);background:rgba(10,15,23,.8);padding:0 10px}.tab{border:0;border-radius:0;background:transparent;color:var(--muted);padding:12px 10px;border-bottom:2px solid transparent;white-space:nowrap;font-weight:700}.tab.active{color:var(--ink);border-bottom-color:var(--accent);background:rgba(145,183,255,.055)}.content{overflow:auto;padding:14px;min-width:0}.panel{background:rgba(255,255,255,.025);border:1px solid var(--line);border-radius:13px;padding:12px;margin-bottom:12px}.panel-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.scroll-x{overflow:auto} table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px} th,td{border-bottom:1px solid var(--line);padding:8px 9px;text-align:left;vertical-align:top} th{color:var(--muted);font-weight:760;background:rgba(255,255,255,.025);position:sticky;top:0} td.value{font-family:var(--mono);cursor:pointer}.abn{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.critical{background:rgba(255,107,126,.25)!important;color:#fff;font-weight:900}.low,.high{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.normal{color:#e8eef8}.list{display:grid;gap:8px}.item{border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025);padding:10px}.item:hover{border-color:rgba(255,255,255,.16)}.item-head{display:flex;justify-content:space-between;gap:10px}.item-title{font-weight:780}.item-meta{color:var(--muted);font-size:12px}.report{white-space:pre-wrap;background:#0a1018;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);line-height:1.45}.note-text{white-space:pre-wrap;color:#dce5f4}.split{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px}.order-list{display:grid;gap:8px}.order-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.activity{max-height:340px;overflow:auto;display:grid;gap:8px}.activity .item{font-size:12.5px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:100}.modal-card{max-width:780px;width:100%;max-height:86vh;overflow:auto}.toast{position:fixed;right:14px;bottom:14px;max-width:520px;background:#111a27;border:1px solid var(--line2);border-radius:12px;padding:11px 12px;box-shadow:var(--shadow);z-index:110}.codebox{white-space:pre-wrap;background:#080d14;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);font-size:12.5px}.refpop{position:fixed;z-index:120;background:#101826;border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);padding:9px;max-width:300px;color:#dbe5f4}
     @media(max-width:980px){.app{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid var(--line)}.patient-list{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.split,.grid2,.grid3{grid-template-columns:1fr}main{overflow:visible}.content{overflow:visible}.banner-top{display:block}.app{display:block}}
+
+    .subtabs{display:flex;gap:6px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:6px;background:rgba(255,255,255,.018);margin-bottom:12px}
+    .subtab{border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);padding:6px 10px;font-weight:760;white-space:nowrap}
+    .subtab.active{background:rgba(145,183,255,.12);border-color:rgba(145,183,255,.34);color:var(--ink)}
+    .note-row{display:grid;grid-template-columns:180px minmax(130px,.8fr) minmax(130px,.8fr) minmax(150px,.8fr);gap:10px;align-items:center;text-align:left;width:100%}
+    .note-row .cell-label{display:block;color:var(--muted2);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px}
+    .note-row strong{font-weight:780}.note-row .note-list-value{color:#e7eefb}
+    .note-view-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+    .note-meta-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 12px}
+    .note-meta-card{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.022);padding:8px}
+    .note-meta-card span{display:block;color:var(--muted);font-size:11.5px;margin-bottom:2px}.note-meta-card strong{font-weight:760}
+    .note-full{background:#0a1018;border:1px solid var(--line);border-radius:12px;padding:14px;line-height:1.55;color:#e8eef8}
+    .note-line{margin:0 0 7px}.note-spacer{height:8px}.note-heading{font-weight:820;text-decoration:underline;text-underline-offset:3px;color:#f2f6ff}.note-full ul{margin:4px 0 10px 20px;padding:0}.note-full li{margin:2px 0}
+    .editor-toolbar{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}
+    .rich-note-editor{min-height:460px;width:100%;background:#080d14;border:1px solid var(--line);border-radius:12px;padding:12px;line-height:1.5;outline:none;overflow:auto}
+    .rich-note-editor:focus{border-color:rgba(145,183,255,.55);box-shadow:0 0 0 2px rgba(145,183,255,.10)}
+    .rich-note-editor:empty:before{content:attr(data-placeholder);color:var(--muted2);white-space:pre-wrap}
+    .rich-note-editor ul{margin:6px 0 10px 22px;padding:0}.rich-note-editor li{margin:2px 0}
+    .editor-heading{font-weight:820;text-decoration:underline;text-underline-offset:3px;margin-top:10px;color:#f2f6ff}
+    @media(max-width:780px){.note-row{grid-template-columns:1fr}.note-meta-grid{grid-template-columns:1fr 1fr}}
   </style>
 </head>
 <body>
@@ -100,7 +120,7 @@
 <script>
 const API_BASE = window.location.origin;
 const tabs = ['Labs','Investigations','Vitals','Nursing Notes','Medications/MAR','Notes','Orders'];
-const state = { sessionId:null, patient:null, activity:[], orderHistory:[], activeTab:'Labs', report:null, exclusionLoaded:false };
+const state = { sessionId:null, patient:null, activity:[], orderHistory:[], activeTab:'Labs', report:null, activeLabCategory:'Hematology', noteMode:'list', selectedNoteId:null, exclusionLoaded:false };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(msg, bad=false){ const t=$('toast'); t.textContent=msg; t.style.borderColor=bad?'rgba(255,107,126,.42)':'var(--line2)'; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),4200); }
@@ -153,19 +173,60 @@ function renderBanner(){
   const p=state.patient||{}; $('demog').textContent=`${p.displayName||'—'} · ${p.age||'—'}${p.sex||''}`; $('bannerText').textContent=p.banner||p.presentingComplaint||'—';
   $('bannerChips').innerHTML=`<span class="chip">Location <strong>${esc(p.location||'—')}</strong></span><span class="chip">Allergies <strong>${esc((p.allergies||[]).join(', ')||'None documented')}</strong></span><span class="chip">Code <strong>${esc(p.codeStatus||'—')}</strong></span>`;
 }
-function renderTabs(){ const box=$('tabs'); box.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.className='tab '+(state.activeTab===t?'active':''); b.textContent=t; b.onclick=()=>{state.activeTab=t; state.report=null; renderTabs(); renderTab();}; box.appendChild(b); }); }
+function renderTabs(){ const box=$('tabs'); box.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.className='tab '+(state.activeTab===t?'active':''); b.textContent=t; b.onclick=()=>{state.activeTab=t; state.report=null; state.noteMode='list'; state.selectedNoteId=null; renderTabs(); renderTab();}; box.appendChild(b); }); }
 function renderTab(){ const t=state.activeTab; if(t==='Labs') return renderLabs(); if(t==='Investigations') return renderInvestigations(); if(t==='Vitals') return renderVitals(); if(t==='Nursing Notes') return renderNursing(); if(t==='Medications/MAR') return renderMAR(); if(t==='Notes') return renderNotes(); if(t==='Orders') return renderOrders(); }
 
-function renderLabs(){
-  const p=state.patient||{}; const cats=p.labCategories||[]; let html='';
-  if(!cats.length) html='<div class="panel muted">No labs available.</div>';
-  cats.forEach(cat=>{
-    const times=[...new Set((cat.rows||[]).flatMap(r=>(r.values||[]).map(v=>v.datetime)))].sort();
-    html+=`<div class="panel"><div class="panel-title"><h2>${esc(cat.name)}</h2><span class="muted">Click a value for reference range</span></div><div class="scroll-x"><table><thead><tr><th>Test</th><th>Reference</th>${times.map(x=>`<th>${fmtTime(x)}</th>`).join('')}</tr></thead><tbody>`;
-    (cat.rows||[]).forEach(row=>{ const vals=Object.fromEntries((row.values||[]).map(v=>[v.datetime,v])); html+=`<tr><td><strong>${esc(row.test)}</strong><div class="muted">${esc(row.unit||'')}</div></td><td>${esc(row.referenceRange||'')}</td>`; times.forEach(tm=>{ const v=vals[tm]; const flag=(v?.flag||'normal').toLowerCase(); html+=`<td class="value ${esc(flag)}" data-test="${esc(row.test)}" data-ref="${esc(row.referenceRange||'')}" data-unit="${esc(row.unit||'')}">${v?esc(v.value):'<span class="muted">—</span>'}</td>`; }); html+='</tr>'; });
-    html+='</tbody></table></div></div>';
+const LAB_ORDER = ['Hematology','Chemistry','Blood Gas','Serology','Urine','Misc'];
+function canonicalLabCategoryName(name){
+  const n=String(name||'').toLowerCase();
+  if(/hema|cbc|coag/.test(n)) return 'Hematology';
+  if(/blood\s*gas|abg|vbg|gas/.test(n)) return 'Blood Gas';
+  if(/serolog|immunolog|autoimmune|viral|hepatitis|hiv|antibody|antigen/.test(n)) return 'Serology';
+  if(/urine|urinalysis|u\/a|ua|microscopy/.test(n)) return 'Urine';
+  if(/misc|other|special|toxic|drug|endo|hormone/.test(n)) return 'Misc';
+  // LFTs, renal panel, electrolytes, enzymes, osmolality, lipase, CRP, etc belong here.
+  if(/chem|electrolyte|renal|kidney|liver|lft|hepatic|enzyme|metabolic|crp|esr|osmol|glucose|calcium|mag|phos|lipase|amylase|bilirubin|albumin|protein|troponin|bnp/.test(n)) return 'Chemistry';
+  return 'Misc';
+}
+function getCanonicalLabCategories(){
+  const p=state.patient||{};
+  const map=new Map(LAB_ORDER.map(x=>[x,{name:x,rows:[]} ]));
+  (p.labCategories||[]).forEach(cat=>{
+    const cname=canonicalLabCategoryName(cat.name);
+    const target=map.get(cname)||map.get('Misc');
+    (cat.rows||[]).forEach(r=>target.rows.push(r));
   });
-  $('content').innerHTML=html; document.querySelectorAll('td.value').forEach(td=>td.onclick=e=>showRef(e,td));
+  return LAB_ORDER.map(x=>map.get(x));
+}
+function renderLabs(){
+  const cats=getCanonicalLabCategories();
+  const available=cats.filter(c=>(c.rows||[]).length>0).map(c=>c.name);
+  if(!LAB_ORDER.includes(state.activeLabCategory)) state.activeLabCategory='Hematology';
+  if(!available.includes(state.activeLabCategory) && available.length) state.activeLabCategory=available[0];
+  const active=cats.find(c=>c.name===state.activeLabCategory) || cats[0];
+  let html=`<div class="subtabs" role="tablist" aria-label="Lab categories">${LAB_ORDER.map(name=>`<button class="subtab ${state.activeLabCategory===name?'active':''}" data-labcat="${esc(name)}" role="tab" aria-selected="${state.activeLabCategory===name?'true':'false'}">${esc(name)}</button>`).join('')}</div>`;
+  html+=`<div class="panel"><div class="panel-title"><h2>${esc(active.name)}</h2><span class="muted">Click a value for reference range</span></div>`;
+  if(!(active.rows||[]).length){
+    html+=`<div class="muted">No ${esc(active.name.toLowerCase())} results available.</div></div>`;
+    $('content').innerHTML=html;
+    document.querySelectorAll('[data-labcat]').forEach(b=>b.onclick=()=>{state.activeLabCategory=b.dataset.labcat; renderLabs();});
+    return;
+  }
+  const times=[...new Set((active.rows||[]).flatMap(r=>(r.values||[]).map(v=>v.datetime)))].sort();
+  html+=`<div class="scroll-x"><table><thead><tr><th>Test</th>${times.map(x=>`<th>${fmtTime(x)}</th>`).join('')}</tr></thead><tbody>`;
+  (active.rows||[]).forEach(row=>{
+    const vals=Object.fromEntries((row.values||[]).map(v=>[v.datetime,v]));
+    html+=`<tr><td><strong>${esc(row.test)}</strong><div class="muted">${esc(row.unit||'')}</div></td>`;
+    times.forEach(tm=>{
+      const v=vals[tm]; const flag=(v?.flag||'normal').toLowerCase();
+      html+=`<td class="value ${esc(flag)}" data-test="${esc(row.test)}" data-ref="${esc(row.referenceRange||'')}" data-unit="${esc(row.unit||'')}">${v?esc(v.value):'<span class="muted">—</span>'}</td>`;
+    });
+    html+='</tr>';
+  });
+  html+='</tbody></table></div></div>';
+  $('content').innerHTML=html;
+  document.querySelectorAll('[data-labcat]').forEach(b=>b.onclick=()=>{state.activeLabCategory=b.dataset.labcat; renderLabs();});
+  document.querySelectorAll('td.value').forEach(td=>td.onclick=e=>showRef(e,td));
 }
 function showRef(e,td){ const r=$('refpop'); r.innerHTML=`<strong>${td.dataset.test}</strong><br><span class="muted">Reference</span><br>${td.dataset.ref||'Not provided'}<br><span class="muted">Unit</span><br>${td.dataset.unit||'—'}`; r.style.left=Math.min(e.clientX, window.innerWidth-320)+'px'; r.style.top=Math.min(e.clientY+10, window.innerHeight-170)+'px'; r.classList.remove('hidden'); }
 
@@ -191,15 +252,106 @@ function renderMAR(filter='active'){
   filtered.forEach(m=>{ html+=`<tr><td><strong>${esc(m.name||'')}</strong></td><td>${esc(m.dose||'')}</td><td>${esc(m.route||'')}</td><td>${esc(m.frequency||'')}</td><td>${esc(m.status||'')}</td><td>${esc(m.start||'')}</td><td>${esc(m.stop||'')}</td><td>${esc(m.comments||'')}</td></tr>`; });
   html+='</tbody></table></div></div>'; $('content').innerHTML=html; document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>renderMAR(b.dataset.f));
 }
-function renderNotes(){
-  const notes=[...(state.patient?.notes||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
-  let html=`<div class="split"><div><div class="panel"><div class="panel-title"><h2>Provider Notes</h2></div><div class="list">`;
-  if(!notes.length) html+='<div class="muted">No notes.</div>';
-  notes.forEach(n=>{ html+=`<div class="item"><div class="item-head"><div><div class="item-title">${esc(n.title||n.type||'Note')}</div><div class="item-meta">${esc(n.datetime||'')} · ${esc(n.type||'')} · ${esc(n.author||'')}</div></div></div><div class="note-text" style="margin-top:8px">${esc(n.text||'')}</div></div>`; });
-  html+=`</div></div></div><div><div class="panel"><h2>Create note</h2><label style="margin-top:10px">Type</label><input id="noteType" value="Progress note"><label style="margin-top:8px">Title</label><input id="noteTitle" value="Learner progress note"><label style="margin-top:8px">Text</label><textarea id="noteText" rows="12" placeholder="Practice charting here..."></textarea><button id="saveNote" class="btn primary" style="margin-top:8px">Save note</button><div id="noteMsg" class="muted" style="margin-top:8px"></div></div></div></div>`;
-  $('content').innerHTML=html; $('saveNote').onclick=saveNote;
+function noteService(n){ return n.service || n.department || n.specialty || ''; }
+function noteProvider(n){ return n.providerName || n.provider || n.author || ''; }
+function noteType(n){ return n.noteType || n.type || 'Note'; }
+function noteTitle(n){ return n.title || noteType(n); }
+const NOTE_HEADING_RE=/^(reason for consult|reason for admission|request|hpi|history of presenting illness|pmh|past medical history|past history|meds|medications|allergies|family hx|family history|social hx|social history|exam|physical exam|physical examination|vitals|labs|laboratory data|investigations|imaging|data review|assessment|impression|plan|assessment and plan|recommendations|procedure details|procedure|course in hospital|discharge medications|follow-up|follow up|disposition)\b\s*:?(.*)$/i;
+function cleanHeadingText(h){ return String(h||'').replace(/^#+\s*/,'').replace(/\s*:$/,'').trim(); }
+function formatNoteText(text){
+  const lines=String(text||'').split(/\r?\n/);
+  let html=''; let inList=false;
+  const closeList=()=>{ if(inList){ html+='</ul>'; inList=false; } };
+  lines.forEach(raw=>{
+    const trimmed=raw.trim();
+    if(!trimmed){ closeList(); html+='<div class="note-spacer"></div>'; return; }
+    const bullet=trimmed.match(/^[-*]\s+(.+)$/);
+    if(bullet){ if(!inList){ html+='<ul>'; inList=true; } html+=`<li>${esc(bullet[1])}</li>`; return; }
+    closeList();
+    const md=trimmed.match(/^#{1,4}\s+(.+)$/);
+    if(md){ html+=`<div class="note-line"><span class="note-heading">${esc(cleanHeadingText(md[1]))}</span></div>`; return; }
+    const m=trimmed.match(NOTE_HEADING_RE);
+    if(m && (trimmed.includes(':') || trimmed.length < 55 || !m[2].trim())){
+      const heading=cleanHeadingText(m[1]); const rest=m[2].trim();
+      html+=`<div class="note-line"><span class="note-heading">${esc(heading)}</span>${rest?`: ${esc(rest)}`:''}</div>`;
+      return;
+    }
+    html+=`<div class="note-line">${esc(raw)}</div>`;
+  });
+  closeList();
+  return html || '<span class="muted">No note text.</span>';
 }
-async function saveNote(){ const text=$('noteText').value.trim(); if(!text){$('noteMsg').textContent='Enter note text.';return;} try{ const j=await api('/case/sessions/'+state.sessionId+'/note',{method:'POST',body:JSON.stringify({type:$('noteType').value,title:$('noteTitle').value,text})}); applyCase(j); state.activeTab='Notes'; renderTabs(); renderNotes(); toast('Note saved.'); }catch(e){ $('noteMsg').textContent=err(e); } }
+function renderNotes(){
+  if(state.noteMode==='detail') return renderNoteDetail();
+  if(state.noteMode==='create') return renderNoteCreator();
+  return renderNoteList();
+}
+function renderNoteList(){
+  const notes=[...(state.patient?.notes||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
+  let html=`<div class="panel"><div class="panel-title"><h2>Provider Notes</h2><button id="createNoteBtn" class="btn primary sm">Create new note</button></div><div class="list">`;
+  if(!notes.length){ html+=`<div class="muted">No provider notes.</div>`; }
+  notes.forEach(n=>{
+    html+=`<button class="item" data-note-id="${esc(n.id)}"><div class="note-row"><div><span class="cell-label">Timestamp</span><span class="note-list-value">${esc(n.datetime||'—')}</span></div><div><span class="cell-label">Service</span><span class="note-list-value">${esc(noteService(n)||'—')}</span></div><div><span class="cell-label">Provider</span><span class="note-list-value">${esc(noteProvider(n)||'—')}</span></div><div><span class="cell-label">Note type</span><strong>${esc(noteType(n)||'—')}</strong></div></div></button>`;
+  });
+  html+=`</div></div>`;
+  $('content').innerHTML=html;
+  $('createNoteBtn').onclick=()=>{state.noteMode='create'; state.selectedNoteId=null; renderNotes();};
+  document.querySelectorAll('[data-note-id]').forEach(row=>row.onclick=()=>{state.selectedNoteId=row.dataset.noteId; state.noteMode='detail'; renderNotes();});
+}
+function renderNoteDetail(){
+  const notes=state.patient?.notes||[];
+  const n=notes.find(x=>String(x.id)===String(state.selectedNoteId));
+  if(!n){ state.noteMode='list'; return renderNoteList(); }
+  let html=`<div class="panel"><div class="note-view-head"><div><h2>${esc(noteTitle(n))}</h2><div class="muted">${esc(noteType(n))}</div></div><div class="row"><button id="backNoteList" class="btn ghost sm">← Back to notes</button><button id="createNoteBtn" class="btn primary sm">Create new note</button></div></div>`;
+  html+=`<div class="note-meta-grid"><div class="note-meta-card"><span>Timestamp</span><strong>${esc(n.datetime||'—')}</strong></div><div class="note-meta-card"><span>Service</span><strong>${esc(noteService(n)||'—')}</strong></div><div class="note-meta-card"><span>Provider</span><strong>${esc(noteProvider(n)||'—')}</strong></div><div class="note-meta-card"><span>Note type</span><strong>${esc(noteType(n)||'—')}</strong></div></div>`;
+  html+=`<div class="note-full">${formatNoteText(n.text||'')}</div></div>`;
+  $('content').innerHTML=html;
+  $('backNoteList').onclick=()=>{state.noteMode='list'; state.selectedNoteId=null; renderNotes();};
+  $('createNoteBtn').onclick=()=>{state.noteMode='create'; state.selectedNoteId=null; renderNotes();};
+}
+function renderNoteCreator(){
+  const now=new Date().toISOString().slice(0,16).replace('T',' ');
+  let html=`<div class="panel"><div class="note-view-head"><div><h2>Create provider note</h2><div class="muted">Use the heading button for underlined headings. Use bullet list for point-form charting.</div></div><button id="backNoteList" class="btn ghost sm">← Back to notes</button></div>`;
+  html+=`<div class="grid3"><div><label>Note type</label><select id="noteType"><option>Progress note</option><option>Consult note</option><option>Admission note</option><option>Procedure note</option><option>Discharge summary</option><option>Event note</option></select></div><div><label>Service</label><input id="noteService" value="Internal Medicine"></div><div><label>Provider name</label><input id="noteProvider" value="Learner"></div></div>`;
+  html+=`<div class="grid2" style="margin-top:10px"><div><label>Title</label><input id="noteTitle" value="Learner progress note"></div><div><label>Timestamp</label><input id="noteTimestamp" value="${esc(now)}"></div></div>`;
+  html+=`<div class="editor-toolbar"><button id="addHeading" class="btn sm">Add underlined heading</button><button id="addBullets" class="btn sm">Bullet list</button><button id="addTemplate" class="btn sm">Consult template</button><button id="clearNote" class="btn ghost sm">Clear</button></div>`;
+  html+=`<div id="noteText" class="rich-note-editor" contenteditable="true" data-placeholder="Start typing your note here. Use Add underlined heading for sections like HPI, Physical exam, Investigations, Assessment and Plan."></div>`;
+  html+=`<div class="row" style="margin-top:10px"><button id="saveNote" class="btn primary">Save note</button><span id="noteMsg" class="muted"></span></div></div>`;
+  $('content').innerHTML=html;
+  $('backNoteList').onclick=()=>{state.noteMode='list'; renderNotes();};
+  $('addHeading').onclick=()=>insertHeadingIntoEditor(prompt('Heading name')||'Heading');
+  $('addBullets').onclick=()=>insertHtmlAtCursor('<ul><li><br></li><li><br></li><li><br></li></ul>');
+  $('addTemplate').onclick=()=>insertConsultTemplate();
+  $('clearNote').onclick=()=>{ if(confirm('Clear note text?')) $('noteText').innerHTML=''; };
+  $('saveNote').onclick=saveNote;
+}
+function insertHtmlAtCursor(html){
+  const el=$('noteText'); el.focus();
+  if(document.queryCommandSupported && document.queryCommandSupported('insertHTML')){
+    document.execCommand('insertHTML', false, html); return;
+  }
+  const sel=window.getSelection(); if(!sel || !sel.rangeCount){ el.insertAdjacentHTML('beforeend', html); return; }
+  const range=sel.getRangeAt(0); range.deleteContents();
+  const tmp=document.createElement('div'); tmp.innerHTML=html;
+  const frag=document.createDocumentFragment(); let node,last;
+  while((node=tmp.firstChild)){ last=frag.appendChild(node); }
+  range.insertNode(frag);
+  if(last){ range.setStartAfter(last); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); }
+}
+function insertHeadingIntoEditor(heading){ insertHtmlAtCursor(`<div class="editor-heading">${esc(heading)}</div><div><br></div>`); }
+function insertConsultTemplate(){
+  const sections=['Reason for consult','HPI','Past medical history','Medications','Allergies','Physical exam','Investigations','Assessment and plan'];
+  insertHtmlAtCursor(sections.map(h=>`<div class="editor-heading">${esc(h)}</div><div><br></div>`).join(''));
+}
+function getNoteEditorText(){ const el=$('noteText'); return (el?.innerText || '').replace(/\n{3,}/g,'\n\n').trim(); }
+async function saveNote(){
+  const text=getNoteEditorText(); if(!text){$('noteMsg').textContent='Enter note text.';return;}
+  try{
+    const payload={ noteType:$('noteType').value, type:$('noteType').value, service:$('noteService').value, providerName:$('noteProvider').value, author:$('noteProvider').value, title:$('noteTitle').value, datetime:$('noteTimestamp').value, text };
+    const j=await api('/case/sessions/'+state.sessionId+'/note',{method:'POST',body:JSON.stringify(payload)});
+    applyCase(j); state.activeTab='Notes'; state.noteMode='list'; state.selectedNoteId=null; renderTabs(); renderNotes(); toast('Note saved.');
+  }catch(e){ $('noteMsg').textContent=err(e); }
+}
 function renderOrders(){
   let html=`<div class="split"><div><div class="panel"><div class="panel-title"><h2>Orders</h2><button id="addOrder" class="btn sm">Add order</button></div><div id="orderList" class="order-list"></div><div class="row" style="margin-top:10px"><button id="enterOrders" class="btn primary">Enter orders</button><span id="orderMsg" class="muted"></span></div></div></div><div><div class="panel"><h2>Order history</h2><div class="activity">`;
   const hist=[...(state.orderHistory||[])].reverse(); if(!hist.length) html+='<div class="muted">No orders entered yet.</div>';
