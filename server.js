@@ -76,11 +76,16 @@ function supportsReasoningEffort(model = '') {
 }
 
 // wrapper: build the request and include only parameters supported by the selected model
-async function responsesCall({ model, messages, temperature, max_output_tokens, reasoning_effort }) {
+async function responsesCall({ model, messages, temperature, max_output_tokens, reasoning_effort, jsonMode = false }) {
   const req = { model, input: messages };
   if (temperature !== undefined && supportsTemperature(model)) req.temperature = temperature;
   if (max_output_tokens !== undefined) req.max_output_tokens = max_output_tokens;
   if (reasoning_effort && supportsReasoningEffort(model)) req.reasoning = { effort: reasoning_effort };
+
+  // Responses API JSON mode. This is safer than relying on prompt wording like
+  // "return JSON only", especially for long EMR case-generation payloads.
+  if (jsonMode) req.text = { format: { type: "json_object" } };
+
   return await openai.responses.create(req);
 }
 
@@ -2436,9 +2441,31 @@ const CASE_SESSION_TTL_SECONDS = Number(process.env.CASE_SESSION_TTL_SECONDS || 
 const kCase = (id) => `casesim:session:${id}`;
 
 function extractOutputText(resp) {
-  return (typeof resp?.output_text === "string" && resp.output_text.trim())
-    || resp?.output?.[0]?.content?.[0]?.text
-    || "";
+  const parts = [];
+
+  if (typeof resp?.output_text === "string" && resp.output_text.trim()) {
+    parts.push(resp.output_text.trim());
+  }
+
+  // The Responses API output array may contain reasoning items, tool calls,
+  // messages, or refusals. Do not assume output[0].content[0].text exists.
+  const output = Array.isArray(resp?.output) ? resp.output : [];
+  for (const item of output) {
+    if (!item) continue;
+    if (typeof item.text === "string" && item.text.trim()) parts.push(item.text.trim());
+    if (typeof item.output_text === "string" && item.output_text.trim()) parts.push(item.output_text.trim());
+
+    const content = Array.isArray(item.content) ? item.content : [];
+    for (const c of content) {
+      if (!c) continue;
+      if (typeof c.text === "string" && c.text.trim()) parts.push(c.text.trim());
+      if (typeof c.output_text === "string" && c.output_text.trim()) parts.push(c.output_text.trim());
+      if (typeof c.refusal === "string" && c.refusal.trim()) parts.push(c.refusal.trim());
+    }
+  }
+
+  return parts.join("
+").trim();
 }
 
 function parseLooseJSON(text) {
@@ -2461,18 +2488,41 @@ function parseLooseJSON(text) {
 }
 
 async function caseAiJSON({ system, payload, model = CASE_MODEL, temperature = 0, max_output_tokens = 5000, reasoning_effort = 'low' }) {
-  const resp = await responsesCall({
-    model,
-    temperature,
-    max_output_tokens,
-    reasoning_effort,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: JSON.stringify(payload) }
-    ]
-  });
-  const parsed = parseResponsesJSON(resp) || parseLooseJSON(extractOutputText(resp));
+  const messages = [
+    { role: "system", content: `${system}
+
+You must respond with one complete valid JSON object. Do not include markdown, prose, comments, or code fences.` },
+    { role: "user", content: JSON.stringify(payload) }
+  ];
+
+  let resp;
+  try {
+    resp = await responsesCall({
+      model,
+      temperature,
+      max_output_tokens,
+      reasoning_effort,
+      jsonMode: true,
+      messages
+    });
+  } catch (err) {
+    // Some account/model combinations can reject JSON mode. If so, fall back to
+    // prompt-only JSON, but keep the better parser below. Other OpenAI errors
+    // should surface normally.
+    const msg = String(err?.message || err || "").toLowerCase();
+    if (!msg.includes("json") && !msg.includes("text.format") && !msg.includes("response_format")) throw err;
+    console.warn("[caseAiJSON] JSON mode rejected; retrying without JSON mode:", err?.message || err);
+    resp = await responsesCall({ model, temperature, max_output_tokens, reasoning_effort, messages });
+  }
+
+  if (resp?.status === "incomplete" && resp?.incomplete_details?.reason === "max_output_tokens") {
+    throw new Error(`AI returned incomplete JSON for case simulator because max_output_tokens=${max_output_tokens} was reached`);
+  }
+
+  const rawText = extractOutputText(resp);
+  const parsed = parseResponsesJSON(resp) || parseLooseJSON(rawText);
   if (!parsed || typeof parsed !== "object") {
+    console.warn("[caseAiJSON] Could not parse model response. status=", resp?.status, "first_text=", rawText.slice(0, 500));
     throw new Error("AI returned non-JSON output for case simulator");
   }
   return parsed;
@@ -2780,7 +2830,7 @@ ${CASE_SCHEMA_TEXT}`;
     generationTime: new Date().toISOString()
   };
 
-  let generated = await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: mode === "zebra" ? 0.8 : 0.35, max_output_tokens: 9000, reasoning_effort: "high" });
+  let generated = await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: mode === "zebra" ? 0.8 : 0.35, max_output_tokens: 12000, reasoning_effort: "high" });
   if (!generated.lock?.primaryDiagnosis || !generated.patient) {
     throw new Error("Case generator returned incomplete case JSON");
   }
