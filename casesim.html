@@ -57,9 +57,10 @@
   <button class="btn ghost sm" onclick="location.href='/learner'">Med Learner</button>
   <div class="spacer"></div>
   <span id="clockChip" class="chip hidden"><span id="clockDay">—</span> <strong id="clockTime">—</strong></span>
+  <span id="userChip" class="chip hidden">User <strong id="userVal">—</strong></span>
   <span id="sessionChip" class="chip hidden">Session <strong id="sessionShort">—</strong></span>
   <button id="btnPage" class="btn sm hidden">Page me / advance</button>
-  <a id="lockLink" class="btn ghost sm hidden" href="#" target="_blank" rel="noopener">Download locked file</a>
+  <button id="lockLink" class="btn ghost sm hidden">Download locked file</button>
   <button id="btnConcludeTop" class="btn danger sm hidden">Conclude</button>
 </header>
 
@@ -67,20 +68,16 @@
   <div class="card">
     <div class="kicker">New simulation</div>
     <h1>Start an EMR-based medical case</h1>
-    <p class="sub">Upload your exclusion list first. The server locks a hidden diagnosis at case generation, then only exposes the simulated chart, objective exam/history responses, orders, results, pages, and notes.</p>
+    <p class="sub">The server locks a hidden diagnosis at case generation. Your prior completed-case exclusion list is now stored automatically under your logged-in account.</p>
     <div class="grid3" style="margin-top:14px">
-      <div><label>User ID</label><input id="userId" value="Gurnoor" /></div>
       <div><label>Mode</label><select id="mode"><option value="regular">Regular random mode</option><option value="zebra">Zebra mode</option></select></div>
-      <div><label>Difficulty</label><select id="difficulty"><option>MSI3-R1</option><option>MSI4-R2</option><option>R3-R5</option><option>Attending-level brutal</option></select></div>
-    </div>
-    <div class="grid2" style="margin-top:12px">
+      <div><label>Difficulty</label><select id="difficulty"><option>Easy</option><option>Medium</option><option selected>Hard</option><option>Expert</option><option>Brutal</option></select></div>
       <div><label>Optional field / setting</label><input id="specialty" placeholder="e.g., CTU, ED consult, nephrology, ICU, peds" /></div>
-      <div><label>Exclusion list .txt</label><input id="exclusionFile" type="file" accept=".txt,.md,.csv,text/plain" /></div>
     </div>
-    <div style="margin-top:12px"><label>Exclusion list preview</label><textarea id="exclusionText" rows="7" placeholder="Upload your exclusion list, or paste it here. For a brand new list, click Use empty list."></textarea></div>
     <div class="row" style="margin-top:12px">
-      <button id="btnEmptyList" class="btn ghost">Use empty list</button>
       <button id="btnStart" class="btn primary">Generate locked case</button>
+      <button class="btn ghost" onclick="location.href='/'">Log in / switch user</button>
+      <span id="caseExclInfo" class="chip hidden">Case exclusions <strong id="caseExclCount">0</strong></span>
       <span id="setupStatus" class="muted"></span>
     </div>
   </div>
@@ -120,12 +117,14 @@
 
 <script>
 const API_BASE = window.location.origin;
+const AUTH_TOKEN = localStorage.getItem('authToken') || '';
+let AUTH_USER = '';
 const tabs = ['Labs','Investigations','Vitals','Nursing Notes','Medications/MAR','Notes','Orders'];
-const state = { sessionId:null, patient:null, activity:[], orderHistory:[], currentTime:'', currentDayLabel:'', activeTab:'Labs', report:null, activeLabCategory:'Hematology', noteMode:'list', selectedNoteId:null, exclusionLoaded:false };
+const state = { sessionId:null, patient:null, activity:[], orderHistory:[], currentTime:'', currentDayLabel:'', activeTab:'Labs', report:null, activeLabCategory:'Hematology', noteMode:'list', selectedNoteId:null };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(msg, bad=false){ const t=$('toast'); t.textContent=msg; t.style.borderColor=bad?'rgba(255,107,126,.42)':'var(--line2)'; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),4200); }
-async function api(path, opts={}){ const r=await fetch(API_BASE+path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}}); const txt=await r.text(); let j; try{j=JSON.parse(txt)}catch{j={raw:txt}}; if(!r.ok) throw j; return j; }
+async function api(path, opts={}){ const headers={'Content-Type':'application/json',...(opts.headers||{})}; if(AUTH_TOKEN) headers.Authorization='Bearer '+AUTH_TOKEN; const r=await fetch(API_BASE+path,{...opts,headers}); const txt=await r.text(); let j; try{j=JSON.parse(txt)}catch{j={raw:txt}}; if(!r.ok){ if(r.status===401){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; } throw j; } return j; }
 function err(e){ return e?.detail || e?.error || e?.message || String(e || 'Error'); }
 function fmtTime(x){ return esc(x || ''); }
 function formatClockTime(x){
@@ -144,36 +143,48 @@ function renderClock(){
 }
 function setBusy(el, on, text){ el.disabled=!!on; if(text!==undefined) el.textContent=text; }
 
-$('exclusionFile').addEventListener('change', async e=>{
-  const file=e.target.files[0]; if(!file) return;
-  const text=await file.text(); $('exclusionText').value=text; state.exclusionLoaded=true; $('setupStatus').textContent=`Loaded ${file.name} (${text.length} chars).`;
-});
-$('btnEmptyList').onclick=()=>{ $('exclusionText').value=''; state.exclusionLoaded=true; $('setupStatus').textContent='Empty exclusion list selected.'; };
 $('btnNewCase').onclick=()=>{ $('setup').classList.remove('hidden'); $('app').classList.add('hidden'); window.scrollTo({top:0,behavior:'smooth'}); };
 $('btnStart').onclick=startCase;
 $('btnRefresh').onclick=refreshCase;
 $('btnAsk').onclick=openAskModal;
 $('btnPage').onclick=advanceCase;
 $('btnConcludeTop').onclick=openConcludeModal;
+$('lockLink').onclick=downloadLockFile;
 
 document.addEventListener('click', e=>{ if(!e.target.closest('.refpop') && !e.target.classList.contains('value')) $('refpop').classList.add('hidden'); });
+async function initAuth(){
+  if(!AUTH_TOKEN){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; $('btnStart').disabled=true; return; }
+  try{ const me=await api('/auth/me'); AUTH_USER=me.username; $('userVal').textContent=AUTH_USER; $('userChip').classList.remove('hidden'); const c=await api('/case/exclusions/count'); $('caseExclCount').textContent=c.count||0; $('caseExclInfo').classList.remove('hidden'); }
+  catch(e){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; $('btnStart').disabled=true; }
+}
+initAuth();
+
 
 async function startCase(){
-  const exclusionText=$('exclusionText').value;
-  if(!state.exclusionLoaded && exclusionText.trim()===''){ $('setupStatus').innerHTML='<span class="bad">Upload an exclusion list or click Use empty list first.</span>'; return; }
+  if(!AUTH_TOKEN){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; return; }
   const btn=$('btnStart'); setBusy(btn,true,'Generating…'); $('setupStatus').textContent='Generating locked diagnosis and EMR chart…';
   try{
-    const payload={ user_id:$('userId').value.trim()||'Gurnoor', mode:$('mode').value, specialty:$('specialty').value.trim(), difficulty:$('difficulty').value, exclusionText };
+    const payload={ mode:$('mode').value, specialty:$('specialty').value.trim(), difficulty:$('difficulty').value };
     const j=await api('/case/sessions',{method:'POST',body:JSON.stringify(payload)});
     applyCase(j); $('setup').classList.add('hidden'); $('app').classList.remove('hidden'); toast('Case generated. Diagnosis is locked server-side.');
   }catch(e){ $('setupStatus').innerHTML='<span class="bad">'+esc(err(e))+'</span>'; }
   finally{ setBusy(btn,false,'Generate locked case'); }
 }
 
+async function downloadLockFile(){
+  if(!state.sessionId) return;
+  try{
+    const r=await fetch(API_BASE+'/case/sessions/'+encodeURIComponent(state.sessionId)+'/lockfile',{headers:{Authorization:'Bearer '+AUTH_TOKEN}});
+    if(!r.ok) throw new Error(await r.text());
+    const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download='case-lock-'+state.sessionId+'.txt'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }catch(e){ toast('Could not download lock file: '+err(e),true); }
+}
+
 function applyCase(j){
   state.sessionId=j.sessionId; state.patient=j.patient; state.activity=j.activity||[]; state.orderHistory=j.orderHistory||[]; state.currentTime=j.currentTime||state.currentTime||''; state.currentDayLabel=j.currentDayLabel||state.currentDayLabel||'';
   $('sessionChip').classList.remove('hidden'); $('sessionShort').textContent=String(state.sessionId).slice(0,8);
-  $('lockLink').href='/case/sessions/'+encodeURIComponent(state.sessionId)+'/lockfile'; $('lockLink').classList.remove('hidden');
+  $('lockLink').classList.remove('hidden');
   $('btnPage').classList.remove('hidden'); $('btnConcludeTop').classList.remove('hidden');
   renderClock();
   renderAll();
