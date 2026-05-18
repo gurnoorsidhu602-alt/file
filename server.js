@@ -2916,7 +2916,7 @@ Return strict JSON only: {"patient": <full updated public patient object>, "even
     activity: ensureArray(session.activity).slice(-50),
     orderHistory: ensureArray(session.orderHistory).slice(-80)
   };
-  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0.15, max_output_tokens: 3500, reasoning_effort: "low" });
+  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0.15, max_output_tokens: 10000, reasoning_effort: "low" });
 }
 
 async function aiConcludeCase({ session, finalNoteText, finalOrdersText }) {
