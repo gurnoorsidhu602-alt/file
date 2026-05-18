@@ -2618,6 +2618,11 @@ function removeCompletedConsultNotesIfPending(patient, specialty) {
   if (!isPendingConsultSetting(specialty)) return patient;
   const p = patient || {};
   p.notes = ensureArray(p.notes).filter(note => {
+    const provider = normalizeSimple(note.providerName || note.author || "");
+    // Preserve learner-created documentation. The pending-consult guard is only
+    // meant to prevent the initial AI-generated chart from already containing
+    // a completed Medicine/CTU consult note.
+    if (/(learner|student|user|clerk)/.test(provider)) return true;
     const service = normalizeSimple(note.service || note.department || note.specialty || note.author || note.providerName || "");
     const type = normalizeSimple(note.noteType || note.type || note.title || "");
     const text = normalizeSimple(note.text || "");
@@ -2632,8 +2637,8 @@ function removeCompletedConsultNotesIfPending(patient, specialty) {
   return p;
 }
 
-function postProcessCasePatient(patient, specialty = "") {
-  const p = sanitizePatient(patient);
+function postProcessCasePatient(patient, specialty = "", priorPatient = null) {
+  const p = priorPatient ? mergePatientState(priorPatient, patient) : sanitizePatient(patient);
   p.notes = ensureArray(p.notes).map(normalizeNoteObject);
   removeCompletedConsultNotesIfPending(p, specialty);
   return p;
@@ -2687,6 +2692,146 @@ function sanitizePatient(p) {
     notes: ensureArray(p.notes),
     orders: ensureArray(p.orders)
   };
+}
+
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function stableValue(x) {
+  if (x === null || x === undefined) return "";
+  if (typeof x !== "object") return String(x);
+  try {
+    if (Array.isArray(x)) return `[${x.map(stableValue).join('|')}]`;
+    return Object.keys(x).sort().map(k => `${k}:${stableValue(x[k])}`).join('|');
+  } catch {
+    return String(x);
+  }
+}
+
+function genericItemKey(item, preferredKeys = []) {
+  const it = item && typeof item === "object" ? item : { value: item };
+  if (it.id) return `id:${String(it.id)}`;
+  const values = preferredKeys.map(k => String(it[k] || '').trim()).filter(Boolean);
+  if (values.length) return normalizeSimple(values.join(' | '));
+  return normalizeSimple(stableValue(it)).slice(0, 500);
+}
+
+function mergeRecordArray(priorArr, nextArr, preferredKeys = []) {
+  const out = [];
+  const index = new Map();
+  const addOrUpdate = (item, allowUpdate = true) => {
+    if (item === null || item === undefined) return;
+    const key = genericItemKey(item, preferredKeys);
+    if (!key) return;
+    const existingIndex = index.get(key);
+    if (existingIndex === undefined) {
+      index.set(key, out.length);
+      out.push(item);
+      return;
+    }
+    if (allowUpdate && typeof out[existingIndex] === "object" && typeof item === "object") {
+      out[existingIndex] = { ...out[existingIndex], ...item };
+    }
+  };
+  ensureArray(priorArr).forEach(x => addOrUpdate(x, false));
+  ensureArray(nextArr).forEach(x => addOrUpdate(x, true));
+  return out;
+}
+
+function mergeLabCategories(priorCats, nextCats) {
+  const out = [];
+  const catMap = new Map();
+  const getCatKey = (c) => normalizeSimple(c?.name || c?.category || "Labs");
+  const addCat = (cat, isPatch) => {
+    if (!cat || typeof cat !== "object") return;
+    const key = getCatKey(cat);
+    if (!catMap.has(key)) {
+      const base = { ...cat, name: String(cat.name || cat.category || "Labs"), rows: [] };
+      catMap.set(key, base);
+      out.push(base);
+    }
+    const target = catMap.get(key);
+    const rowMap = new Map();
+    ensureArray(target.rows).forEach(r => {
+      const rk = normalizeSimple([r?.test, r?.unit, r?.referenceRange].filter(Boolean).join(' | '));
+      rowMap.set(rk, r);
+    });
+    ensureArray(cat.rows).forEach(row => {
+      if (!row || typeof row !== "object") return;
+      const rk = normalizeSimple([row.test, row.unit, row.referenceRange].filter(Boolean).join(' | '));
+      if (!rowMap.has(rk)) {
+        const newRow = { ...row, values: ensureArray(row.values) };
+        rowMap.set(rk, newRow);
+        target.rows.push(newRow);
+        return;
+      }
+      const existing = rowMap.get(rk);
+      const valueMap = new Map();
+      ensureArray(existing.values).forEach(v => {
+        const vk = normalizeSimple(v?.datetime || stableValue(v));
+        valueMap.set(vk, v);
+      });
+      ensureArray(row.values).forEach(v => {
+        if (!v || typeof v !== "object") return;
+        const vk = normalizeSimple(v.datetime || stableValue(v));
+        if (valueMap.has(vk)) Object.assign(valueMap.get(vk), v);
+        else existing.values.push(v);
+      });
+      for (const k of ["test", "unit", "referenceRange"]) {
+        if (row[k] && !existing[k]) existing[k] = row[k];
+      }
+    });
+  };
+  ensureArray(priorCats).forEach(c => addCat(c, false));
+  ensureArray(nextCats).forEach(c => addCat(c, true));
+  return out;
+}
+
+function mergePatientState(priorPatient, candidatePatient) {
+  const prior = sanitizePatient(priorPatient);
+  const raw = candidatePatient && typeof candidatePatient === "object" ? { ...candidatePatient } : {};
+  delete raw.lock;
+  delete raw.diagnosis;
+  delete raw.primary_diagnosis;
+  delete raw.answer;
+
+  const merged = { ...prior };
+  for (const key of ["id", "displayName", "name", "age", "sex", "location", "codeStatus", "presentingComplaint", "banner"]) {
+    if (hasOwn(raw, key) && raw[key] !== null && raw[key] !== undefined && String(raw[key]).trim() !== "") {
+      if (key === "name" && !hasOwn(raw, "displayName")) merged.displayName = String(raw[key]);
+      else if (key !== "name") merged[key] = raw[key];
+    }
+  }
+  if (hasOwn(raw, "allergies") && ensureArray(raw.allergies).length) merged.allergies = ensureArray(raw.allergies).map(String);
+
+  // Important state-preservation rule:
+  // Fast model calls may return partial patient objects. Missing or empty arrays
+  // must never wipe the existing EMR. Only merge arrays when the model actually
+  // supplies one or more records. This prevents random loss of notes/MAR after
+  // page/advance events while still allowing new findings to be appended.
+  if (hasOwn(raw, "vitals") && ensureArray(raw.vitals).length) {
+    merged.vitals = mergeRecordArray(prior.vitals, raw.vitals, ["datetime", "hr", "bp", "rr", "spo2", "temperature_C"]);
+  }
+  if (hasOwn(raw, "labCategories") && ensureArray(raw.labCategories).length) {
+    merged.labCategories = mergeLabCategories(prior.labCategories, raw.labCategories);
+  }
+  if (hasOwn(raw, "investigations") && ensureArray(raw.investigations).length) {
+    merged.investigations = mergeRecordArray(prior.investigations, raw.investigations, ["datetime", "group", "title", "status"]);
+  }
+  if (hasOwn(raw, "nursingNotes") && ensureArray(raw.nursingNotes).length) {
+    merged.nursingNotes = mergeRecordArray(prior.nursingNotes, raw.nursingNotes, ["datetime", "author", "text"]);
+  }
+  if (hasOwn(raw, "medications") && ensureArray(raw.medications).length) {
+    merged.medications = mergeRecordArray(prior.medications, raw.medications, ["name", "dose", "route", "frequency", "start"]);
+  }
+  if (hasOwn(raw, "notes") && ensureArray(raw.notes).length) {
+    merged.notes = mergeRecordArray(prior.notes, raw.notes.map(normalizeNoteObject), ["datetime", "service", "noteType", "title", "text"]);
+  }
+  if (hasOwn(raw, "orders") && ensureArray(raw.orders).length) {
+    merged.orders = mergeRecordArray(prior.orders, raw.orders, ["datetime", "at", "order", "status"]);
+  }
+  return sanitizePatient(merged);
 }
 
 function publicCasePayload(session) {
@@ -2864,8 +3009,10 @@ Rules:
 - For physical exam, return objective findings only. If the request is too broad, provide a terse focused exam only or state what cannot be assessed.
 - For history questions, simulate realistic patient answers, including uncertainty if appropriate.
 - For chart review, provide realistic chart text/labs only if likely available.
+- If you update the EMR, return a patientPatch with only new/changed fields. Do NOT echo the full patient object.
+- If nothing changed in a section, omit that section entirely rather than returning an empty array.
 - Canadian/SI units only.
-Return strict JSON: {"response":"text shown to user", "patient": <optional updated full public patient object or null>, "activityText":"short log text"}`;
+Return strict JSON: {"response":"text shown to user", "patientPatch": <optional partial patient object containing ONLY changed/new public EMR fields, or null>, "activityText":"short log text"}`;
   const payload = {
     lockedDiagnosis: session.lock,
     patient: session.patient,
@@ -2908,7 +3055,9 @@ Rules:
 - If the user made harmful or delayed decisions, deterioration can occur.
 - If the user made effective decisions, improvement can occur.
 - Canadian/SI units only.
-Return strict JSON only: {"patient": <full updated public patient object>, "event":"short objective event/page text", "urgency":"routine|urgent|critical|none", "currentTime":"YYYY-MM-DD HH:mm"}`;
+- Do NOT echo the whole EMR back. Return only new/changed vitals, labs, investigations, nursing notes, MAR entries, notes, or orders in patientPatch.
+- If nothing changed in a section, omit that section entirely rather than returning an empty array.
+Return strict JSON only: {"patientPatch": <partial patient object containing ONLY changed/new public EMR fields, or null>, "event":"short objective event/page text", "urgency":"routine|urgent|critical|none", "currentTime":"YYYY-MM-DD HH:mm"}`;
   const payload = {
     lockedDiagnosis: session.lock,
     currentTime: session.currentTime || latestPatientDateTime(session.patient),
@@ -2916,7 +3065,7 @@ Return strict JSON only: {"patient": <full updated public patient object>, "even
     activity: ensureArray(session.activity).slice(-50),
     orderHistory: ensureArray(session.orderHistory).slice(-80)
   };
-  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0.15, max_output_tokens: 10000, reasoning_effort: "low" });
+  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0.15, max_output_tokens: 3500, reasoning_effort: "low" });
 }
 
 async function aiConcludeCase({ session, finalNoteText, finalOrdersText }) {
@@ -3033,7 +3182,8 @@ app.post('/case/sessions/:id/interact', async (req, res) => {
     const request = String(req.body?.request || "").trim();
     if (!request) return res.status(400).json({ error: "request required" });
     const out = await aiInteractWithCase({ session, request });
-    if (out.patient) session.patient = postProcessCasePatient(out.patient, session.specialty);
+    const patientPatch = out.patientPatch || out.patient || out.patch || null;
+    if (patientPatch) session.patient = postProcessCasePatient(patientPatch, session.specialty, session.patient);
     const response = String(out.response || "No information returned.");
     session.activity = ensureArray(session.activity);
     session.activity.push({ at: nowIso(), type: "learner_request", text: request });
@@ -3083,7 +3233,8 @@ app.post('/case/sessions/:id/advance', async (req, res) => {
     if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
     const priorTime = session.currentTime || latestPatientDateTime(session.patient) || formatSimDateTime(new Date());
     const out = await aiAdvanceCase({ session });
-    if (out.patient) session.patient = postProcessCasePatient(out.patient, session.specialty);
+    const patientPatch = out.patientPatch || out.patient || out.patch || null;
+    if (patientPatch) session.patient = postProcessCasePatient(patientPatch, session.specialty, session.patient);
     const latestTime = latestPatientDateTime(session.patient);
     const aiTime = String(out.currentTime || "").trim();
     session.currentTime = aiTime || (latestTime && latestTime > priorTime ? latestTime : addSimMinutes(priorTime, 60));
