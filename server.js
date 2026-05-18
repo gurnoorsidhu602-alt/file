@@ -31,6 +31,8 @@ app.get('/index.html', (_req, res) => res.sendFile(path.join(__dirname, 'index.h
 app.get('/learner', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
 app.get('/learner.html', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
 app.get('/medlearner', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
+app.get('/casesim', (_req, res) => res.sendFile(path.join(__dirname, 'casesim.html')));
+app.get('/casesim.html', (_req, res) => res.sendFile(path.join(__dirname, 'casesim.html')));
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -2090,6 +2092,480 @@ app.get('/med/pdfs/search', (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+
+
+// ==================== MEDICAL CASE SIMULATOR ROUTES ====================
+// EMR-style diagnostic and management simulator. Stores the locked diagnosis server-side.
+
+const CASE_MODEL = process.env.OPENAI_CASE_MODEL || STRICT_MODEL || BASE_MODEL;
+const CASE_FAST_MODEL = process.env.OPENAI_CASE_FAST_MODEL || process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini";
+const CASE_SESSION_TTL_SECONDS = Number(process.env.CASE_SESSION_TTL_SECONDS || 60 * 60 * 24 * 30);
+
+const kCase = (id) => `casesim:session:${id}`;
+
+function extractOutputText(resp) {
+  return (typeof resp?.output_text === "string" && resp.output_text.trim())
+    || resp?.output?.[0]?.content?.[0]?.text
+    || "";
+}
+
+function parseLooseJSON(text) {
+  if (text && typeof text === "object" && !Array.isArray(text)) return text;
+  if (typeof text !== "string") return null;
+  let t = text.trim();
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
+  try { return JSON.parse(t); } catch {}
+  const firstObj = t.indexOf('{');
+  const lastObj = t.lastIndexOf('}');
+  if (firstObj >= 0 && lastObj > firstObj) {
+    try { return JSON.parse(t.slice(firstObj, lastObj + 1)); } catch {}
+  }
+  const firstArr = t.indexOf('[');
+  const lastArr = t.lastIndexOf(']');
+  if (firstArr >= 0 && lastArr > firstArr) {
+    try { return JSON.parse(t.slice(firstArr, lastArr + 1)); } catch {}
+  }
+  return null;
+}
+
+async function caseAiJSON({ system, payload, model = CASE_MODEL, temperature = 0 }) {
+  const resp = await responsesCall({
+    model,
+    temperature,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: JSON.stringify(payload) }
+    ]
+  });
+  const parsed = parseResponsesJSON(resp) || parseLooseJSON(extractOutputText(resp));
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("AI returned non-JSON output for case simulator");
+  }
+  return parsed;
+}
+
+function nowIso() { return new Date().toISOString(); }
+function normalizeSimple(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+function ensureArray(x) { return Array.isArray(x) ? x : []; }
+
+function sanitizePatient(p) {
+  p = p && typeof p === "object" ? p : {};
+  delete p.lock;
+  delete p.diagnosis;
+  delete p.primary_diagnosis;
+  delete p.answer;
+  return {
+    id: String(p.id || uuid()).slice(0, 64),
+    displayName: String(p.displayName || p.name || "Doe, Alex"),
+    age: Number.isFinite(Number(p.age)) ? Number(p.age) : 50,
+    sex: String(p.sex || "U"),
+    location: String(p.location || "Emergency Department"),
+    allergies: ensureArray(p.allergies).map(String),
+    codeStatus: String(p.codeStatus || "Full Code"),
+    presentingComplaint: String(p.presentingComplaint || "Undifferentiated presentation"),
+    banner: String(p.banner || "Select tabs to review the available chart."),
+    vitals: ensureArray(p.vitals),
+    labCategories: ensureArray(p.labCategories),
+    investigations: ensureArray(p.investigations),
+    nursingNotes: ensureArray(p.nursingNotes),
+    medications: ensureArray(p.medications),
+    notes: ensureArray(p.notes),
+    orders: ensureArray(p.orders)
+  };
+}
+
+function publicCasePayload(session) {
+  return {
+    ok: true,
+    sessionId: session.id,
+    mode: session.mode,
+    specialty: session.specialty,
+    difficulty: session.difficulty,
+    createdAt: session.createdAt,
+    patient: sanitizePatient(session.patient),
+    activity: ensureArray(session.activity).slice(-40),
+    orderHistory: ensureArray(session.orderHistory),
+    concluded: !!session.concluded
+  };
+}
+
+async function saveCaseSession(session) {
+  await redis.set(kCase(session.id), JSON.stringify(session), { ex: CASE_SESSION_TTL_SECONDS });
+}
+
+async function loadCaseSession(id) {
+  const raw = await redis.get(kCase(id));
+  if (!raw) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  const parsed = parseLooseJSON(raw);
+  return parsed && typeof parsed === "object" ? parsed : null;
+}
+
+const CASE_SCHEMA_TEXT = `
+Return strict JSON only with this shape:
+{
+  "caseTitle": "short non-diagnostic title",
+  "lock": {
+    "primaryDiagnosis": "hidden locked diagnosis",
+    "secondaryDiagnoses": ["hidden relevant comorbid/complication diagnoses"],
+    "caseFingerprint": "brief hidden fingerprint for duplicate avoidance",
+    "expectedKeyActions": ["diagnostic/management actions expected"],
+    "dangerousActions": ["actions that could worsen the case"],
+    "exclusionEntry": "one-line case exclusion text"
+  },
+  "patient": {
+    "id": "stable patient id",
+    "displayName": "Last, First",
+    "age": 55,
+    "sex": "F",
+    "location": "ED | ward | clinic referral",
+    "allergies": ["..."],
+    "codeStatus": "Full Code",
+    "presentingComplaint": "non-diagnostic presenting complaint",
+    "banner": "one-line chart banner without revealing diagnosis",
+    "vitals": [{"datetime":"YYYY-MM-DD HH:mm","temperature_C":"37.1","hr":"92","bp":"128/76","rr":"18","spo2":"96%","oxygen":"room air","pain":"0/10","notes":""}],
+    "labCategories": [{"name":"Hematology","rows":[{"test":"Hemoglobin","unit":"g/L","referenceRange":"120-160 F, 135-175 M","values":[{"datetime":"YYYY-MM-DD HH:mm","value":"132","flag":"normal"}]}]}],
+    "investigations": [{"id":"unique-id","datetime":"YYYY-MM-DD HH:mm","group":"Imaging | ECG | Microbiology | Pathology | Other","title":"CXR","status":"Final","report":"objective report text"}],
+    "nursingNotes": [{"datetime":"YYYY-MM-DD HH:mm","author":"RN","text":"objective note"}],
+    "medications": [{"id":"unique-id","name":"Medication","dose":"","route":"","frequency":"","status":"active | discontinued","start":"YYYY-MM-DD HH:mm","stop":"","comments":""}],
+    "notes": [{"id":"unique-id","datetime":"YYYY-MM-DD HH:mm","type":"Triage | ED note | Consult request | Progress note | Discharge summary | Procedure note","author":"","title":"","text":"objective chart text"}],
+    "orders": []
+  }
+}
+Rules for lab values: use Canadian/SI units only. Every lab value must include flag normal, high, low, or critical. Public text must not reveal the hidden diagnosis unless it would genuinely be written in the chart as a pre-existing known diagnosis.
+`;
+
+async function aiGenerateCaseSession({ mode, specialty, difficulty, exclusionText, userId }) {
+  if (process.env.MOCK_AI === "1") {
+    const id = uuid();
+    return {
+      id,
+      userId,
+      mode,
+      specialty,
+      difficulty,
+      createdAt: nowIso(),
+      lock: {
+        primaryDiagnosis: "Acute intermittent porphyria",
+        secondaryDiagnoses: ["Hyponatremia"],
+        caseFingerprint: "young woman abdominal pain neuropsychiatric symptoms hyponatremia porphyria",
+        expectedKeyActions: ["urine porphobilinogen", "stop triggers", "hemin if severe"],
+        dangerousActions: ["porphyrogenic medications"],
+        exclusionEntry: "Acute intermittent porphyria presenting with abdominal pain, neuropathic symptoms, and hyponatremia."
+      },
+      patient: sanitizePatient({
+        id: uuid(), displayName: "Dhaliwal, Harleen", age: 29, sex: "F", location: "Emergency Department", allergies: ["NKDA"], codeStatus: "Full Code", presentingComplaint: "Abdominal pain and vomiting", banner: "ED consult requested for persistent abdominal pain with electrolyte abnormality.",
+        vitals: [{ datetime: "2026-05-17 18:20", temperature_C: "36.9", hr: "112", bp: "148/92", rr: "18", spo2: "99%", oxygen: "room air", pain: "8/10", notes: "Appears uncomfortable" }],
+        labCategories: [
+          { name: "Hematology", rows: [{ test:"WBC", unit:"10^9/L", referenceRange:"4.0-11.0", values:[{datetime:"2026-05-17 18:35", value:"9.8", flag:"normal"}] }, { test:"Hemoglobin", unit:"g/L", referenceRange:"120-160 F", values:[{datetime:"2026-05-17 18:35", value:"129", flag:"normal"}] }, { test:"Platelets", unit:"10^9/L", referenceRange:"150-400", values:[{datetime:"2026-05-17 18:35", value:"286", flag:"normal"}] }]},
+          { name: "Chemistry", rows: [{ test:"Sodium", unit:"mmol/L", referenceRange:"135-145", values:[{datetime:"2026-05-17 18:35", value:"126", flag:"low"}] }, { test:"Potassium", unit:"mmol/L", referenceRange:"3.5-5.0", values:[{datetime:"2026-05-17 18:35", value:"3.8", flag:"normal"}] }, { test:"Creatinine", unit:"µmol/L", referenceRange:"45-90 F", values:[{datetime:"2026-05-17 18:35", value:"64", flag:"normal"}] }, { test:"Glucose", unit:"mmol/L", referenceRange:"3.9-7.8 random", values:[{datetime:"2026-05-17 18:35", value:"5.6", flag:"normal"}] }]}],
+        investigations: [{ id: uuid(), datetime:"2026-05-17 19:10", group:"Imaging", title:"CT abdomen/pelvis with contrast", status:"Final", report:"No bowel obstruction. No appendicitis. No free air. Small physiologic pelvic free fluid. Solid organs unremarkable." }],
+        nursingNotes: [{ datetime:"2026-05-17 18:25", author:"RN", text:"Patient reports diffuse abdominal pain with nausea. Vomited twice in ED. Ambulating independently." }],
+        medications: [{ id: uuid(), name:"Ondansetron", dose:"4 mg", route:"IV", frequency:"once", status:"active", start:"2026-05-17 18:30", stop:"", comments:"administered" }],
+        notes: [{ id: uuid(), datetime:"2026-05-17 18:15", type:"Consult request", author:"Emergency physician", title:"Internal Medicine consult request", text:"29F with severe diffuse abdominal pain and vomiting. CT abdomen negative. Sodium 126. Please assess for admission and ongoing workup." }],
+        orders: []
+      }),
+      activity: [{ at: nowIso(), type: "system", text: "Case generated. Locked diagnosis stored server-side." }],
+      orderHistory: [],
+      concluded: false
+    };
+  }
+
+  const system = `You are the hidden backend engine for an advanced browser-based Medical Case Simulator for Canadian medical trainees.
+You must generate a single realistic patient chart for an EMR-style simulator.
+Hard rules:
+- Choose and lock one primary diagnosis at generation time. It goes ONLY in lock.primaryDiagnosis.
+- The public patient chart must contain no hints, teaching, interpretation, suggested next steps, or diagnosis disclosure beyond realistic chart facts.
+- Use Canadian/SI units only. Never use mg/dL for chemistry. Use mmol/L, µmol/L, g/L, 10^9/L, pmol/L, IU/L, kPa/mmHg only where locally realistic.
+- Regular mode should reflect real-world clinical probabilities and common presentations.
+- Zebra mode should be rare, atypical, confusing, and extremely challenging while still medically coherent.
+- Cross-reference the exclusion list. Do not repeat or closely mimic prior cases, disease categories, fingerprints, or obvious variants.
+- EMR content should feel like Meditech/Cerner: terse, objective, chronological, and incomplete in realistic ways.
+- Include enough initial data to start a case, but not enough to make it obvious.
+- Do not include educational rationale in public chart fields.
+${CASE_SCHEMA_TEXT}`;
+
+  const payload = {
+    requestedMode: mode,
+    requestedSpecialtyOrSetting: specialty || "undifferentiated adult inpatient/ED medicine",
+    requestedDifficulty: difficulty || "MSI3-R1",
+    userId,
+    exclusionListText: String(exclusionText || '').slice(0, 60000),
+    generationTime: new Date().toISOString()
+  };
+
+  let generated = await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: mode === "zebra" ? 0.8 : 0.35 });
+  if (!generated.lock?.primaryDiagnosis || !generated.patient) {
+    throw new Error("Case generator returned incomplete case JSON");
+  }
+  const id = uuid();
+  return {
+    id,
+    userId,
+    mode,
+    specialty,
+    difficulty,
+    createdAt: nowIso(),
+    lock: generated.lock,
+    caseTitle: generated.caseTitle || "Medical case",
+    patient: sanitizePatient(generated.patient),
+    activity: [{ at: nowIso(), type: "system", text: "Case generated. Locked diagnosis stored server-side." }],
+    orderHistory: [],
+    concluded: false
+  };
+}
+
+async function aiInteractWithCase({ session, request }) {
+  const system = `You are the backend engine for an EMR medical case simulator.
+The hidden locked diagnosis is provided, but you must NEVER reveal it before conclusion.
+Respond to the learner's request as the simulated chart/patient/exam environment.
+Rules:
+- No hints, no interpretation, no teaching, no suggested next steps.
+- Provide only the specific information requested.
+- For physical exam, return objective findings only. If the request is too broad, provide a terse focused exam only or state what cannot be assessed.
+- For history questions, simulate realistic patient answers, including uncertainty if appropriate.
+- For chart review, provide realistic chart text/labs only if likely available.
+- Canadian/SI units only.
+Return strict JSON: {"response":"text shown to user", "patient": <optional updated full public patient object or null>, "activityText":"short log text"}`;
+  const payload = {
+    lockedDiagnosis: session.lock,
+    patient: session.patient,
+    activity: ensureArray(session.activity).slice(-30),
+    orderHistory: ensureArray(session.orderHistory).slice(-50),
+    learnerRequest: request
+  };
+  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0 });
+}
+
+async function aiApplyOrders({ session, newOrders }) {
+  const system = `You are the hidden backend engine for a Canadian EMR medical case simulator.
+Apply the learner's orders to the locked patient case and update the public EMR state.
+Rules:
+- The locked diagnosis must remain stable. Do not let user orders change the diagnosis, but let them alter physiology/outcomes if medically plausible.
+- Do not reveal the locked diagnosis.
+- No hints, no interpretation, no suggested next steps, no teaching.
+- For labs ordered, add realistic values using Canadian/SI units and reference ranges.
+- For imaging/ECG/micro/pathology ordered, add a realistic report only if the test could plausibly result at this time. Otherwise add/order as pending or mention pending.
+- For meds/fluids/procedures, update MAR/vitals/nursing notes as appropriate. Harmful orders may worsen the case realistically.
+- Order results shown to user must be administrative only: Entered, pending, completed, discontinued, unclear, not available.
+Return strict JSON only: {"patient": <full updated public patient object>, "orderResults":[{"order":"","status":"entered|pending|completed|discontinued|unclear|not available","comment":"terse non-interpretive administrative comment"}], "visibleEvent":"optional nurse/lab/radiology event text"}`;
+  const payload = {
+    lockedDiagnosis: session.lock,
+    patient: session.patient,
+    priorActivity: ensureArray(session.activity).slice(-30),
+    priorOrders: ensureArray(session.orderHistory).slice(-80),
+    newOrders: newOrders
+  };
+  return await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: 0.15 });
+}
+
+async function aiAdvanceCase({ session }) {
+  const system = `You are the hidden backend engine for a Canadian EMR medical case simulator.
+Advance the case to the next clinically plausible event. This may be a nurse page, new vitals, lab result, imaging result, medication effect, deterioration, stabilization, or no major change.
+Rules:
+- Never reveal the locked diagnosis.
+- No hints, no interpretation, no suggested next steps, no teaching.
+- Reflect the user's prior orders and actions.
+- If the user made harmful or delayed decisions, deterioration can occur.
+- If the user made effective decisions, improvement can occur.
+- Canadian/SI units only.
+Return strict JSON only: {"patient": <full updated public patient object>, "event":"short objective event/page text", "urgency":"routine|urgent|critical|none"}`;
+  const payload = {
+    lockedDiagnosis: session.lock,
+    patient: session.patient,
+    activity: ensureArray(session.activity).slice(-50),
+    orderHistory: ensureArray(session.orderHistory).slice(-80)
+  };
+  return await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: 0.25 });
+}
+
+async function aiConcludeCase({ session, finalNoteText, finalOrdersText }) {
+  const system = `You are a strict attending physician debriefing a Canadian medical trainee after a medical case simulator.
+At this point you MAY reveal the locked diagnosis.
+Provide detailed, critical, educational feedback. Do not be overly permissive.
+Assess diagnostic reasoning, investigations, management, safety, documentation, and missed opportunities.
+Return strict JSON only:
+{
+  "diagnosis":"locked primary diagnosis",
+  "secondaryDiagnoses":["..."],
+  "caseSummary":"short case summary",
+  "diagnosticFeedback":["..."],
+  "managementFeedback":["..."],
+  "documentationFeedback":["..."],
+  "safetyIssues":["..."],
+  "whatGoodLookedLike":["..."],
+  "overallRating":"MSI1|MSI2|MSI3|MSI4|R1|R2|R3|R4|R5|Attending",
+  "exclusionEntry":"copy-pasteable one-line exclusion list entry with diagnosis and distinctive features"
+}`;
+  const payload = {
+    lockedDiagnosis: session.lock,
+    patient: session.patient,
+    activity: ensureArray(session.activity),
+    orderHistory: ensureArray(session.orderHistory),
+    finalNoteText: finalNoteText || "",
+    finalOrdersText: finalOrdersText || ""
+  };
+  return await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: 0 });
+}
+
+app.post('/case/sessions', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const userId = String(body.user_id || body.username || "Gurnoor").trim() || "Gurnoor";
+    const modeRaw = String(body.mode || "regular").toLowerCase();
+    const mode = modeRaw === "zebra" ? "zebra" : "regular";
+    const specialty = String(body.specialty || "").trim();
+    const difficulty = String(body.difficulty || "MSI3-R1").trim();
+    const exclusionText = String(body.exclusionText || "");
+    if (!Object.prototype.hasOwnProperty.call(body, 'exclusionText')) {
+      return res.status(400).json({ error: "exclusionText required. Upload an exclusion list or explicitly start with an empty list." });
+    }
+    const session = await aiGenerateCaseSession({ mode, specialty, difficulty, exclusionText, userId });
+    await saveCaseSession(session);
+    res.json(publicCasePayload(session));
+  } catch (e) {
+    res.status(500).json({ error: "Failed to start case session", detail: String(e) });
+  }
+});
+
+app.get('/case/sessions/:id', async (req, res) => {
+  try {
+    const session = await loadCaseSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "Case session not found" });
+    res.json(publicCasePayload(session));
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load case session", detail: String(e) });
+  }
+});
+
+app.get('/case/sessions/:id/lockfile', async (req, res) => {
+  try {
+    const session = await loadCaseSession(req.params.id);
+    if (!session) return res.status(404).type('text/plain').send("Case session not found");
+    const lock = session.lock || {};
+    const txt = [
+      `Medical Case Simulator locked diagnosis file`,
+      `Session ID: ${session.id}`,
+      `Created: ${session.createdAt}`,
+      `Mode: ${session.mode}`,
+      `Specialty/setting: ${session.specialty || 'unspecified'}`,
+      ``,
+      `PRIMARY DIAGNOSIS: ${lock.primaryDiagnosis || ''}`,
+      `Secondary diagnoses: ${ensureArray(lock.secondaryDiagnoses).join('; ')}`,
+      `Fingerprint: ${lock.caseFingerprint || ''}`,
+      `Expected key actions: ${ensureArray(lock.expectedKeyActions).join('; ')}`,
+      `Dangerous actions: ${ensureArray(lock.dangerousActions).join('; ')}`,
+      ``,
+      `Exclusion entry:`,
+      lock.exclusionEntry || `${lock.primaryDiagnosis || 'Unknown diagnosis'} - ${lock.caseFingerprint || ''}`
+    ].join('\n');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="case-lock-${session.id}.txt"`);
+    res.send(txt);
+  } catch (e) {
+    res.status(500).type('text/plain').send(String(e));
+  }
+});
+
+app.post('/case/sessions/:id/interact', async (req, res) => {
+  try {
+    const session = await loadCaseSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "Case session not found" });
+    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
+    const request = String(req.body?.request || "").trim();
+    if (!request) return res.status(400).json({ error: "request required" });
+    const out = await aiInteractWithCase({ session, request });
+    if (out.patient) session.patient = sanitizePatient(out.patient);
+    const response = String(out.response || "No information returned.");
+    session.activity = ensureArray(session.activity);
+    session.activity.push({ at: nowIso(), type: "learner_request", text: request });
+    session.activity.push({ at: nowIso(), type: "case_response", text: response });
+    await saveCaseSession(session);
+    res.json({ ...publicCasePayload(session), response });
+  } catch (e) {
+    res.status(500).json({ error: "Interaction failed", detail: String(e) });
+  }
+});
+
+app.post('/case/sessions/:id/orders', async (req, res) => {
+  try {
+    const session = await loadCaseSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "Case session not found" });
+    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
+    const orders = ensureArray(req.body?.orders).map(x => String(x || '').trim()).filter(Boolean);
+    if (!orders.length) return res.status(400).json({ error: "orders required" });
+    const out = await aiApplyOrders({ session, newOrders: orders });
+    if (out.patient) session.patient = sanitizePatient(out.patient);
+    session.orderHistory = ensureArray(session.orderHistory);
+    const results = ensureArray(out.orderResults);
+    orders.forEach((order, i) => {
+      const r = results[i] || { order, status: "entered", comment: "Entered." };
+      session.orderHistory.push({ at: nowIso(), order, status: String(r.status || "entered"), comment: String(r.comment || "") });
+    });
+    session.activity = ensureArray(session.activity);
+    session.activity.push({ at: nowIso(), type: "orders", text: orders.join('\n') });
+    if (out.visibleEvent) session.activity.push({ at: nowIso(), type: "event", text: String(out.visibleEvent) });
+    await saveCaseSession(session);
+    res.json({ ...publicCasePayload(session), orderResults: results, visibleEvent: out.visibleEvent || "" });
+  } catch (e) {
+    res.status(500).json({ error: "Order entry failed", detail: String(e) });
+  }
+});
+
+app.post('/case/sessions/:id/advance', async (req, res) => {
+  try {
+    const session = await loadCaseSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "Case session not found" });
+    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
+    const out = await aiAdvanceCase({ session });
+    if (out.patient) session.patient = sanitizePatient(out.patient);
+    const event = String(out.event || "No new events.");
+    session.activity = ensureArray(session.activity);
+    session.activity.push({ at: nowIso(), type: "advance", text: event, urgency: String(out.urgency || "routine") });
+    await saveCaseSession(session);
+    res.json({ ...publicCasePayload(session), event, urgency: out.urgency || "routine" });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to advance case", detail: String(e) });
+  }
+});
+
+app.post('/case/sessions/:id/note', async (req, res) => {
+  try {
+    const session = await loadCaseSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "Case session not found" });
+    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
+    const title = String(req.body?.title || "User note").trim();
+    const type = String(req.body?.type || "User note").trim();
+    const text = String(req.body?.text || "").trim();
+    if (!text) return res.status(400).json({ error: "note text required" });
+    session.patient = sanitizePatient(session.patient);
+    session.patient.notes.push({ id: uuid(), datetime: new Date().toISOString().slice(0,16).replace('T',' '), type, author: "Learner", title, text });
+    session.activity = ensureArray(session.activity);
+    session.activity.push({ at: nowIso(), type: "user_note", text: `${title}\n${text}` });
+    await saveCaseSession(session);
+    res.json(publicCasePayload(session));
+  } catch (e) {
+    res.status(500).json({ error: "Failed to save note", detail: String(e) });
+  }
+});
+
+app.post('/case/sessions/:id/conclude', async (req, res) => {
+  try {
+    const session = await loadCaseSession(req.params.id);
+    if (!session) return res.status(404).json({ error: "Case session not found" });
+    const finalNoteText = String(req.body?.finalNoteText || "");
+    const finalOrdersText = String(req.body?.finalOrdersText || "");
+    const out = await aiConcludeCase({ session, finalNoteText, finalOrdersText });
+    session.concluded = true;
+    session.concludedAt = nowIso();
+    session.conclusion = out;
+    await saveCaseSession(session);
+    res.json({ ...publicCasePayload(session), conclusion: out });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to conclude case", detail: String(e) });
   }
 });
 
