@@ -55,7 +55,11 @@ const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5";
 function supportsTemperature(model = '') {
   const m = String(model || '').toLowerCase();
 
+  // GPT-5 reasoning-style models do not accept temperature, including exact "gpt-5"
+  // as well as variants like "gpt-5.1", "gpt-5-mini", etc.
   if (m.startsWith('gpt-5')) return false;
+
+  // o-series reasoning models also generally do not accept temperature.
   if (/^o\d/.test(m)) return false;
 
   return true;
@@ -64,11 +68,9 @@ function supportsTemperature(model = '') {
 // wrapper: build the request and include temperature only when supported
 async function responsesCall({ model, messages, temperature }) {
   const req = { model, input: messages };
-
   if (temperature !== undefined && supportsTemperature(model)) {
     req.temperature = temperature;
   }
-
   return await openai.responses.create(req);
 }
 // Difficulty ladder
@@ -2158,6 +2160,45 @@ function nowIso() { return new Date().toISOString(); }
 function normalizeSimple(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 function ensureArray(x) { return Array.isArray(x) ? x : []; }
 
+function canonicalCaseLabCategoryName(name) {
+  const n = String(name || '').toLowerCase();
+  if (/hema|cbc|coag/.test(n)) return 'Hematology';
+  if (/blood\s*gas|abg|vbg|gas/.test(n)) return 'Blood Gas';
+  if (/serolog|immunolog|autoimmune|viral|hepatitis|hiv|antibody|antigen/.test(n)) return 'Serology';
+  if (/urine|urinalysis|u\/a|ua|microscopy/.test(n)) return 'Urine';
+  if (/misc|other|special|toxic|drug|endo|hormone/.test(n)) return 'Misc';
+  if (/chem|electrolyte|renal|kidney|liver|lft|hepatic|enzyme|metabolic|crp|esr|osmol|glucose|calcium|mag|phos|lipase|amylase|bilirubin|albumin|protein|troponin|bnp/.test(n)) return 'Chemistry';
+  return 'Misc';
+}
+
+function normalizeCaseLabCategories(cats) {
+  const order = ['Hematology', 'Chemistry', 'Blood Gas', 'Serology', 'Urine', 'Misc'];
+  const map = new Map(order.map(name => [name, { name, rows: [] }]));
+  ensureArray(cats).forEach(cat => {
+    const target = map.get(canonicalCaseLabCategoryName(cat?.name)) || map.get('Misc');
+    ensureArray(cat?.rows).forEach(row => target.rows.push(row));
+  });
+  return order.map(name => map.get(name)).filter(cat => cat.rows.length > 0);
+}
+
+function normalizeCaseNote(n) {
+  n = n && typeof n === 'object' ? n : {};
+  const noteType = String(n.noteType || n.type || 'Note');
+  const providerName = String(n.providerName || n.provider || n.author || 'Unknown provider');
+  const service = String(n.service || n.department || n.specialty || 'Unknown service');
+  return {
+    id: String(n.id || uuid()).slice(0, 64),
+    datetime: String(n.datetime || new Date().toISOString().slice(0,16).replace('T',' ')),
+    service,
+    providerName,
+    noteType,
+    type: noteType,
+    author: providerName,
+    title: String(n.title || noteType),
+    text: String(n.text || '')
+  };
+}
+
 function sanitizePatient(p) {
   p = p && typeof p === "object" ? p : {};
   delete p.lock;
@@ -2175,11 +2216,11 @@ function sanitizePatient(p) {
     presentingComplaint: String(p.presentingComplaint || "Undifferentiated presentation"),
     banner: String(p.banner || "Select tabs to review the available chart."),
     vitals: ensureArray(p.vitals),
-    labCategories: ensureArray(p.labCategories),
+    labCategories: normalizeCaseLabCategories(p.labCategories),
     investigations: ensureArray(p.investigations),
     nursingNotes: ensureArray(p.nursingNotes),
     medications: ensureArray(p.medications),
-    notes: ensureArray(p.notes),
+    notes: ensureArray(p.notes).map(normalizeCaseNote),
     orders: ensureArray(p.orders)
   };
 }
@@ -2234,15 +2275,22 @@ Return strict JSON only with this shape:
     "presentingComplaint": "non-diagnostic presenting complaint",
     "banner": "one-line chart banner without revealing diagnosis",
     "vitals": [{"datetime":"YYYY-MM-DD HH:mm","temperature_C":"37.1","hr":"92","bp":"128/76","rr":"18","spo2":"96%","oxygen":"room air","pain":"0/10","notes":""}],
-    "labCategories": [{"name":"Hematology","rows":[{"test":"Hemoglobin","unit":"g/L","referenceRange":"120-160 F, 135-175 M","values":[{"datetime":"YYYY-MM-DD HH:mm","value":"132","flag":"normal"}]}]}],
+    "labCategories": [
+      {"name":"Hematology","rows":[{"test":"Hemoglobin","unit":"g/L","referenceRange":"120-160 F, 135-175 M","values":[{"datetime":"YYYY-MM-DD HH:mm","value":"132","flag":"normal"}]}]},
+      {"name":"Chemistry","rows":[{"test":"ALT","unit":"U/L","referenceRange":"<36 F, <50 M","values":[{"datetime":"YYYY-MM-DD HH:mm","value":"22","flag":"normal"}]}]},
+      {"name":"Blood Gas","rows":[]},
+      {"name":"Serology","rows":[]},
+      {"name":"Urine","rows":[]},
+      {"name":"Misc","rows":[]}
+    ],
     "investigations": [{"id":"unique-id","datetime":"YYYY-MM-DD HH:mm","group":"Imaging | ECG | Microbiology | Pathology | Other","title":"CXR","status":"Final","report":"objective report text"}],
     "nursingNotes": [{"datetime":"YYYY-MM-DD HH:mm","author":"RN","text":"objective note"}],
     "medications": [{"id":"unique-id","name":"Medication","dose":"","route":"","frequency":"","status":"active | discontinued","start":"YYYY-MM-DD HH:mm","stop":"","comments":""}],
-    "notes": [{"id":"unique-id","datetime":"YYYY-MM-DD HH:mm","type":"Triage | ED note | Consult request | Progress note | Discharge summary | Procedure note","author":"","title":"","text":"objective chart text"}],
+    "notes": [{"id":"unique-id","datetime":"YYYY-MM-DD HH:mm","service":"Emergency Medicine | Internal Medicine | General Surgery | Family Medicine | ICU | other service","providerName":"Dr. Lastname / NP Lastname / PT Lastname","noteType":"Consult note | Progress note | Admission note | Discharge summary | Procedure note | ED note | Consult request","title":"short title","text":"realistic note text with headings appropriate to the service and noteType"}],
     "orders": []
   }
 }
-Rules for lab values: use Canadian/SI units only. Every lab value must include flag normal, high, low, or critical. Public text must not reveal the hidden diagnosis unless it would genuinely be written in the chart as a pre-existing known diagnosis.
+Rules for lab values: use Canadian/SI units only. Every lab value must include flag normal, high, low, or critical. Lab category names must be only Hematology, Chemistry, Blood Gas, Serology, Urine, or Misc. LFTs, bilirubin, albumin, renal function, electrolytes, calcium/magnesium/phosphate, osmolality, lipase/amylase, CRP/ESR, troponin, and BNP all belong in Chemistry rather than a separate category. Public text must not reveal the hidden diagnosis unless it would genuinely be written in the chart as a pre-existing known diagnosis. Provider notes must be realistic chart notes. Show a list-friendly metadata structure using service, providerName, noteType, datetime, title, and text. The text field should contain actual note headings appropriate to the note type, such as Reason for consult, HPI, Past medical history, Medications, Physical exam, Investigations, Impression, Plan, or Procedure details.
 `;
 
 async function aiGenerateCaseSession({ mode, specialty, difficulty, exclusionText, userId }) {
@@ -2272,7 +2320,14 @@ async function aiGenerateCaseSession({ mode, specialty, difficulty, exclusionTex
         investigations: [{ id: uuid(), datetime:"2026-05-17 19:10", group:"Imaging", title:"CT abdomen/pelvis with contrast", status:"Final", report:"No bowel obstruction. No appendicitis. No free air. Small physiologic pelvic free fluid. Solid organs unremarkable." }],
         nursingNotes: [{ datetime:"2026-05-17 18:25", author:"RN", text:"Patient reports diffuse abdominal pain with nausea. Vomited twice in ED. Ambulating independently." }],
         medications: [{ id: uuid(), name:"Ondansetron", dose:"4 mg", route:"IV", frequency:"once", status:"active", start:"2026-05-17 18:30", stop:"", comments:"administered" }],
-        notes: [{ id: uuid(), datetime:"2026-05-17 18:15", type:"Consult request", author:"Emergency physician", title:"Internal Medicine consult request", text:"29F with severe diffuse abdominal pain and vomiting. CT abdomen negative. Sodium 126. Please assess for admission and ongoing workup." }],
+        notes: [{ id: uuid(), datetime:"2026-05-17 18:15", service:"Emergency Medicine", providerName:"Dr. Chen", noteType:"Consult request", type:"Consult request", author:"Dr. Chen", title:"Internal Medicine consult request", text:"Reason for consult
+Persistent abdominal pain with hyponatremia.
+
+HPI
+29F with severe diffuse abdominal pain and vomiting. CT abdomen negative. Sodium 126 mmol/L.
+
+Request
+Please assess for admission and ongoing workup." }],
         orders: []
       }),
       activity: [{ at: nowIso(), type: "system", text: "Case generated. Locked diagnosis stored server-side." }],
@@ -2291,6 +2346,8 @@ Hard rules:
 - Zebra mode should be rare, atypical, confusing, and extremely challenging while still medically coherent.
 - Cross-reference the exclusion list. Do not repeat or closely mimic prior cases, disease categories, fingerprints, or obvious variants.
 - EMR content should feel like Meditech/Cerner: terse, objective, chronological, and incomplete in realistic ways.
+- Notes must be stored as metadata plus full text: datetime, service, providerName, noteType, title, and text. The text should look like an actual provider note with headings, not a one-line summary.
+- Lab categories must use only Hematology, Chemistry, Blood Gas, Serology, Urine, and Misc. Put LFTs and other biochemical tests in Chemistry.
 - Include enough initial data to start a case, but not enough to make it obvious.
 - Do not include educational rationale in public chart fields.
 ${CASE_SCHEMA_TEXT}`;
@@ -2544,14 +2601,17 @@ app.post('/case/sessions/:id/note', async (req, res) => {
     const session = await loadCaseSession(req.params.id);
     if (!session) return res.status(404).json({ error: "Case session not found" });
     if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
-    const title = String(req.body?.title || "User note").trim();
-    const type = String(req.body?.type || "User note").trim();
+    const title = String(req.body?.title || "Learner note").trim();
+    const noteType = String(req.body?.noteType || req.body?.type || "Progress note").trim();
+    const service = String(req.body?.service || "Internal Medicine").trim();
+    const providerName = String(req.body?.providerName || req.body?.provider || req.body?.author || "Learner").trim();
+    const datetime = String(req.body?.datetime || new Date().toISOString().slice(0,16).replace('T',' ')).trim();
     const text = String(req.body?.text || "").trim();
     if (!text) return res.status(400).json({ error: "note text required" });
     session.patient = sanitizePatient(session.patient);
-    session.patient.notes.push({ id: uuid(), datetime: new Date().toISOString().slice(0,16).replace('T',' '), type, author: "Learner", title, text });
+    session.patient.notes.push(normalizeCaseNote({ id: uuid(), datetime, service, providerName, noteType, type: noteType, author: providerName, title, text }));
     session.activity = ensureArray(session.activity);
-    session.activity.push({ at: nowIso(), type: "user_note", text: `${title}\n${text}` });
+    session.activity.push({ at: nowIso(), type: "user_note", text: `${noteType} · ${service} · ${title}\n${text}` });
     await saveCaseSession(session);
     res.json(publicCasePayload(session));
   } catch (e) {
