@@ -1,7 +1,7 @@
 {
-  "name": "one-line-pimp",
-  "version": "1.0.0",
-  "description": "One Line Pimp Simulator backend (Option A: server-orchestrated)",
+  "name": "medical-simulators",
+  "version": "1.1.0",
+  "description": "Shared backend for One Line Pimp Simulator, MCCQE practice mode, Med Learner, and Medical Case Simulator",
   "main": "server.js",
   "type": "module",
   "scripts": {
