@@ -13,6 +13,7 @@ import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { v4 as uuid, v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 ////////////////////////////////////////////////////////////////////////////////
 // CONFIG & INIT
@@ -45,40 +46,61 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- Models ---
-// Cheaper default for most tasks:
-const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-4.1";
-// Use a smarter model ONLY for URL selection to reduce 404s; set env to "gpt-5.1" (or whatever you have)
-// If not set, it will fallback to BASE_MODEL.
-const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5";
+// Keep these configurable in Render. The defaults use the newer GPT-5 family.
+// Recommended routing:
+// - Full case generation and final debriefs: GPT-5.5
+// - One-line pimp generation/grading and case interactions/advancement: GPT-5.4 mini
+// - Very small deterministic helper work, if you enable it later: GPT-5.4 nano
+const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-5.4-mini";
+const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5.5";
+const PREMIUM_MODEL = process.env.OPENAI_PREMIUM_MODEL || process.env.OPENAI_CASE_MODEL || STRICT_MODEL;
+const FAST_MODEL = process.env.OPENAI_FAST_MODEL || process.env.OPENAI_PIMP_MODEL || "gpt-5.4-mini";
+const ULTRA_FAST_MODEL = process.env.OPENAI_ULTRA_FAST_MODEL || "gpt-5.4-nano";
+const PIMP_MODEL = process.env.OPENAI_PIMP_MODEL || FAST_MODEL;
+const PIMP_GRADER_MODEL = process.env.OPENAI_PIMP_GRADER_MODEL || FAST_MODEL;
+const PIMP_DISCUSSION_MODEL = process.env.OPENAI_PIMP_DISCUSSION_MODEL || FAST_MODEL;
+const CASE_GENERATOR_MODEL = process.env.OPENAI_CASE_MODEL || PREMIUM_MODEL;
+const CASE_FAST_MODEL_DEFAULT = process.env.OPENAI_CASE_FAST_MODEL || FAST_MODEL;
 
 // helper: some models (gpt-5.x, o-series) don't accept temperature on Responses API
 function supportsTemperature(model = '') {
   const m = String(model || '').toLowerCase();
-
-  // GPT-5 reasoning-style models do not accept temperature, including exact "gpt-5"
-  // as well as variants like "gpt-5.1", "gpt-5-mini", etc.
   if (m.startsWith('gpt-5')) return false;
-
-  // o-series reasoning models also generally do not accept temperature.
   if (/^o\d/.test(m)) return false;
-
   return true;
 }
 
-// wrapper: build the request and include temperature only when supported
-async function responsesCall({ model, messages, temperature }) {
+function supportsReasoningEffort(model = '') {
+  const m = String(model || '').toLowerCase();
+  return m.startsWith('gpt-5') || /^o\d/.test(m);
+}
+
+// wrapper: build the request and include only parameters supported by the selected model
+async function responsesCall({ model, messages, temperature, max_output_tokens, reasoning_effort }) {
   const req = { model, input: messages };
-  if (temperature !== undefined && supportsTemperature(model)) {
-    req.temperature = temperature;
-  }
+  if (temperature !== undefined && supportsTemperature(model)) req.temperature = temperature;
+  if (max_output_tokens !== undefined) req.max_output_tokens = max_output_tokens;
+  if (reasoning_effort && supportsReasoningEffort(model)) req.reasoning = { effort: reasoning_effort };
   return await openai.responses.create(req);
 }
-// Difficulty ladder
-const DIFF = ["MSI1","MSI2","MSI3","MSI4","R1","R2","R3","R4","R5","Attending"];
+
+// Standard, non-training-level difficulty ladder used by both apps.
+const DIFF = ["Easy", "Medium", "Hard", "Expert", "Brutal"];
+const LEGACY_DIFF_MAP = {
+  "MSI1":"Easy", "MSI2":"Medium", "MSI3":"Hard", "MSI4":"Hard",
+  "R1":"Hard", "R2":"Expert", "R3":"Expert", "R4":"Brutal", "R5":"Brutal", "Attending":"Brutal",
+  "MSI3-R1":"Hard", "MSI4-R2":"Expert", "R3-R5":"Brutal", "Attending-level brutal":"Brutal"
+};
+function normalizeDifficulty(label) {
+  const raw = String(label || "Hard").trim();
+  if (DIFF.includes(raw)) return raw;
+  return LEGACY_DIFF_MAP[raw] || "Hard";
+}
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const bumpDifficulty = (label, delta) => {
-  const i = DIFF.indexOf(label);
-  const next = i < 0 ? 2 : clamp(i + delta, 0, DIFF.length - 1);
+  const normalized = normalizeDifficulty(label);
+  const i = DIFF.indexOf(normalized);
+  const next = i < 0 ? 2 : clamp(i + Number(delta || 0), 0, DIFF.length - 1);
   return DIFF[next];
 };
 
@@ -931,8 +953,10 @@ RULES
   };
 
   const resp = await responsesCall({
-    model: BASE_MODEL,
+    model: PIMP_DISCUSSION_MODEL,
     temperature: 0,
+    max_output_tokens: 800,
+    reasoning_effort: 'low',
     messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
@@ -1054,7 +1078,7 @@ app.delete('/admin/wipe', async (req, res) => {
     }
     const dry = String(req.query.dry || "0") === "1";
 
-    const patterns = ["user:*","sess:*","sess:*:items","excl:*","history:*","leaderboard:*"];
+    const patterns = ["user:*","username_index:*","auth:token:*","sess:*","sess:*:items","excl:*","history:*","leaderboard:*","casesim:session:*","casesim:excl:*"];
     let deleted = 0;
 
     async function delChunked(keys) {
@@ -1121,12 +1145,16 @@ async function isUsernameAllowedAI(username) {
   }
 }
 
-// Redis keys (kept)
-const kUser = (u) => `user:${u}`;
-const kExcl = (u) => `excl:${u}`;
+// Redis keys
+const usernameKey = (u) => String(u || '').trim();
+const usernameIndexKey = (u) => `username_index:${String(u || '').trim().toLowerCase()}`;
+const kUser = (u) => `user:${usernameKey(u)}`;
+const kExcl = (u) => `excl:${usernameKey(u)}`;
 const kSess = (s) => `sess:${s}`;
 const kSessItems = (s) => `sess:${s}:items`;
-const kHistory = (u) => `history:${u}`;
+const kHistory = (u) => `history:${usernameKey(u)}`;
+const kAuthToken = (tokenHash) => `auth:token:${tokenHash}`;
+const kCaseExcl = (u) => `casesim:excl:${usernameKey(u)}`;
 
 // DEBUGGERS (kept)
 app.get("/admin/raw-items", async (req, res) => {
@@ -1160,7 +1188,7 @@ app.post("/admin/append-dummy", async (req, res) => {
 
 // Points helpers (kept)
 const kLB = () => `leaderboard:global`;
-function tierIndex(label) { const i = DIFF.indexOf(label); return (i >= 0 ? i : 0) + 1; }
+function tierIndex(label) { const i = DIFF.indexOf(normalizeDifficulty(label)); return (i >= 0 ? i : 2) + 1; }
 function pointsFor(label) { const t = tierIndex(label); return { correct: 10 * t, wrong: 5 * t }; }
 
 async function getUserScore(username) {
@@ -1264,26 +1292,127 @@ app.get("/admin/peek-session", async (req, res) => {
   }
 });
 
-// Helpers (kept)
+// User/auth/session helpers
+function normalizeUsernameInput(username) {
+  return String(username || '').trim();
+}
+
+function validateUsername(username) {
+  const u = normalizeUsernameInput(username);
+  if (!u) return 'username required';
+  if (u.length < 3 || u.length > 32) return 'username must be 3-32 characters';
+  if (!/^[A-Za-z0-9._-]+$/.test(u)) return 'username can only contain letters, numbers, dot, underscore, and hyphen';
+  return '';
+}
+
+function validatePassword(password) {
+  const p = String(password || '');
+  if (p.length < 8) return 'password must be at least 8 characters';
+  if (p.length > 256) return 'password is too long';
+  return '';
+}
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function makeSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(String(password), salt, 64).toString('hex');
+}
+
+function verifyPassword(password, salt, expectedHash) {
+  if (!salt || !expectedHash) return false;
+  const actual = Buffer.from(hashPassword(password, salt), 'hex');
+  const expected = Buffer.from(String(expectedHash), 'hex');
+  if (actual.length !== expected.length) return false;
+  return crypto.timingSafeEqual(actual, expected);
+}
+
 async function userExists(username) { return Boolean(await redis.exists(kUser(username))); }
 
-async function createUser(username) {
-  await redis.hset(kUser(username), { created_at: Date.now() });
-  await redis.hset(kUser(username), { score: 0, answered: 0, correct: 0 });
-  await redis.zadd(kLB(), { score: 0, member: username });
-  await redis.zadd('leaderboard:global', { score: 0, member: username });
+async function createUser(username, password = '') {
+  const u = normalizeUsernameInput(username);
+  const now = Date.now();
+  const data = { username: u, created_at: now, score: 0, answered: 0, correct: 0 };
+  if (password) {
+    const salt = makeSalt();
+    data.password_salt = salt;
+    data.password_hash = hashPassword(password, salt);
+    data.auth_version = 1;
+  } else {
+    data.legacy_no_password = 1;
+  }
+  await redis.hset(kUser(u), data);
+  await redis.set(usernameIndexKey(u), u);
+  await redis.zadd(kLB(), { score: 0, member: u });
+  await redis.zadd('leaderboard:global', { score: 0, member: u });
+}
+
+async function createAuthToken(username) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = hashToken(token);
+  const ttlSeconds = Number(process.env.AUTH_SESSION_TTL_SECONDS || 60 * 60 * 24 * 30);
+  await redis.set(kAuthToken(tokenHash), JSON.stringify({ username, created_at: Date.now() }), { ex: ttlSeconds });
+  return token;
+}
+
+async function readAuthFromReq(req) {
+  const auth = String(req.headers?.authorization || '');
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return null;
+  const token = m[1].trim();
+  if (!token) return null;
+  const raw = await redis.get(kAuthToken(hashToken(token)));
+  const parsed = parseMaybeJSON(raw);
+  if (!parsed?.username) return null;
+  const user = await redis.hgetall(kUser(parsed.username));
+  if (!user || Object.keys(user).length === 0) return null;
+  return { username: parsed.username, token, user };
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    const publicApi =
+      (req.method === 'POST' && req.originalUrl.startsWith('/api/users')) ||
+      (req.method === 'GET' && req.originalUrl.startsWith('/api/leaderboard'));
+    if (publicApi || process.env.DISABLE_AUTH === '1') return next();
+    const auth = await readAuthFromReq(req);
+    if (!auth) return res.status(401).json({ error: 'Login required' });
+    req.auth = auth;
+    next();
+  } catch (e) {
+    res.status(401).json({ error: 'Login required', detail: String(e) });
+  }
+}
+
+function requestedUsernameOrAuth(req, rawUsername) {
+  const authUser = req.auth?.username;
+  const requested = normalizeUsernameInput(rawUsername || authUser);
+  if (!authUser) return requested;
+  if (!requested) return authUser;
+  if (requested !== authUser) {
+    const err = new Error('Cannot access another user account');
+    err.statusCode = 403;
+    throw err;
+  }
+  return authUser;
 }
 
 async function exclusionsCount(username) { return await redis.llen(kExcl(username)); }
 async function getExclusions(username) { return await redis.lrange(kExcl(username), 0, -1); }
 async function pushExclusions(username, questions) { if (!questions?.length) return 0; return await redis.rpush(kExcl(username), ...questions); }
 
-async function createSession({ username, topic, startingDifficulty }) {
+async function createSession({ username, topic, startingDifficulty, mode = 'pimp' }) {
   const id = uuid();
   await redis.hset(kSess(id), {
     username,
     topic: topic || 'random',
-    start_diff: startingDifficulty || 'MSI3',
+    start_diff: normalizeDifficulty(startingDifficulty || 'Hard'),
+    mode: mode === 'mccqe' ? 'mccqe' : 'pimp',
     created_at: Date.now()
   });
   return id;
@@ -1292,6 +1421,7 @@ async function createSession({ username, topic, startingDifficulty }) {
 async function getSessionMeta(sessionId) {
   const data = await redis.hgetall(kSess(sessionId));
   if (!data || Object.keys(data).length === 0) return null;
+  if (data.start_diff) data.start_diff = normalizeDifficulty(data.start_diff);
   return data;
 }
 
@@ -1341,6 +1471,18 @@ async function pushHistory(username, item) {
   await redis.ltrim(kHistory(username), 0, 999);
 }
 
+async function getCaseExclusions(username) { return await redis.lrange(kCaseExcl(username), 0, -1); }
+async function caseExclusionsCount(username) { return await redis.llen(kCaseExcl(username)); }
+async function pushUniqueCaseExclusion(username, entry) {
+  const e = String(entry || '').trim();
+  if (!e) return 0;
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const existing = await getCaseExclusions(username);
+  if (new Set(existing.map(norm)).has(norm(e))) return 0;
+  await redis.rpush(kCaseExcl(username), e);
+  return 1;
+}
+
 // Delete a PDF by label (kept from your version)
 app.delete('/med/pdfs/by-label', (req, res) => {
   try {
@@ -1363,73 +1505,134 @@ app.delete('/med/pdfs/by-label', (req, res) => {
 // OPENAI HELPERS (question/grade/summarize) — kept as in your file
 ////////////////////////////////////////////////////////////////////////////////
 
-async function aiGenerateQuestion({ topic, difficulty, avoidList }) {
+function parseChoiceLetter(value) {
+  const s = String(value || '').trim().toUpperCase();
+  const m = s.match(/^[A-E]/);
+  return m ? m[0] : '';
+}
+
+function publicQuestionPayload(item) {
+  return {
+    q_number: item.q_number,
+    question: item.question,
+    stem: item.question,
+    difficulty: item.final_difficulty || item.starting_difficulty,
+    type: item.type || 'short_answer',
+    mode: item.mode || 'pimp',
+    options: Array.isArray(item.options) ? item.options : [],
+    topic: item.topic || 'random'
+  };
+}
+
+function normalizeGeneratedQuestion(parsed, mode = 'pimp') {
+  const p = parsed && typeof parsed === 'object' ? parsed : {};
+  const type = mode === 'mccqe' ? 'mcq' : String(p.type || 'short_answer').toLowerCase();
+  const question = String(p.question || p.stem || '').trim();
+  if (!question) throw new Error('Bad question JSON: missing question');
+  const options = Array.isArray(p.options) ? p.options.map(x => String(x).trim()).filter(Boolean) : [];
+  const answerKey = parseChoiceLetter(p.answerKey || p.correctChoice || p.correct_option || p.correctAnswerLetter);
+  return {
+    type: type === 'mcq' ? 'mcq' : 'short_answer',
+    question,
+    expectedAnswer: String(p.expectedAnswer || p.answer || p.correctAnswer || '').trim(),
+    answerKey,
+    options,
+    explanation: String(p.explanation || '').trim(),
+    skill: String(p.skill || p.questionStyle || '').trim(),
+    sourceHint: String(p.sourceHint || '').trim()
+  };
+}
+
+async function aiGenerateQuestion({ topic, difficulty, avoidList, mode = 'pimp', askedCount = 0 }) {
   if (process.env.MOCK_AI === '1') {
-    const pool = (Array.isArray(avoidList) ? avoidList : []);
-    const bank = [
-      "First-line treatment for status asthmaticus?",
-      "Antidote for organophosphate poisoning?",
-      "Next step for suspected PE in a hemodynamically stable patient?",
-      "Diagnostic test of choice for C. difficile infection?",
-      "Target INR for mechanical mitral valve?"
-    ];
-    const q = bank.find(b => !pool.includes(b)) || "Dose of epinephrine IM for anaphylaxis in adults?";
-    return q;
+    if (mode === 'mccqe') {
+      return {
+        type: 'mcq',
+        question: 'A 67-year-old with crushing chest pain has ST elevations in II, III, and aVF. BP is 84/52 and JVP is elevated. What is the best immediate medication to avoid?',
+        options: ['A. Aspirin', 'B. Nitroglycerin', 'C. Heparin', 'D. Ticagrelor', 'E. Atorvastatin'],
+        answerKey: 'B',
+        expectedAnswer: 'Nitroglycerin',
+        explanation: 'Inferior STEMI with hypotension and elevated JVP suggests RV infarct; nitrates can precipitate severe preload collapse.',
+        skill: 'ECG and hemodynamic interpretation'
+      };
+    }
+    return {
+      type: 'short_answer',
+      question: 'A patient with pH 7.25, PaCO2 25 mmHg, HCO3 11 mmol/L, Na 140, Cl 100 has what acid-base disorder?',
+      expectedAnswer: 'High anion gap metabolic acidosis with appropriate respiratory compensation',
+      explanation: 'AG is 29 and Winter expected PaCO2 is about 24.5 ± 2.',
+      skill: 'lab interpretation'
+    };
   }
 
-  const avoid = Array.isArray(avoidList) ? avoidList.slice(-200) : [];
+  const avoid = Array.isArray(avoidList) ? avoidList.slice(-220) : [];
+  const normalizedDifficulty = normalizeDifficulty(difficulty);
+  const styleCycle = ['clinical_reasoning', 'labs_interpretation', 'next_test', 'management_decision', 'fact_microdose'];
+  const preferredStyle = styleCycle[Math.max(0, Number(askedCount || 0)) % styleCycle.length];
 
-  const system = `You are the question engine for "One Line Pimp Simulator".
-Return ONLY JSON like: {"question":"..."}.
-Question must be answerable in ONE word or ONE short sentence.
-The questions should be difficult questions designed to mimic questions an attending physician would ask (or "pimp") a medical student or resident.
-Ensure the difficulty scales with MSI1→Attending. Avoid duplicates of provided examples.
-Quality control is mandatory: do not generate physiologically contradictory or internally inconsistent stems.
-If the topic involves acid-base, electrolytes, endocrine physiology, pharmacology, or hemodynamics, verify the expected answer before returning the question.
-Do not ask a question whose correct answer depends on a false premise unless the question explicitly asks the learner to identify the inconsistency.`;
+  const system = mode === 'mccqe'
+    ? `You are the question engine for an MCCQE Part I practice mode.
+Return ONLY valid JSON:
+{"type":"mcq","question":"single-best-answer clinical vignette","options":["A. ...","B. ...","C. ...","D. ...","E. ..."],"answerKey":"A|B|C|D|E","expectedAnswer":"short answer","explanation":"high-yield explanation","skill":"tested skill"}
+Rules:
+- Generate questions from the hardest 10% of MCCQE-style clinical reasoning.
+- Use Canadian clinical framing where relevant.
+- Single best answer only. Five plausible options. Avoid trivia-only stems.
+- Prioritize diagnosis, next best test, initial management, risk stratification, ethics/communication, emergency stabilization, and interpretation of labs/ECG/imaging descriptions.
+- You may include text descriptions of ECGs, imaging, pathology, or lab panels. Do not require a real image.
+- Keep the explanation concise but educational.
+- Avoid duplicates of provided examples.`
+    : `You are the question engine for One Line Pimp Simulator.
+Return ONLY valid JSON:
+{"type":"short_answer","question":"...","expectedAnswer":"...","explanation":"...","skill":"..."}
+Rules:
+- The answer should be one word, one phrase, or one short sentence.
+- Do NOT overuse isolated fact-recall gene/syndrome questions. Those are allowed occasionally only.
+- Most questions should feel clinical: short vignettes, lab interpretation, acid-base, ECG/imaging descriptions, next test, next management step, or mechanism applied to a case.
+- Preferred style for this request: ${preferredStyle}.
+- Make questions jump across specialties and feel engaging.
+- Difficulty must match Easy, Medium, Hard, Expert, or Brutal. Brutal should still be fair and medically coherent.
+- Quality control is mandatory. No physiologically contradictory or internally inconsistent stems.
+- If using labs, use Canadian/SI units when possible.
+- Avoid duplicates of provided examples.`;
 
-  const userPayload = { topic: topic || "random", difficulty: difficulty || "MSI3", avoid_examples: avoid };
+  const userPayload = {
+    topic: topic || 'random',
+    difficulty: normalizedDifficulty,
+    mode,
+    preferredStyle,
+    avoid_examples: avoid
+  };
 
   const resp = await responsesCall({
-    model: process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini",
-    temperature: 0.7,
+    model: PIMP_MODEL,
+    temperature: mode === 'mccqe' ? 0.45 : 0.7,
+    max_output_tokens: mode === 'mccqe' ? 900 : 650,
+    reasoning_effort: 'low',
     messages: [
-      { role: "system", content: system },
-      { role: "user", content: JSON.stringify(userPayload) }
+      { role: 'system', content: system },
+      { role: 'user', content: JSON.stringify(userPayload) }
     ]
   });
 
-  const parsed = parseResponsesJSON(resp) || {};
-  if (!parsed.question || typeof parsed.question !== "string") throw new Error("Bad question JSON");
-  return parsed.question.trim();
+  const parsed = parseResponsesJSON(resp) || parseLooseJSON(extractOutputText(resp)) || {};
+  const item = normalizeGeneratedQuestion(parsed, mode);
+  if (mode === 'mccqe' && (!item.answerKey || item.options.length < 4)) {
+    throw new Error('Bad MCCQE question JSON');
+  }
+  return item;
 }
 
-async function aiGradeAnswer({ question, userAnswer, difficulty }) {
+async function aiGradeAnswer({ question, userAnswer, difficulty, expectedAnswer = '', explanation = '' }) {
   if (process.env.MOCK_AI === "1") {
-    const golds = {
-      "First-line treatment for status asthmaticus?": "nebulized SABA plus ipratropium, systemic steroids, oxygen and magnesium if severe",
-      "Antidote for organophosphate poisoning?": "atropine and pralidoxime",
-      "Next step for suspected PE in a hemodynamically stable patient?": "CTPA if not low-risk/PERC negative",
-      "Diagnostic test of choice for C. difficile infection?": "stool NAAT or toxin testing depending on local algorithm",
-      "Target INR for mechanical mitral valve?": "3.0"
-    };
-    const gold = (golds[question] || "").toLowerCase().trim();
-    const ans  = String(userAnswer || "").toLowerCase().trim();
-    let credit = 0;
-    if (gold && (ans === gold || gold.includes(ans) || ans.includes(gold))) credit = 1;
-    else if (gold && ans && gold.split(/\W+/).some(w => w.length > 4 && ans.includes(w))) credit = 0.5;
-    const verdict = credit >= 0.85 ? "correct" : (credit > 0 ? "partial" : "incorrect");
-    return {
-      verdict,
-      credit,
-      is_correct: credit >= 0.85,
-      explanation: credit >= 0.85 ? "" : (gold ? `Expected: ${gold}.` : "Reviewed."),
-      difficulty_delta: credit >= 0.85 ? 1 : (credit >= 0.35 ? 0 : -1),
-      invalid_question: false
-    };
+    const ans = String(userAnswer || '').toLowerCase();
+    const gold = String(expectedAnswer || '').toLowerCase();
+    const credit = gold && (gold.includes(ans) || ans.includes(gold.split(' ')[0])) ? 1 : 0;
+    const verdict = credit >= 0.85 ? 'correct' : 'incorrect';
+    return { verdict, credit, is_correct: credit >= 0.85, explanation: explanation || `Expected: ${expectedAnswer}.`, difficulty_delta: credit >= 0.85 ? 1 : -1, invalid_question: false };
   }
 
-  const system = `You are a strict but fair medical answer grader for a one-line clinical pimp simulator.
+  const system = `You are a strict but fair medical answer grader for a one-line clinical simulator.
 Return ONLY valid JSON with this exact shape:
 {
   "verdict": "correct" | "partial" | "incorrect" | "invalid",
@@ -1441,33 +1644,32 @@ Return ONLY valid JSON with this exact shape:
 
 Core grading rules:
 - Award continuous partial credit from 0 to 1.
+- Use the expected answer as the main answer key, but accept equivalent clinical wording.
 - credit=1 means the core answer is correct, even if wording is imperfect.
-- credit 0.60-0.85 means the answer is very close or captures the key mechanism but misses an important qualifier.
+- credit 0.60-0.85 means very close but missing an important qualifier.
 - credit 0.30-0.59 means partially correct but materially incomplete.
-- credit 0.05-0.29 means a small relevant fragment only.
+- credit 0.05-0.29 means only a small relevant fragment.
 - credit=0 means wrong, unrelated, or unsafe.
 - Use verdict="partial" for any defensible partial answer where 0 < credit < 0.85.
-- Use verdict="correct" when credit >= 0.85.
-- Use verdict="incorrect" when credit = 0.
-- If the learner challenges a false premise and the challenge is valid, mark correct or partial depending on quality.
+- If the learner validly challenges a flawed stem, mark correct or partial depending on quality.
 - If the stem itself is ambiguous, impossible, internally inconsistent, or based on a false physiologic premise, set verdict="invalid", invalid_question=true, credit=0, difficulty_delta=0, and explain the corrected concept.
-- Do not punish the learner for a defensible answer to an invalid or ambiguous stem.
-- Be especially careful with acid-base, electrolytes, endocrine physiology, pharmacology, and hemodynamics.
-- Keep explanations precise and high-yield. If the learner is close, say exactly what was missing.`;
+- Keep explanations precise and high-yield.`;
 
-  const userPayload = { question, userAnswer, difficulty };
+  const userPayload = { question, expectedAnswer, storedExplanation: explanation, userAnswer, difficulty: normalizeDifficulty(difficulty) };
 
   let parsed = null;
   try {
     const resp = await responsesCall({
-      model: process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini",
+      model: PIMP_GRADER_MODEL,
       temperature: 0,
+      max_output_tokens: 450,
+      reasoning_effort: 'low',
       messages: [
         { role: "system", content: system },
         { role: "user", content: JSON.stringify(userPayload) }
       ]
     });
-    parsed = parseResponsesJSON(resp);
+    parsed = parseResponsesJSON(resp) || parseLooseJSON(extractOutputText(resp));
   } catch (e) {
     return { verdict: "incorrect", credit: 0, is_correct: false, explanation: "Grader unavailable; keeping same difficulty.", difficulty_delta: 0, invalid_question: false };
   }
@@ -1478,37 +1680,24 @@ Core grading rules:
 
   const invalid_question = !!parsed.invalid_question || parsed.verdict === "invalid";
   let credit = Number(parsed.credit);
-
-  // Backward compatibility if a model accidentally returns the older boolean format.
-  if (!Number.isFinite(credit)) {
-    if (invalid_question) credit = 0;
-    else if (parsed.is_correct === true) credit = 1;
-    else credit = 0;
-  }
+  if (!Number.isFinite(credit)) credit = invalid_question ? 0 : (parsed.is_correct === true ? 1 : 0);
   credit = Math.max(0, Math.min(1, credit));
 
   let verdict = String(parsed.verdict || "").toLowerCase();
   if (invalid_question) verdict = "invalid";
-  else if (!["correct", "partial", "incorrect"].includes(verdict)) {
-    verdict = credit >= 0.85 ? "correct" : (credit > 0 ? "partial" : "incorrect");
-  }
-  if (!invalid_question) {
-    if (credit >= 0.85) verdict = "correct";
-    else if (credit > 0) verdict = "partial";
-    else verdict = "incorrect";
-  }
+  else if (credit >= 0.85) verdict = "correct";
+  else if (credit > 0) verdict = "partial";
+  else verdict = "incorrect";
 
   const is_correct = verdict === "correct";
-  const explanation = typeof parsed.explanation === "string" ? parsed.explanation : "";
-
+  const safeExplanation = typeof parsed.explanation === "string" && parsed.explanation.trim()
+    ? parsed.explanation.trim()
+    : (explanation || (expectedAnswer ? `Expected: ${expectedAnswer}.` : 'Reviewed.'));
   let delta = Number(parsed.difficulty_delta);
-  if (![ -1, 0, 1 ].includes(delta)) {
-    delta = invalid_question ? 0 : (credit >= 0.85 ? 1 : (credit >= 0.35 ? 0 : -1));
-  }
+  if (![ -1, 0, 1 ].includes(delta)) delta = invalid_question ? 0 : (credit >= 0.85 ? 1 : (credit >= 0.35 ? 0 : -1));
 
-  return { verdict, credit, is_correct, explanation, difficulty_delta: delta, invalid_question };
+  return { verdict, credit, is_correct, explanation: safeExplanation, difficulty_delta: delta, invalid_question };
 }
-
 
 async function aiDiscussAnswer({ question, userAnswer, grading, dialogue, message }) {
   if (process.env.MOCK_AI === "1") {
@@ -1532,8 +1721,10 @@ Keep the reply concise, high-yield, and mechanistic when useful.`;
   };
 
   const resp = await responsesCall({
-    model: process.env.OPENAI_BASE_MODEL || "gpt-4.1",
+    model: PIMP_DISCUSSION_MODEL,
     temperature: 0,
+    max_output_tokens: 550,
+    reasoning_effort: 'low',
     messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(payload) }
@@ -1546,10 +1737,10 @@ Keep the reply concise, high-yield, and mechanistic when useful.`;
 async function aiSummarizeSession({ transcript, startDifficulty }) {
   const system = `You will summarize the session in detail, explain strengths and weaknesses with examples, and give a final rating.
 Return JSON ONLY:
-{"feedback": "short feedback", "rating": "MSI1|MSI2|MSI3|MSI4|R1|R2|R3|R4|R5|Attending"}`;
+{"feedback": "short feedback", "rating": "Easy|Medium|Hard|Expert|Brutal"}`;
 
   const userPayload = {
-    startDifficulty: startDifficulty || "MSI3",
+    startDifficulty: normalizeDifficulty(startDifficulty || "Hard"),
     items: transcript.map(t => ({
       question: t.question,
       userAnswer: t.user_answer ?? "",
@@ -1561,8 +1752,10 @@ Return JSON ONLY:
   };
 
   const resp = await responsesCall({
-    model: BASE_MODEL,
+    model: PIMP_DISCUSSION_MODEL,
     temperature: 0,
+    max_output_tokens: 800,
+    reasoning_effort: 'low',
     messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(userPayload) }
@@ -1574,7 +1767,7 @@ Return JSON ONLY:
   try { parsed = JSON.parse(txt); } catch { parsed = {}; }
 
   const feedback = typeof parsed.feedback === "string" ? parsed.feedback : "Good effort.";
-  const rating = DIFF.includes(parsed.rating) ? parsed.rating : "MSI3";
+  const rating = DIFF.includes(parsed.rating) ? parsed.rating : normalizeDifficulty(parsed.rating || "Hard");
   return { feedback, rating };
 }
 
@@ -1592,22 +1785,116 @@ app.get('/health', async (_req, res) => {
   }
 });
 
+// Auth routes
+app.post('/auth/signup', async (req, res) => {
+  try {
+    const { username, password, repeatPassword } = req.body || {};
+    const u = normalizeUsernameInput(username);
+    const userErr = validateUsername(u);
+    if (userErr) return res.status(400).json({ error: userErr });
+    const passErr = validatePassword(password);
+    if (passErr) return res.status(400).json({ error: passErr });
+    if (String(password) !== String(repeatPassword || '')) {
+      return res.status(400).json({ error: 'passwords do not match' });
+    }
+    const ok = await isUsernameAllowedAI(u);
+    if (!ok) return res.status(400).json({ error: 'That username is not allowed. Please choose something else.' });
+    const indexed = await redis.get(usernameIndexKey(u));
+    const existing = await redis.hgetall(kUser(u));
+    if (indexed && indexed !== u) return res.status(409).json({ error: 'Username taken' });
+    if (existing && Object.keys(existing).length > 0) {
+      if (existing.password_hash) return res.status(409).json({ error: 'Username taken' });
+      const salt = makeSalt();
+      await redis.hset(kUser(u), { username: u, password_salt: salt, password_hash: hashPassword(String(password), salt), auth_version: 1, legacy_no_password: 0 });
+      await redis.set(usernameIndexKey(u), u);
+    } else {
+      await createUser(u, String(password));
+    }
+    const token = await createAuthToken(u);
+    res.json({ ok: true, token, username: u });
+  } catch (e) {
+    res.status(500).json({ error: 'Signup failed', detail: String(e) });
+  }
+});
+
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    const u = normalizeUsernameInput(username);
+    if (!u || !password) return res.status(400).json({ error: 'username and password required' });
+    const indexed = await redis.get(usernameIndexKey(u));
+    const actualUsername = indexed || u;
+    const user = await redis.hgetall(kUser(actualUsername));
+    if (!user || Object.keys(user).length === 0) return res.status(401).json({ error: 'Invalid username or password' });
+    if (!verifyPassword(String(password), user.password_salt, user.password_hash)) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    const token = await createAuthToken(actualUsername);
+    res.json({ ok: true, token, username: actualUsername });
+  } catch (e) {
+    res.status(500).json({ error: 'Login failed', detail: String(e) });
+  }
+});
+
+app.get('/auth/me', async (req, res) => {
+  try {
+    const auth = await readAuthFromReq(req);
+    if (!auth) return res.status(401).json({ error: 'Login required' });
+    const stats = await getUserScore(auth.username);
+    res.json({ ok: true, username: auth.username, stats });
+  } catch (e) {
+    res.status(401).json({ error: 'Login required', detail: String(e) });
+  }
+});
+
+app.post('/auth/logout', async (req, res) => {
+  try {
+    const auth = await readAuthFromReq(req);
+    if (auth?.token) await redis.del(kAuthToken(hashToken(auth.token)));
+    res.json({ ok: true });
+  } catch {
+    res.json({ ok: true });
+  }
+});
+
+app.get('/auth/check-username', async (req, res) => {
+  try {
+    const u = normalizeUsernameInput(req.query.username);
+    const userErr = validateUsername(u);
+    if (userErr) return res.json({ available: false, reason: userErr });
+    const indexed = await redis.get(usernameIndexKey(u));
+    const exists = Boolean(indexed) || await userExists(u);
+    res.json({ available: !exists, reason: exists ? 'Username taken' : '' });
+  } catch (e) {
+    res.status(500).json({ error: 'Username check failed', detail: String(e) });
+  }
+});
+
+// Require login for simulator endpoints. /api/users remains public only for older clients.
+app.use(['/api', '/case'], requireAuth);
+
 // Create user
 app.post('/api/users', async (req, res) => {
   try {
-    const { username } = req.body || {};
-    if (!username || typeof username !== 'string') {
-      return res.status(400).json({ error: "username required" });
+    const { username, password, repeatPassword } = req.body || {};
+    const u = normalizeUsernameInput(username);
+    const userErr = validateUsername(u);
+    if (userErr) return res.status(400).json({ error: userErr });
+    if (!password && process.env.ALLOW_LEGACY_USER_CREATE !== '1') {
+      return res.status(400).json({ error: 'password required. Use /auth/signup for new accounts.' });
     }
-    const ok = await isUsernameAllowedAI(username);
-    if (!ok) {
-      return res.status(400).json({ error: 'That username isn’t allowed. Please choose something else.' });
+    if (password) {
+      const passErr = validatePassword(password);
+      if (passErr) return res.status(400).json({ error: passErr });
+      if (String(password) !== String(repeatPassword || '')) return res.status(400).json({ error: 'passwords do not match' });
     }
-    if (await userExists(username)) {
-      return res.status(409).json({ error: "Username taken" });
-    }
-    await createUser(username);
-    res.json({ ok: true });
+    const ok = await isUsernameAllowedAI(u);
+    if (!ok) return res.status(400).json({ error: 'That username is not allowed. Please choose something else.' });
+    const indexed = await redis.get(usernameIndexKey(u));
+    if (indexed || await userExists(u)) return res.status(409).json({ error: 'Username taken' });
+    await createUser(u, String(password || ''));
+    const token = password ? await createAuthToken(u) : '';
+    res.json({ ok: true, token, username: u });
   } catch (e) {
     res.status(500).json({ error: "Failed to create user", detail: String(e) });
   }
@@ -1616,10 +1903,9 @@ app.post('/api/users', async (req, res) => {
 // Exclusions count
 app.get('/api/exclusions/count', async (req, res) => {
   try {
-    const { username } = req.query;
-    if (!username) return res.status(400).json({ error: "username required" });
-    if (!(await userExists(String(username)))) return res.status(404).json({ error: "User not found" });
-    const count = await exclusionsCount(String(username));
+    const username = requestedUsernameOrAuth(req, req.query.username);
+    if (!(await userExists(username))) return res.status(404).json({ error: "User not found" });
+    const count = await exclusionsCount(username);
     res.json({ count });
   } catch (e) {
     res.status(500).json({ error: "Failed to get count", detail: String(e) });
@@ -1629,9 +1915,8 @@ app.get('/api/exclusions/count', async (req, res) => {
 // Full exclusions list
 app.get('/api/exclusions', async (req, res) => {
   try {
-    const { username } = req.query;
-    if (!username) return res.status(400).json({ error: "username required" });
-    const list = await getExclusions(String(username));
+    const username = requestedUsernameOrAuth(req, req.query.username);
+    const list = await getExclusions(username);
     res.json({ questions: list });
   } catch (e) {
     res.status(500).json({ error: "Failed to get exclusions", detail: String(e) });
@@ -1641,13 +1926,13 @@ app.get('/api/exclusions', async (req, res) => {
 // Start session
 app.post('/api/sessions', async (req, res) => {
   try {
-    const { username, topic, startingDifficulty } = req.body || {};
-    if (!username) return res.status(400).json({ error: "username required" });
-    if (!(await userExists(username))) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    const id = await createSession({ username, topic, startingDifficulty });
-    res.json({ sessionId: id, topic: topic || 'random', difficulty: startingDifficulty || 'MSI3' });
+    const { topic, startingDifficulty, mode } = req.body || {};
+    const username = req.auth.username;
+    if (!(await userExists(username))) return res.status(404).json({ error: "User not found" });
+    const cleanMode = mode === 'mccqe' ? 'mccqe' : 'pimp';
+    const cleanDifficulty = normalizeDifficulty(startingDifficulty || 'Hard');
+    const id = await createSession({ username, topic, startingDifficulty: cleanDifficulty, mode: cleanMode });
+    res.json({ sessionId: id, topic: topic || 'random', difficulty: cleanDifficulty, mode: cleanMode });
   } catch (e) {
     res.status(500).json({ error: "Failed to create session", detail: String(e) });
   }
@@ -1661,115 +1946,141 @@ app.post('/api/next', async (req, res) => {
 
     const meta = await getSessionMeta(sessionId);
     if (!meta) return res.status(404).json({ error: "Session not found" });
+    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
 
     const username = meta.username;
     const topic = overrideTopic || meta.topic || 'random';
+    const mode = meta.mode === 'mccqe' ? 'mccqe' : 'pimp';
 
     const items = await getSessionItems(sessionId);
     const lastDiff = items.length
-      ? items[items.length - 1].final_difficulty
-      : (overrideDiff || meta.start_diff || "MSI3");
+      ? normalizeDifficulty(items[items.length - 1].final_difficulty)
+      : normalizeDifficulty(overrideDiff || meta.start_diff || "Hard");
     const difficulty = lastDiff;
 
     const exclList = await getExclusions(username);
-
-    const already = await getSessionItems(sessionId);
-    const sessionQs = already.map(it => it.question).filter(Boolean);
+    const sessionQs = items.map(it => it.question).filter(Boolean);
 
     const norm = s => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
     const avoidSet = new Set([...exclList, ...sessionQs].map(norm));
 
-    let question;
+    let generated;
     let tries = 0;
     do {
-      question = await aiGenerateQuestion({ topic, difficulty, avoidList: [...avoidSet] });
+      generated = await aiGenerateQuestion({ topic, difficulty, avoidList: [...avoidSet], mode, askedCount: items.length });
       tries++;
-    } while (avoidSet.has(norm(question)) && tries < 3);
+    } while (avoidSet.has(norm(generated.question)) && tries < 3);
 
-    if (avoidSet.has(norm(question))) {
-      question = `${topic !== 'random' ? topic + ': ' : ''}${question}`;
+    if (avoidSet.has(norm(generated.question))) {
+      generated.question = `${topic !== 'random' ? topic + ': ' : ''}${generated.question}`;
     }
 
     const asked_index_in_session = items.length + 1;
     const baseCount = await exclusionsCount(username);
     const q_number = baseCount + asked_index_in_session;
+    const now = Date.now();
 
-    await pushSessionItem(sessionId, {
-      question,
+    const item = {
+      ...generated,
+      mode,
+      q_number,
       topic,
       starting_difficulty: difficulty,
       final_difficulty: difficulty,
       asked_index_in_session,
-      asked_at: Date.now()
-    });
+      asked_at: now
+    };
 
-    res.json({ q_number, question, difficulty });
+    await pushSessionItem(sessionId, item);
+    res.json(publicQuestionPayload(item));
   } catch (e) {
     res.status(500).json({ error: "Failed to get next question", detail: String(e) });
   }
 });
 
+function timeMultiplierForAnswer(elapsedMs, difficulty) {
+  const d = normalizeDifficulty(difficulty);
+  const grace = { Easy: 20000, Medium: 30000, Hard: 45000, Expert: 60000, Brutal: 75000 }[d] || 45000;
+  const elapsed = Math.max(0, Number(elapsedMs || 0));
+  if (!elapsed || elapsed <= grace) return 1;
+  // Smooth decay. At ~4x grace, multiplier approaches about 0.45.
+  const overRatio = (elapsed - grace) / (grace * 3);
+  return Math.max(0.45, Math.round((1 - 0.55 * Math.min(1, overRatio)) * 100) / 100);
+}
+
 // Grade answer
 app.post('/api/answer', async (req, res) => {
   try {
-    const { sessionId, answer } = req.body || {};
+    const { sessionId, answer, elapsed_ms } = req.body || {};
     if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-
     if (typeof answer !== "string") return res.status(400).json({ error: "answer required" });
 
     const meta = await getSessionMeta(sessionId);
     if (!meta) return res.status(404).json({ error: "Session not found" });
+    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
     const username = meta.username;
 
     const items = await getSessionItems(sessionId);
     if (items.length === 0) return res.status(400).json({ error: "No question to grade" });
     const last = items[items.length - 1];
+    const elapsedServerMs = last.asked_at ? Date.now() - Number(last.asked_at) : 0;
+    const elapsedMs = Number(elapsed_ms || 0) > 0 ? Number(elapsed_ms) : elapsedServerMs;
 
-    const graded = await aiGradeAnswer({
-      question: last.question,
-      userAnswer: answer,
-      difficulty: last.final_difficulty
-    });
+    let graded;
+    if ((last.type || '') === 'mcq') {
+      const chosen = parseChoiceLetter(answer);
+      const correctLetter = parseChoiceLetter(last.answerKey);
+      const ok = chosen && correctLetter && chosen === correctLetter;
+      graded = {
+        verdict: ok ? 'correct' : 'incorrect',
+        credit: ok ? 1 : 0,
+        is_correct: ok,
+        explanation: last.explanation || (correctLetter ? `Correct answer: ${correctLetter}. ${last.expectedAnswer || ''}`.trim() : 'Reviewed.'),
+        difficulty_delta: ok ? 1 : -1,
+        invalid_question: false,
+        correctChoice: correctLetter,
+        expectedAnswer: last.expectedAnswer || ''
+      };
+    } else {
+      graded = await aiGradeAnswer({
+        question: last.question,
+        expectedAnswer: last.expectedAnswer || '',
+        explanation: last.explanation || '',
+        userAnswer: answer,
+        difficulty: last.final_difficulty
+      });
+    }
 
-    const {
-      verdict,
-      credit,
-      is_correct,
-      explanation,
-      difficulty_delta,
-      invalid_question
-    } = graded;
-
+    const { verdict, credit, is_correct, explanation, difficulty_delta, invalid_question } = graded;
     const nextDiff = bumpDifficulty(last.final_difficulty, difficulty_delta);
 
     const { correct, wrong } = pointsFor(last.final_difficulty);
     const max_points = correct;
     const penalty_points = wrong;
+    const time_multiplier = timeMultiplierForAnswer(elapsedMs, last.final_difficulty);
 
-    // Scoring policy:
-    // - correct: full positive points
-    // - partial: continuous positive points from 0 to full points
-    // - incorrect: original negative penalty
-    // - invalid/ambiguous question: neutral, no penalty
     let points_delta = 0;
     if (invalid_question || verdict === "invalid") {
       points_delta = 0;
     } else if (verdict === "correct") {
-      points_delta = max_points;
+      points_delta = Math.round(max_points * time_multiplier);
     } else if (verdict === "partial" || (credit > 0 && credit < 0.85)) {
-      points_delta = Math.round(max_points * Math.max(0, Math.min(1, credit)));
+      points_delta = Math.round(max_points * Math.max(0, Math.min(1, credit)) * time_multiplier);
     } else {
       points_delta = -penalty_points;
     }
 
     const score_after = await applyScoreDelta(username, points_delta, is_correct);
-
-    const askedAt = Date.now();
+    const answeredAt = Date.now();
 
     await pushHistory(username, {
       question: last.question,
-      difficulty: last.final_difficulty,
+      type: last.type || 'short_answer',
+      options: last.type === 'mcq' ? last.options : undefined,
+      correct_choice: graded.correctChoice || undefined,
+      difficulty: normalizeDifficulty(last.final_difficulty),
       user_answer: answer,
+      expected_answer: last.expectedAnswer || graded.expectedAnswer || '',
       is_correct,
       verdict,
       credit,
@@ -1778,8 +2089,11 @@ app.post('/api/answer', async (req, res) => {
       points_delta,
       max_points,
       penalty_points,
+      time_multiplier,
+      elapsed_ms: Math.round(elapsedMs),
       score_after,
-      asked_at: askedAt,
+      asked_at: last.asked_at,
+      answered_at: answeredAt,
     });
 
     await updateLastSessionItem(sessionId, {
@@ -1793,7 +2107,10 @@ app.post('/api/answer', async (req, res) => {
       points_delta,
       max_points,
       penalty_points,
+      time_multiplier,
+      elapsed_ms: Math.round(elapsedMs),
       score_after,
+      answered_at: answeredAt,
       dialogue: []
     });
 
@@ -1807,13 +2124,17 @@ app.post('/api/answer', async (req, res) => {
       points_delta,
       max_points,
       penalty_points,
-      score: score_after
+      time_multiplier,
+      elapsed_ms: Math.round(elapsedMs),
+      elapsed_seconds: Math.round(elapsedMs / 1000),
+      score: score_after,
+      correctChoice: graded.correctChoice || undefined,
+      expectedAnswer: graded.expectedAnswer || last.expectedAnswer || undefined
     });
   } catch (e) {
     res.status(500).json({ error: "Failed to grade answer", detail: String(e) });
   }
 });
-
 
 // Optional follow-up dialogue after an answer has been graded.
 app.post('/api/discuss', async (req, res) => {
@@ -1824,6 +2145,7 @@ app.post('/api/discuss', async (req, res) => {
 
     const meta = await getSessionMeta(String(sessionId));
     if (!meta) return res.status(404).json({ error: "Session not found" });
+    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
 
     const items = await getSessionItems(String(sessionId));
     if (!items.length) return res.status(400).json({ error: "No active question" });
@@ -1870,6 +2192,7 @@ app.post('/api/conclude', async (req, res) => {
 
     const meta = await getSessionMeta(String(sessionId));
     if (!meta) return res.status(404).json({ error: "Session not found" });
+    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
 
     const username = meta.username;
     const items = await getSessionItems(String(sessionId));
@@ -1918,11 +2241,10 @@ app.post('/api/conclude', async (req, res) => {
 // Get a user's score + stats
 app.get('/api/score', async (req, res) => {
   try {
-    const { username } = req.query;
-    if (!username) return res.status(400).json({ error: "username required" });
-    if (!(await userExists(String(username)))) return res.status(404).json({ error: "User not found" });
+    const username = requestedUsernameOrAuth(req, req.query.username);
+    if (!(await userExists(username))) return res.status(404).json({ error: "User not found" });
 
-    const stats = await getUserScore(String(username));
+    const stats = await getUserScore(username);
     res.json(stats);
   } catch (e) {
     res.status(500).json({ error: "Failed to get score", detail: String(e) });
@@ -1963,9 +2285,7 @@ app.get('/api/leaderboard', async (req, res) => {
 // GET /api/history
 app.get('/api/history', async (req, res) => {
   try {
-    const username = String(req.query.username || "");
-    if (!username) return res.status(400).json({ error: "username required" });
-
+    const username = requestedUsernameOrAuth(req, req.query.username);
     const limit = Math.max(1, Math.min(1000, Number(req.query.limit || 200)));
     const rows = await redis.lrange(kHistory(username), 0, limit - 1);
 
@@ -1975,7 +2295,7 @@ app.get('/api/history', async (req, res) => {
 
     res.json({ items });
   } catch (e) {
-    res.status(500).json({ error: "history failed", detail: String(e) });
+    res.status(e.statusCode || 500).json({ error: "history failed", detail: String(e) });
   }
 });
 
@@ -2109,8 +2429,8 @@ app.get('/med/pdfs/search', (req, res) => {
 // ==================== MEDICAL CASE SIMULATOR ROUTES ====================
 // EMR-style diagnostic and management simulator. Stores the locked diagnosis server-side.
 
-const CASE_MODEL = process.env.OPENAI_CASE_MODEL || STRICT_MODEL || BASE_MODEL;
-const CASE_FAST_MODEL = process.env.OPENAI_CASE_FAST_MODEL || process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini";
+const CASE_MODEL = CASE_GENERATOR_MODEL;
+const CASE_FAST_MODEL = CASE_FAST_MODEL_DEFAULT;
 const CASE_SESSION_TTL_SECONDS = Number(process.env.CASE_SESSION_TTL_SECONDS || 60 * 60 * 24 * 30);
 
 const kCase = (id) => `casesim:session:${id}`;
@@ -2140,10 +2460,12 @@ function parseLooseJSON(text) {
   return null;
 }
 
-async function caseAiJSON({ system, payload, model = CASE_MODEL, temperature = 0 }) {
+async function caseAiJSON({ system, payload, model = CASE_MODEL, temperature = 0, max_output_tokens = 5000, reasoning_effort = 'low' }) {
   const resp = await responsesCall({
     model,
     temperature,
+    max_output_tokens,
+    reasoning_effort,
     messages: [
       { role: "system", content: system },
       { role: "user", content: JSON.stringify(payload) }
@@ -2348,6 +2670,18 @@ async function loadCaseSession(id) {
   const parsed = parseLooseJSON(raw);
   return parsed && typeof parsed === "object" ? parsed : null;
 }
+async function loadOwnedCaseSession(req, res) {
+  const session = await loadCaseSession(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: "Case session not found" });
+    return null;
+  }
+  if (session.userId && req.auth?.username && session.userId !== req.auth.username) {
+    res.status(403).json({ error: "Cannot access another user's case session" });
+    return null;
+  }
+  return session;
+}
 
 const CASE_SCHEMA_TEXT = `
 Return strict JSON only with this shape:
@@ -2384,6 +2718,7 @@ Rules for lab values: use Canadian/SI units only. Every lab value must include f
 `;
 
 async function aiGenerateCaseSession({ mode, specialty, difficulty, exclusionText, userId }) {
+  const cleanDifficulty = normalizeDifficulty(difficulty || "Hard");
   if (process.env.MOCK_AI === "1") {
     const id = uuid();
     return {
@@ -2391,7 +2726,7 @@ async function aiGenerateCaseSession({ mode, specialty, difficulty, exclusionTex
       userId,
       mode,
       specialty,
-      difficulty,
+      difficulty: cleanDifficulty,
       createdAt: nowIso(),
       currentTime: "2026-05-17 19:10",
       simStartTime: "2026-05-17 19:10",
@@ -2439,13 +2774,13 @@ ${CASE_SCHEMA_TEXT}`;
   const payload = {
     requestedMode: mode,
     requestedSpecialtyOrSetting: specialty || "undifferentiated adult inpatient/ED medicine",
-    requestedDifficulty: difficulty || "MSI3-R1",
+    requestedDifficulty: cleanDifficulty,
     userId,
     exclusionListText: String(exclusionText || '').slice(0, 60000),
     generationTime: new Date().toISOString()
   };
 
-  let generated = await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: mode === "zebra" ? 0.8 : 0.35 });
+  let generated = await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: mode === "zebra" ? 0.8 : 0.35, max_output_tokens: 9000, reasoning_effort: "high" });
   if (!generated.lock?.primaryDiagnosis || !generated.patient) {
     throw new Error("Case generator returned incomplete case JSON");
   }
@@ -2457,7 +2792,7 @@ ${CASE_SCHEMA_TEXT}`;
     userId,
     mode,
     specialty,
-    difficulty,
+    difficulty: cleanDifficulty,
     createdAt: nowIso(),
     currentTime: initialTime,
     simStartTime: initialTime,
@@ -2489,7 +2824,7 @@ Return strict JSON: {"response":"text shown to user", "patient": <optional updat
     orderHistory: ensureArray(session.orderHistory).slice(-50),
     learnerRequest: request
   };
-  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0 });
+  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0, max_output_tokens: 1600, reasoning_effort: "low" });
 }
 
 async function aiApplyOrders({ session, newOrders }) {
@@ -2511,7 +2846,7 @@ Return strict JSON only: {"patient": <full updated public patient object>, "orde
     priorOrders: ensureArray(session.orderHistory).slice(-80),
     newOrders: newOrders
   };
-  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0 });
+  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0, max_output_tokens: 3500, reasoning_effort: "low" });
 }
 
 async function aiAdvanceCase({ session }) {
@@ -2532,7 +2867,7 @@ Return strict JSON only: {"patient": <full updated public patient object>, "even
     activity: ensureArray(session.activity).slice(-50),
     orderHistory: ensureArray(session.orderHistory).slice(-80)
   };
-  return await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: 0.25 });
+  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0.15, max_output_tokens: 3500, reasoning_effort: "low" });
 }
 
 async function aiConcludeCase({ session, finalNoteText, finalOrdersText }) {
@@ -2550,7 +2885,7 @@ Return strict JSON only:
   "documentationFeedback":["..."],
   "safetyIssues":["..."],
   "whatGoodLookedLike":["..."],
-  "overallRating":"MSI1|MSI2|MSI3|MSI4|R1|R2|R3|R4|R5|Attending",
+  "overallRating":"Easy|Medium|Hard|Expert|Brutal",
   "exclusionEntry":"copy-pasteable one-line exclusion list entry with diagnosis and distinctive features"
 }`;
   const payload = {
@@ -2561,24 +2896,41 @@ Return strict JSON only:
     finalNoteText: finalNoteText || "",
     finalOrdersText: finalOrdersText || ""
   };
-  return await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: 0 });
+  return await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: 0, max_output_tokens: 6000, reasoning_effort: "medium" });
 }
+
+app.get('/case/exclusions/count', async (req, res) => {
+  try {
+    const count = await caseExclusionsCount(req.auth.username);
+    res.json({ count });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to get case exclusion count', detail: String(e) });
+  }
+});
+
+app.get('/case/exclusions', async (req, res) => {
+  try {
+    const entries = await getCaseExclusions(req.auth.username);
+    res.json({ entries });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to get case exclusions', detail: String(e) });
+  }
+});
 
 app.post('/case/sessions', async (req, res) => {
   try {
     const body = req.body || {};
-    const userId = String(body.user_id || body.username || "Gurnoor").trim() || "Gurnoor";
+    const userId = req.auth.username;
     const modeRaw = String(body.mode || "regular").toLowerCase();
     const mode = modeRaw === "zebra" ? "zebra" : "regular";
     const specialty = String(body.specialty || "").trim();
-    const difficulty = String(body.difficulty || "MSI3-R1").trim();
-    const exclusionText = String(body.exclusionText || "");
-    if (!Object.prototype.hasOwnProperty.call(body, 'exclusionText')) {
-      return res.status(400).json({ error: "exclusionText required. Upload an exclusion list or explicitly start with an empty list." });
-    }
+    const difficulty = normalizeDifficulty(body.difficulty || "Hard");
+    const savedExclusions = await getCaseExclusions(userId);
+    const adHocExclusionText = String(body.exclusionText || "").trim();
+    const exclusionText = [...savedExclusions, adHocExclusionText].filter(Boolean).join('\n');
     const session = await aiGenerateCaseSession({ mode, specialty, difficulty, exclusionText, userId });
     await saveCaseSession(session);
-    res.json(publicCasePayload(session));
+    res.json({ ...publicCasePayload(session), caseExclusionCount: savedExclusions.length });
   } catch (e) {
     res.status(500).json({ error: "Failed to start case session", detail: String(e) });
   }
@@ -2586,8 +2938,8 @@ app.post('/case/sessions', async (req, res) => {
 
 app.get('/case/sessions/:id', async (req, res) => {
   try {
-    const session = await loadCaseSession(req.params.id);
-    if (!session) return res.status(404).json({ error: "Case session not found" });
+    const session = await loadOwnedCaseSession(req, res);
+    if (!session) return;
     res.json(publicCasePayload(session));
   } catch (e) {
     res.status(500).json({ error: "Failed to load case session", detail: String(e) });
@@ -2598,6 +2950,7 @@ app.get('/case/sessions/:id/lockfile', async (req, res) => {
   try {
     const session = await loadCaseSession(req.params.id);
     if (!session) return res.status(404).type('text/plain').send("Case session not found");
+    if (session.userId && req.auth?.username && session.userId !== req.auth.username) return res.status(403).type('text/plain').send("Forbidden");
     const lock = session.lock || {};
     const txt = [
       `Medical Case Simulator locked diagnosis file`,
@@ -2625,8 +2978,8 @@ app.get('/case/sessions/:id/lockfile', async (req, res) => {
 
 app.post('/case/sessions/:id/interact', async (req, res) => {
   try {
-    const session = await loadCaseSession(req.params.id);
-    if (!session) return res.status(404).json({ error: "Case session not found" });
+    const session = await loadOwnedCaseSession(req, res);
+    if (!session) return;
     if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
     const request = String(req.body?.request || "").trim();
     if (!request) return res.status(400).json({ error: "request required" });
@@ -2645,8 +2998,8 @@ app.post('/case/sessions/:id/interact', async (req, res) => {
 
 app.post('/case/sessions/:id/orders', async (req, res) => {
   try {
-    const session = await loadCaseSession(req.params.id);
-    if (!session) return res.status(404).json({ error: "Case session not found" });
+    const session = await loadOwnedCaseSession(req, res);
+    if (!session) return;
     if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
     const orders = ensureArray(req.body?.orders).map(x => String(x || '').trim()).filter(Boolean);
     if (!orders.length) return res.status(400).json({ error: "orders required" });
@@ -2676,8 +3029,8 @@ app.post('/case/sessions/:id/orders', async (req, res) => {
 
 app.post('/case/sessions/:id/advance', async (req, res) => {
   try {
-    const session = await loadCaseSession(req.params.id);
-    if (!session) return res.status(404).json({ error: "Case session not found" });
+    const session = await loadOwnedCaseSession(req, res);
+    if (!session) return;
     if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
     const priorTime = session.currentTime || latestPatientDateTime(session.patient) || formatSimDateTime(new Date());
     const out = await aiAdvanceCase({ session });
@@ -2697,8 +3050,8 @@ app.post('/case/sessions/:id/advance', async (req, res) => {
 
 app.post('/case/sessions/:id/note', async (req, res) => {
   try {
-    const session = await loadCaseSession(req.params.id);
-    if (!session) return res.status(404).json({ error: "Case session not found" });
+    const session = await loadOwnedCaseSession(req, res);
+    if (!session) return;
     if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
     const title = String(req.body?.title || "User note").trim();
     const type = String(req.body?.noteType || req.body?.type || "User note").trim();
@@ -2721,16 +3074,17 @@ ${text}` });
 
 app.post('/case/sessions/:id/conclude', async (req, res) => {
   try {
-    const session = await loadCaseSession(req.params.id);
-    if (!session) return res.status(404).json({ error: "Case session not found" });
+    const session = await loadOwnedCaseSession(req, res);
+    if (!session) return;
     const finalNoteText = String(req.body?.finalNoteText || "");
     const finalOrdersText = String(req.body?.finalOrdersText || "");
     const out = await aiConcludeCase({ session, finalNoteText, finalOrdersText });
     session.concluded = true;
     session.concludedAt = nowIso();
     session.conclusion = out;
+    const caseExclusionAdded = await pushUniqueCaseExclusion(session.userId || req.auth.username, out.exclusionEntry || session.lock?.exclusionEntry || '');
     await saveCaseSession(session);
-    res.json({ ...publicCasePayload(session), conclusion: out });
+    res.json({ ...publicCasePayload(session), conclusion: out, caseExclusionAdded });
   } catch (e) {
     res.status(500).json({ error: "Failed to conclude case", detail: String(e) });
   }
