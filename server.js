@@ -62,6 +62,17 @@ const PIMP_DISCUSSION_MODEL = process.env.OPENAI_PIMP_DISCUSSION_MODEL || FAST_M
 const CASE_GENERATOR_MODEL = process.env.OPENAI_CASE_MODEL || PREMIUM_MODEL;
 const CASE_FAST_MODEL_DEFAULT = process.env.OPENAI_CASE_FAST_MODEL || FAST_MODEL;
 
+function envInt(name, fallback) {
+  const raw = process.env[name];
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// Initial case JSON can be large. Keep this configurable from Render, but the
+// prompt below is also capped so the model should not actually need the full budget.
+const CASE_GEN_MAX_OUTPUT_TOKENS = envInt('OPENAI_CASE_GEN_MAX_OUTPUT_TOKENS', 18000);
+const CASE_GEN_RETRY_MAX_OUTPUT_TOKENS = envInt('OPENAI_CASE_GEN_RETRY_MAX_OUTPUT_TOKENS', 22000);
+
 // helper: some models (gpt-5.x, o-series) don't accept temperature on Responses API
 function supportsTemperature(model = '') {
   const m = String(model || '').toLowerCase();
@@ -2622,7 +2633,7 @@ function removeCompletedConsultNotesIfPending(patient, specialty) {
     // Preserve learner-created documentation. The pending-consult guard is only
     // meant to prevent the initial AI-generated chart from already containing
     // a completed Medicine/CTU consult note.
-    if (/(learner|student|user|clerk)/.test(provider)) return true;
+    if (/\b(learner|student|user|clerk)\b/.test(provider)) return true;
     const service = normalizeSimple(note.service || note.department || note.specialty || note.author || note.providerName || "");
     const type = normalizeSimple(note.noteType || note.type || note.title || "");
     const text = normalizeSimple(note.text || "");
@@ -2878,7 +2889,7 @@ async function loadOwnedCaseSession(req, res) {
 }
 
 const CASE_SCHEMA_TEXT = `
-Return strict JSON only with this shape:
+Return strict JSON only with this exact top-level shape:
 {
   "caseTitle": "short non-diagnostic title",
   "lock": {
@@ -2908,6 +2919,16 @@ Return strict JSON only with this shape:
     "orders": []
   }
 }
+Initial chart size caps, mandatory:
+- Total response should be compact and comfortably below 9000 visible tokens.
+- vitals: 1 to 3 rows.
+- labCategories: 2 to 4 categories total. Each category has 3 to 8 rows. Each row has 1 to 2 values only.
+- investigations: 1 to 4 items.
+- nursingNotes: 2 to 5 items, each text <= 280 characters.
+- medications: 0 to 6 items.
+- notes: 1 to 4 notes total. Each note text <= 700 characters. Use terse EMR language, not long prose.
+- orders: always [] at initial generation.
+- Do not include repeated timestamps, massive panels, long consult notes, teaching explanations, or verbose narratives.
 Rules for lab values: use Canadian/SI units only. Every lab value must include flag normal, high, low, or critical. Public text must not reveal the hidden diagnosis unless it would genuinely be written in the chart as a pre-existing known diagnosis.
 `;
 
@@ -2961,6 +2982,7 @@ Hard rules:
 - Cross-reference the exclusion list. Do not repeat or closely mimic prior cases, disease categories, fingerprints, or obvious variants.
 - EMR content should feel like Meditech/Cerner: terse, objective, chronological, and incomplete in realistic ways.
 - Include enough initial data to start a case, but not enough to make it obvious.
+- Keep the initial chart compact. The simulator can add more data later through orders and time advancement. Do not try to pre-populate a full hospital course.
 - If the requested setting says CTU consult, GIM consult, Internal Medicine consult, Medicine consult, or ED consult to Medicine, the medicine consult is still pending. Do NOT include an Internal Medicine/CTU consult note, admission note, progress note, assessment/plan, or recommendations in the initial chart. You may include ED triage, ED physician notes, referral/consult request, nursing notes, vitals, labs, and investigations.
 - Do not include educational rationale in public chart fields.
 ${CASE_SCHEMA_TEXT}`;
@@ -2971,10 +2993,39 @@ ${CASE_SCHEMA_TEXT}`;
     requestedDifficulty: cleanDifficulty,
     userId,
     exclusionListText: String(exclusionText || '').slice(0, 60000),
-    generationTime: new Date().toISOString()
+    generationTime: new Date().toISOString(),
+    outputBudgetInstruction: 'Generate a compact initial EMR snapshot only. Do not pre-populate the full admission. Respect the size caps in the schema.'
   };
 
-  let generated = await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: mode === "zebra" ? 0.8 : 0.35, max_output_tokens: 12000, reasoning_effort: "high" });
+  let generated;
+  try {
+    generated = await caseAiJSON({
+      system,
+      payload,
+      model: CASE_MODEL,
+      temperature: mode === "zebra" ? 0.8 : 0.35,
+      max_output_tokens: CASE_GEN_MAX_OUTPUT_TOKENS,
+      // High reasoning can consume a large part of max_output_tokens before any JSON is emitted.
+      // Use the full case model, but medium reasoning is enough for generating a compact chart.
+      reasoning_effort: "medium"
+    });
+  } catch (err) {
+    const msg = String(err?.message || err || "");
+    if (!msg.includes('max_output_tokens')) throw err;
+    console.warn('[case generation] token budget reached; retrying with stricter compact prompt and larger output cap');
+    const retrySystem = `${system}
+
+RETRY AFTER TOKEN-LIMIT FAILURE:
+Your previous response was too long and was cut off. Regenerate the case from scratch as a much smaller JSON object. Strict caps: 1-2 vitals, 2-3 lab categories, 3-6 lab rows per category, 1-2 investigations, 2 nursing notes, 0-3 medications, 1-2 notes, each note under 450 characters. No extra narrative.`;
+    generated = await caseAiJSON({
+      system: retrySystem,
+      payload: { ...payload, retryReason: 'previous case JSON exceeded max_output_tokens; generate compact JSON only' },
+      model: CASE_MODEL,
+      temperature: 0.2,
+      max_output_tokens: CASE_GEN_RETRY_MAX_OUTPUT_TOKENS,
+      reasoning_effort: "low"
+    });
+  }
   if (!generated.lock?.primaryDiagnosis || !generated.patient) {
     throw new Error("Case generator returned incomplete case JSON");
   }
