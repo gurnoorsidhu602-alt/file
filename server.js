@@ -2464,8 +2464,7 @@ function extractOutputText(resp) {
     }
   }
 
-  return parts.join("
-").trim();
+  return parts.join("\n").trim();
 }
 
 function parseLooseJSON(text) {
