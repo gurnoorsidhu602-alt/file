@@ -162,6 +162,8 @@
       <div class="select-wrap">
         <select id="aiSelect" aria-label="Simulator">
           <option value="pimp">One Line Pimp Simulator</option>
+          <option value="casesim">Medical Case Simulator</option>
+          <option value="learner">Med Learner</option>
         </select>
       </div>
       <span id="conn" class="status-dot" title="connection"></span>
@@ -490,7 +492,7 @@
     catch(e){ alert('Failed to save & get feedback: '+errMsg(e)); }
   }
 
-  $('aiSelect').addEventListener('change', connectAndBoot);
+  $('aiSelect').addEventListener('change', ()=>{ const v=$('aiSelect').value; if(v==='casesim') window.location.href='/casesim'; else if(v==='learner') window.location.href='/learner'; else connectAndBoot(); });
   window.addEventListener('load', ()=>{ connectAndBoot(); showStep('connect'); });
   $('goUserType').addEventListener('click', ()=>showStep('user-type'));
   $('btnNewUser').addEventListener('click', ()=>showStep('new'));
