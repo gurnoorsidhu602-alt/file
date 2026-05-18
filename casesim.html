@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Medical Case Simulator</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#080b10; --bg2:#0d1118; --panel:#111722; --panel2:#0d131d; --panel3:#151d2a;
+      --ink:#eef3fb; --muted:#9aa7b7; --muted2:#667386; --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
+      --accent:#91b7ff; --accent2:#65d8b0; --bad:#ff6b7e; --bad2:rgba(255,107,126,.14); --warn:#e9bd68; --ok:#6ee7a8;
+      --shadow:0 18px 55px rgba(0,0,0,.32); --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    }
+    *{box-sizing:border-box} html,body{height:100%}
+    body{margin:0;color:var(--ink);font:13px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:
+      radial-gradient(700px 360px at 18% -8%,rgba(145,183,255,.11),transparent 65%),
+      radial-gradient(600px 300px at 105% 5%,rgba(101,216,176,.07),transparent 60%),linear-gradient(180deg,var(--bg),var(--bg2));}
+    button,input,select,textarea{font:inherit;color:var(--ink)}
+    button{cursor:pointer}
+    header{height:48px;display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:rgba(8,11,16,.82);backdrop-filter:blur(14px);position:sticky;top:0;z-index:10}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.02em}.mark{width:22px;height:22px;border-radius:8px;background:linear-gradient(135deg,#8eb4ff,#65d8b0)}
+    .spacer{flex:1}.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;padding:4px 9px;background:rgba(255,255,255,.03);color:var(--muted);white-space:nowrap}.chip strong{color:var(--ink)}
+    .btn{border:1px solid var(--line2);border-radius:9px;background:#151d2a;padding:6px 10px;min-height:30px;font-weight:650;transition:.14s ease}
+    .btn:hover{background:#1b2535}.btn.primary{background:#203354;border-color:rgba(145,183,255,.34);color:#e7efff}.btn.primary:hover{background:#284064}.btn.ghost{background:transparent;color:var(--muted)}.btn.danger{background:#2a1720;border-color:rgba(255,107,126,.32);color:#ffd9de}.btn.sm{padding:4px 7px;min-height:25px;font-size:12px}.btn:disabled{opacity:.48;cursor:not-allowed}
+    input,select,textarea{background:#0b111a;border:1px solid var(--line);border-radius:10px;padding:8px 10px;outline:none} textarea{resize:vertical} input:focus,textarea:focus,select:focus{border-color:rgba(145,183,255,.55);box-shadow:0 0 0 2px rgba(145,183,255,.10)}
+    .setup{max-width:960px;margin:18px auto;padding:0 16px}.card{background:linear-gradient(180deg,rgba(17,23,34,.96),rgba(13,19,29,.96));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}.kicker{text-transform:uppercase;letter-spacing:.12em;color:var(--muted2);font-size:11px;font-weight:800;margin-bottom:6px} h1,h2,h3{margin:0;line-height:1.15;letter-spacing:-.025em} h1{font-size:25px} h2{font-size:18px} h3{font-size:14px}.sub{color:var(--muted);max-width:72ch}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px} label{display:block;color:var(--muted);font-size:12px;margin:0 0 5px}.hidden{display:none!important}.muted{color:var(--muted)}.bad{color:var(--bad)}.ok{color:var(--ok)}
+    .app{height:calc(100vh - 48px);display:grid;grid-template-columns:260px minmax(0,1fr)}
+    aside{border-right:1px solid var(--line);background:rgba(13,17,24,.66);overflow:auto}.side-head{padding:12px;border-bottom:1px solid var(--line)}.patient-list{display:grid;gap:6px;padding:10px}.patient{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03);padding:10px;text-align:left}.patient.active{border-color:rgba(145,183,255,.42);background:rgba(145,183,255,.10)}.patient-name{font-weight:780}.patient-meta{color:var(--muted);font-size:12px;margin-top:2px}.patient-complaint{font-size:12px;color:#c7d2e3;margin-top:7px}
+    main{min-width:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);overflow:hidden}.banner{padding:12px 14px;border-bottom:1px solid var(--line);background:rgba(11,17,26,.64)}.banner-top{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}.demog{font-size:20px;font-weight:830}.banner-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.tabs{display:flex;gap:2px;overflow:auto;border-bottom:1px solid var(--line);background:rgba(10,15,23,.8);padding:0 10px}.tab{border:0;border-radius:0;background:transparent;color:var(--muted);padding:12px 10px;border-bottom:2px solid transparent;white-space:nowrap;font-weight:700}.tab.active{color:var(--ink);border-bottom-color:var(--accent);background:rgba(145,183,255,.055)}.content{overflow:auto;padding:14px;min-width:0}.panel{background:rgba(255,255,255,.025);border:1px solid var(--line);border-radius:13px;padding:12px;margin-bottom:12px}.panel-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.scroll-x{overflow:auto} table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px} th,td{border-bottom:1px solid var(--line);padding:8px 9px;text-align:left;vertical-align:top} th{color:var(--muted);font-weight:760;background:rgba(255,255,255,.025);position:sticky;top:0} td.value{font-family:var(--mono);cursor:pointer}.abn{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.critical{background:rgba(255,107,126,.25)!important;color:#fff;font-weight:900}.low,.high{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.normal{color:#e8eef8}.list{display:grid;gap:8px}.item{border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025);padding:10px}.item:hover{border-color:rgba(255,255,255,.16)}.item-head{display:flex;justify-content:space-between;gap:10px}.item-title{font-weight:780}.item-meta{color:var(--muted);font-size:12px}.report{white-space:pre-wrap;background:#0a1018;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);line-height:1.45}.note-text{white-space:pre-wrap;color:#dce5f4}.split{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px}.order-list{display:grid;gap:8px}.order-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.activity{max-height:340px;overflow:auto;display:grid;gap:8px}.activity .item{font-size:12.5px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:100}.modal-card{max-width:780px;width:100%;max-height:86vh;overflow:auto}.toast{position:fixed;right:14px;bottom:14px;max-width:520px;background:#111a27;border:1px solid var(--line2);border-radius:12px;padding:11px 12px;box-shadow:var(--shadow);z-index:110}.codebox{white-space:pre-wrap;background:#080d14;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);font-size:12.5px}.refpop{position:fixed;z-index:120;background:#101826;border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);padding:9px;max-width:300px;color:#dbe5f4}
+    @media(max-width:980px){.app{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid var(--line)}.patient-list{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.split,.grid2,.grid3{grid-template-columns:1fr}main{overflow:visible}.content{overflow:visible}.banner-top{display:block}.app{display:block}}
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand"><div class="mark"></div><span>Medical Case Simulator</span></div>
+  <button class="btn ghost sm" onclick="location.href='/'">Pimp Simulator</button>
+  <button class="btn ghost sm" onclick="location.href='/learner'">Med Learner</button>
+  <div class="spacer"></div>
+  <span id="sessionChip" class="chip hidden">Session <strong id="sessionShort">—</strong></span>
+  <button id="btnPage" class="btn sm hidden">Page me / advance</button>
+  <a id="lockLink" class="btn ghost sm hidden" href="#" target="_blank" rel="noopener">Download locked file</a>
+  <button id="btnConcludeTop" class="btn danger sm hidden">Conclude</button>
+</header>
+
+<section id="setup" class="setup">
+  <div class="card">
+    <div class="kicker">New simulation</div>
+    <h1>Start an EMR-based medical case</h1>
+    <p class="sub">Upload your exclusion list first. The server locks a hidden diagnosis at case generation, then only exposes the simulated chart, objective exam/history responses, orders, results, pages, and notes.</p>
+    <div class="grid3" style="margin-top:14px">
+      <div><label>User ID</label><input id="userId" value="Gurnoor" /></div>
+      <div><label>Mode</label><select id="mode"><option value="regular">Regular random mode</option><option value="zebra">Zebra mode</option></select></div>
+      <div><label>Difficulty</label><select id="difficulty"><option>MSI3-R1</option><option>MSI4-R2</option><option>R3-R5</option><option>Attending-level brutal</option></select></div>
+    </div>
+    <div class="grid2" style="margin-top:12px">
+      <div><label>Optional field / setting</label><input id="specialty" placeholder="e.g., CTU, ED consult, nephrology, ICU, peds" /></div>
+      <div><label>Exclusion list .txt</label><input id="exclusionFile" type="file" accept=".txt,.md,.csv,text/plain" /></div>
+    </div>
+    <div style="margin-top:12px"><label>Exclusion list preview</label><textarea id="exclusionText" rows="7" placeholder="Upload your exclusion list, or paste it here. For a brand new list, click Use empty list."></textarea></div>
+    <div class="row" style="margin-top:12px">
+      <button id="btnEmptyList" class="btn ghost">Use empty list</button>
+      <button id="btnStart" class="btn primary">Generate locked case</button>
+      <span id="setupStatus" class="muted"></span>
+    </div>
+  </div>
+</section>
+
+<section id="app" class="app hidden">
+  <aside>
+    <div class="side-head">
+      <div class="kicker">Patients</div>
+      <button id="btnNewCase" class="btn primary sm">New case</button>
+    </div>
+    <div id="patientList" class="patient-list"></div>
+  </aside>
+
+  <main>
+    <div class="banner">
+      <div class="banner-top">
+        <div>
+          <div id="demog" class="demog">—</div>
+          <div id="bannerText" class="muted">—</div>
+          <div class="banner-grid" id="bannerChips"></div>
+        </div>
+        <div class="row" style="justify-content:flex-end">
+          <button id="btnAsk" class="btn">Ask / examine / chart request</button>
+          <button id="btnRefresh" class="btn ghost">Refresh</button>
+        </div>
+      </div>
+    </div>
+    <nav id="tabs" class="tabs"></nav>
+    <div id="content" class="content"></div>
+  </main>
+</section>
+
+<div id="modal" class="modal hidden"><div class="modal-card card"><div id="modalContent"></div></div></div>
+<div id="toast" class="toast hidden"></div>
+<div id="refpop" class="refpop hidden"></div>
+
+<script>
+const API_BASE = window.location.origin;
+const tabs = ['Labs','Investigations','Vitals','Nursing Notes','Medications/MAR','Notes','Orders'];
+const state = { sessionId:null, patient:null, activity:[], orderHistory:[], activeTab:'Labs', report:null, exclusionLoaded:false };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg, bad=false){ const t=$('toast'); t.textContent=msg; t.style.borderColor=bad?'rgba(255,107,126,.42)':'var(--line2)'; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),4200); }
+async function api(path, opts={}){ const r=await fetch(API_BASE+path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}}); const txt=await r.text(); let j; try{j=JSON.parse(txt)}catch{j={raw:txt}}; if(!r.ok) throw j; return j; }
+function err(e){ return e?.detail || e?.error || e?.message || String(e || 'Error'); }
+function fmtTime(x){ return esc(x || ''); }
+function setBusy(el, on, text){ el.disabled=!!on; if(text!==undefined) el.textContent=text; }
+
+$('exclusionFile').addEventListener('change', async e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const text=await file.text(); $('exclusionText').value=text; state.exclusionLoaded=true; $('setupStatus').textContent=`Loaded ${file.name} (${text.length} chars).`;
+});
+$('btnEmptyList').onclick=()=>{ $('exclusionText').value=''; state.exclusionLoaded=true; $('setupStatus').textContent='Empty exclusion list selected.'; };
+$('btnNewCase').onclick=()=>{ $('setup').classList.remove('hidden'); $('app').classList.add('hidden'); window.scrollTo({top:0,behavior:'smooth'}); };
+$('btnStart').onclick=startCase;
+$('btnRefresh').onclick=refreshCase;
+$('btnAsk').onclick=openAskModal;
+$('btnPage').onclick=advanceCase;
+$('btnConcludeTop').onclick=openConcludeModal;
+
+document.addEventListener('click', e=>{ if(!e.target.closest('.refpop') && !e.target.classList.contains('value')) $('refpop').classList.add('hidden'); });
+
+async function startCase(){
+  const exclusionText=$('exclusionText').value;
+  if(!state.exclusionLoaded && exclusionText.trim()===''){ $('setupStatus').innerHTML='<span class="bad">Upload an exclusion list or click Use empty list first.</span>'; return; }
+  const btn=$('btnStart'); setBusy(btn,true,'Generating…'); $('setupStatus').textContent='Generating locked diagnosis and EMR chart…';
+  try{
+    const payload={ user_id:$('userId').value.trim()||'Gurnoor', mode:$('mode').value, specialty:$('specialty').value.trim(), difficulty:$('difficulty').value, exclusionText };
+    const j=await api('/case/sessions',{method:'POST',body:JSON.stringify(payload)});
+    applyCase(j); $('setup').classList.add('hidden'); $('app').classList.remove('hidden'); toast('Case generated. Diagnosis is locked server-side.');
+  }catch(e){ $('setupStatus').innerHTML='<span class="bad">'+esc(err(e))+'</span>'; }
+  finally{ setBusy(btn,false,'Generate locked case'); }
+}
+
+function applyCase(j){
+  state.sessionId=j.sessionId; state.patient=j.patient; state.activity=j.activity||[]; state.orderHistory=j.orderHistory||[];
+  $('sessionChip').classList.remove('hidden'); $('sessionShort').textContent=String(state.sessionId).slice(0,8);
+  $('lockLink').href='/case/sessions/'+encodeURIComponent(state.sessionId)+'/lockfile'; $('lockLink').classList.remove('hidden');
+  $('btnPage').classList.remove('hidden'); $('btnConcludeTop').classList.remove('hidden');
+  renderAll();
+}
+async function refreshCase(){ if(!state.sessionId) return; try{ const j=await api('/case/sessions/'+state.sessionId); applyCase(j); toast('Chart refreshed.'); }catch(e){ toast(err(e),true); } }
+
+function renderAll(){ renderPatientList(); renderBanner(); renderTabs(); renderTab(); }
+function renderPatientList(){
+  const p=state.patient; const box=$('patientList'); box.innerHTML=''; if(!p) return;
+  const div=document.createElement('button'); div.className='patient active'; div.innerHTML=`<div class="patient-name">${esc(p.displayName)} ${esc(p.age)}${esc(p.sex)}</div><div class="patient-meta">${esc(p.location||'')}</div><div class="patient-complaint">${esc(p.presentingComplaint||'')}</div>`; box.appendChild(div);
+}
+function renderBanner(){
+  const p=state.patient||{}; $('demog').textContent=`${p.displayName||'—'} · ${p.age||'—'}${p.sex||''}`; $('bannerText').textContent=p.banner||p.presentingComplaint||'—';
+  $('bannerChips').innerHTML=`<span class="chip">Location <strong>${esc(p.location||'—')}</strong></span><span class="chip">Allergies <strong>${esc((p.allergies||[]).join(', ')||'None documented')}</strong></span><span class="chip">Code <strong>${esc(p.codeStatus||'—')}</strong></span>`;
+}
+function renderTabs(){ const box=$('tabs'); box.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.className='tab '+(state.activeTab===t?'active':''); b.textContent=t; b.onclick=()=>{state.activeTab=t; state.report=null; renderTabs(); renderTab();}; box.appendChild(b); }); }
+function renderTab(){ const t=state.activeTab; if(t==='Labs') return renderLabs(); if(t==='Investigations') return renderInvestigations(); if(t==='Vitals') return renderVitals(); if(t==='Nursing Notes') return renderNursing(); if(t==='Medications/MAR') return renderMAR(); if(t==='Notes') return renderNotes(); if(t==='Orders') return renderOrders(); }
+
+function renderLabs(){
+  const p=state.patient||{}; const cats=p.labCategories||[]; let html='';
+  if(!cats.length) html='<div class="panel muted">No labs available.</div>';
+  cats.forEach(cat=>{
+    const times=[...new Set((cat.rows||[]).flatMap(r=>(r.values||[]).map(v=>v.datetime)))].sort();
+    html+=`<div class="panel"><div class="panel-title"><h2>${esc(cat.name)}</h2><span class="muted">Click a value for reference range</span></div><div class="scroll-x"><table><thead><tr><th>Test</th><th>Reference</th>${times.map(x=>`<th>${fmtTime(x)}</th>`).join('')}</tr></thead><tbody>`;
+    (cat.rows||[]).forEach(row=>{ const vals=Object.fromEntries((row.values||[]).map(v=>[v.datetime,v])); html+=`<tr><td><strong>${esc(row.test)}</strong><div class="muted">${esc(row.unit||'')}</div></td><td>${esc(row.referenceRange||'')}</td>`; times.forEach(tm=>{ const v=vals[tm]; const flag=(v?.flag||'normal').toLowerCase(); html+=`<td class="value ${esc(flag)}" data-test="${esc(row.test)}" data-ref="${esc(row.referenceRange||'')}" data-unit="${esc(row.unit||'')}">${v?esc(v.value):'<span class="muted">—</span>'}</td>`; }); html+='</tr>'; });
+    html+='</tbody></table></div></div>';
+  });
+  $('content').innerHTML=html; document.querySelectorAll('td.value').forEach(td=>td.onclick=e=>showRef(e,td));
+}
+function showRef(e,td){ const r=$('refpop'); r.innerHTML=`<strong>${td.dataset.test}</strong><br><span class="muted">Reference</span><br>${td.dataset.ref||'Not provided'}<br><span class="muted">Unit</span><br>${td.dataset.unit||'—'}`; r.style.left=Math.min(e.clientX, window.innerWidth-320)+'px'; r.style.top=Math.min(e.clientY+10, window.innerHeight-170)+'px'; r.classList.remove('hidden'); }
+
+function renderInvestigations(){
+  const inv=[...(state.patient?.investigations||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
+  if(state.report){ const x=state.report; $('content').innerHTML=`<div class="panel"><button class="btn ghost" id="backInv">← Back to list</button><h2 style="margin-top:10px">${esc(x.title)}</h2><div class="muted">${esc(x.group||'')} · ${esc(x.datetime||'')} · ${esc(x.status||'')}</div><div class="report" style="margin-top:12px">${esc(x.report||'No report text.')}</div></div>`; $('backInv').onclick=()=>{state.report=null; renderInvestigations();}; return; }
+  let html='<div class="panel"><div class="panel-title"><h2>Investigations</h2><span class="muted">Latest first</span></div><div class="list">';
+  if(!inv.length) html+='<div class="muted">No investigations available.</div>';
+  inv.forEach(x=>{ html+=`<button class="item" data-id="${esc(x.id)}"><div class="item-head"><div><div class="item-title">${esc(x.title)}</div><div class="item-meta">${esc(x.group||'')} · ${esc(x.datetime||'')}</div></div><span class="chip">${esc(x.status||'')}</span></div></button>`; });
+  html+='</div></div>'; $('content').innerHTML=html; document.querySelectorAll('.item[data-id]').forEach(b=>b.onclick=()=>{ state.report=inv.find(x=>String(x.id)===b.dataset.id); renderInvestigations(); });
+}
+function renderVitals(){
+  const vs=[...(state.patient?.vitals||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
+  let html='<div class="panel"><div class="panel-title"><h2>Vitals</h2></div><div class="scroll-x"><table><thead><tr><th>Date/time</th><th>T °C</th><th>HR</th><th>BP</th><th>RR</th><th>SpO₂</th><th>O₂</th><th>Pain</th><th>Notes</th></tr></thead><tbody>';
+  vs.forEach(v=>{ html+=`<tr><td>${esc(v.datetime||'')}</td><td>${esc(v.temperature_C||'')}</td><td>${esc(v.hr||'')}</td><td>${esc(v.bp||'')}</td><td>${esc(v.rr||'')}</td><td>${esc(v.spo2||'')}</td><td>${esc(v.oxygen||'')}</td><td>${esc(v.pain||'')}</td><td>${esc(v.notes||'')}</td></tr>`; });
+  html+='</tbody></table></div></div>'; $('content').innerHTML=html;
+}
+function renderNursing(){ renderChronList('Nursing Notes', state.patient?.nursingNotes||[], x=>`<div class="item-title">${esc(x.datetime||'')} · ${esc(x.author||'RN')}</div><div class="note-text">${esc(x.text||'')}</div>`); }
+function renderChronList(title, arr, rowFn){ const rows=[...arr].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||''))); let html=`<div class="panel"><div class="panel-title"><h2>${esc(title)}</h2></div><div class="list">`; if(!rows.length) html+='<div class="muted">No entries.</div>'; rows.forEach(x=>html+=`<div class="item">${rowFn(x)}</div>`); html+='</div></div>'; $('content').innerHTML=html; }
+function renderMAR(filter='active'){
+  const meds=state.patient?.medications||[]; const filtered=filter==='all'?meds:meds.filter(m=>String(m.status||'').toLowerCase()===filter);
+  let html=`<div class="panel"><div class="panel-title"><h2>Medications / MAR</h2><div class="row"><button class="btn sm ${filter==='active'?'primary':''}" data-f="active">Active</button><button class="btn sm ${filter==='discontinued'?'primary':''}" data-f="discontinued">Discontinued</button><button class="btn sm ${filter==='all'?'primary':''}" data-f="all">All</button></div></div><div class="scroll-x"><table><thead><tr><th>Medication</th><th>Dose</th><th>Route</th><th>Frequency</th><th>Status</th><th>Start</th><th>Stop</th><th>Comments</th></tr></thead><tbody>`;
+  filtered.forEach(m=>{ html+=`<tr><td><strong>${esc(m.name||'')}</strong></td><td>${esc(m.dose||'')}</td><td>${esc(m.route||'')}</td><td>${esc(m.frequency||'')}</td><td>${esc(m.status||'')}</td><td>${esc(m.start||'')}</td><td>${esc(m.stop||'')}</td><td>${esc(m.comments||'')}</td></tr>`; });
+  html+='</tbody></table></div></div>'; $('content').innerHTML=html; document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>renderMAR(b.dataset.f));
+}
+function renderNotes(){
+  const notes=[...(state.patient?.notes||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
+  let html=`<div class="split"><div><div class="panel"><div class="panel-title"><h2>Provider Notes</h2></div><div class="list">`;
+  if(!notes.length) html+='<div class="muted">No notes.</div>';
+  notes.forEach(n=>{ html+=`<div class="item"><div class="item-head"><div><div class="item-title">${esc(n.title||n.type||'Note')}</div><div class="item-meta">${esc(n.datetime||'')} · ${esc(n.type||'')} · ${esc(n.author||'')}</div></div></div><div class="note-text" style="margin-top:8px">${esc(n.text||'')}</div></div>`; });
+  html+=`</div></div></div><div><div class="panel"><h2>Create note</h2><label style="margin-top:10px">Type</label><input id="noteType" value="Progress note"><label style="margin-top:8px">Title</label><input id="noteTitle" value="Learner progress note"><label style="margin-top:8px">Text</label><textarea id="noteText" rows="12" placeholder="Practice charting here..."></textarea><button id="saveNote" class="btn primary" style="margin-top:8px">Save note</button><div id="noteMsg" class="muted" style="margin-top:8px"></div></div></div></div>`;
+  $('content').innerHTML=html; $('saveNote').onclick=saveNote;
+}
+async function saveNote(){ const text=$('noteText').value.trim(); if(!text){$('noteMsg').textContent='Enter note text.';return;} try{ const j=await api('/case/sessions/'+state.sessionId+'/note',{method:'POST',body:JSON.stringify({type:$('noteType').value,title:$('noteTitle').value,text})}); applyCase(j); state.activeTab='Notes'; renderTabs(); renderNotes(); toast('Note saved.'); }catch(e){ $('noteMsg').textContent=err(e); } }
+function renderOrders(){
+  let html=`<div class="split"><div><div class="panel"><div class="panel-title"><h2>Orders</h2><button id="addOrder" class="btn sm">Add order</button></div><div id="orderList" class="order-list"></div><div class="row" style="margin-top:10px"><button id="enterOrders" class="btn primary">Enter orders</button><span id="orderMsg" class="muted"></span></div></div></div><div><div class="panel"><h2>Order history</h2><div class="activity">`;
+  const hist=[...(state.orderHistory||[])].reverse(); if(!hist.length) html+='<div class="muted">No orders entered yet.</div>';
+  hist.forEach(o=>{ html+=`<div class="item"><div><strong>${esc(o.order)}</strong></div><div class="item-meta">${esc(o.at||'')} · ${esc(o.status||'')}</div><div class="muted">${esc(o.comment||'')}</div></div>`; });
+  html+=`</div></div><div class="panel"><h2>Activity</h2><div class="activity">${activityHtml()}</div></div></div></div>`;
+  $('content').innerHTML=html; initOrderDraft();
+}
+function activityHtml(){ const acts=[...(state.activity||[])].reverse(); if(!acts.length) return '<div class="muted">No activity.</div>'; return acts.map(a=>`<div class="item"><div class="item-meta">${esc(a.at||'')} · ${esc(a.type||'')}</div><div class="note-text">${esc(a.text||'')}</div></div>`).join(''); }
+let orderDraft=[];
+function initOrderDraft(){ orderDraft=['']; renderOrderDraft(); $('addOrder').onclick=()=>{orderDraft.push(''); renderOrderDraft();}; $('enterOrders').onclick=enterOrders; }
+function renderOrderDraft(){ const box=$('orderList'); if(!box) return; box.innerHTML=''; orderDraft.forEach((o,i)=>{ const div=document.createElement('div'); div.className='order-row'; div.innerHTML=`<input data-ord="${i}" value="${esc(o)}" placeholder="e.g., CBC, extended electrolytes tomorrow AM"><button class="btn ghost sm" data-del="${i}">Remove</button>`; box.appendChild(div); }); box.querySelectorAll('input[data-ord]').forEach(inp=>inp.oninput=()=>orderDraft[Number(inp.dataset.ord)]=inp.value); box.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ orderDraft.splice(Number(b.dataset.del),1); if(!orderDraft.length) orderDraft=['']; renderOrderDraft();}); }
+async function enterOrders(){ const orders=orderDraft.map(s=>s.trim()).filter(Boolean); if(!orders.length){$('orderMsg').textContent='No orders to enter.';return;} if(!confirm('Enter these orders?')) return; const btn=$('enterOrders'); setBusy(btn,true,'Entering…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/orders',{method:'POST',body:JSON.stringify({orders})}); applyCase(j); state.activeTab='Orders'; renderTabs(); renderOrders(); toast(j.visibleEvent || 'Orders entered.'); }catch(e){ $('orderMsg').textContent=err(e); } finally{ setBusy(btn,false,'Enter orders'); } }
+
+function openAskModal(){
+  showModal(`<div class="kicker">Interaction</div><h2>Ask, examine, or request chart information</h2><p class="sub">The response should be objective only. Examples: “ask about travel history”, “perform JVP and cardiac auscultation”, “review previous creatinine values”, “look at abdominal exam”.</p><textarea id="askText" rows="5" placeholder="Type your request..."></textarea><div class="row" style="margin-top:10px"><button id="sendAsk" class="btn primary">Send</button><button id="closeModal" class="btn ghost">Close</button></div><div id="askResponse" class="report hidden" style="margin-top:12px"></div>`);
+  $('closeModal').onclick=closeModal; $('sendAsk').onclick=sendAsk;
+}
+async function sendAsk(){ const request=$('askText').value.trim(); if(!request) return; const btn=$('sendAsk'); setBusy(btn,true,'Sending…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/interact',{method:'POST',body:JSON.stringify({request})}); applyCase(j); $('askResponse').textContent=j.response||''; $('askResponse').classList.remove('hidden'); }catch(e){ $('askResponse').textContent=err(e); $('askResponse').classList.remove('hidden'); } finally{ setBusy(btn,false,'Send'); } }
+async function advanceCase(){ const btn=$('btnPage'); setBusy(btn,true,'Advancing…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/advance',{method:'POST',body:JSON.stringify({})}); applyCase(j); toast(j.event || 'No new events.'); }catch(e){ toast(err(e),true); } finally{ setBusy(btn,false,'Page me / advance'); } }
+function openConcludeModal(){
+  showModal(`<div class="kicker">Conclude</div><h2>End case and get attending feedback</h2><p class="sub">Paste your final consult/progress note and final orders if you want them included in the assessment.</p><label>Final note</label><textarea id="finalNote" rows="8"></textarea><label style="margin-top:8px">Final orders / disposition</label><textarea id="finalOrders" rows="5"></textarea><div class="row" style="margin-top:10px"><button id="doConclude" class="btn danger">Conclude case</button><button id="closeModal" class="btn ghost">Cancel</button></div><div id="conclusionBox" class="hidden" style="margin-top:12px"></div>`);
+  $('closeModal').onclick=closeModal; $('doConclude').onclick=concludeCase;
+}
+async function concludeCase(){ const btn=$('doConclude'); setBusy(btn,true,'Concluding…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/conclude',{method:'POST',body:JSON.stringify({finalNoteText:$('finalNote').value,finalOrdersText:$('finalOrders').value})}); applyCase(j); renderConclusion(j.conclusion); }catch(e){ $('conclusionBox').className='report'; $('conclusionBox').textContent=err(e); } finally{ setBusy(btn,false,'Conclude case'); } }
+function renderConclusion(c){ const list=x=>(x||[]).map(v=>`<li>${esc(v)}</li>`).join(''); const html=`<div class="panel"><h2>Diagnosis: ${esc(c.diagnosis||'')}</h2><p class="sub">${esc(c.caseSummary||'')}</p><h3>Diagnostic feedback</h3><ul>${list(c.diagnosticFeedback)}</ul><h3>Management feedback</h3><ul>${list(c.managementFeedback)}</ul><h3>Documentation feedback</h3><ul>${list(c.documentationFeedback)}</ul><h3>Safety issues</h3><ul>${list(c.safetyIssues)}</ul><h3>What good looked like</h3><ul>${list(c.whatGoodLookedLike)}</ul><div class="chip">Overall rating <strong>${esc(c.overallRating||'')}</strong></div><h3 style="margin-top:12px">Update + Conclude exclusion text</h3><div class="codebox">${esc(c.exclusionEntry||'')}</div></div>`; $('conclusionBox').innerHTML=html; $('conclusionBox').classList.remove('hidden'); }
+function showModal(html){ $('modalContent').innerHTML=html; $('modal').classList.remove('hidden'); }
+function closeModal(){ $('modal').classList.add('hidden'); $('modalContent').innerHTML=''; }
+$('modal').addEventListener('click',e=>{ if(e.target.id==='modal') closeModal(); });
+</script>
+</body>
+</html>
