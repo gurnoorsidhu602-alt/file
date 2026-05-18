@@ -52,16 +52,23 @@ const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-4.1";
 const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5";
 
 // helper: some models (gpt-5.x, o-series) don't accept temperature on Responses API
-function supportsTemperature(model) {
-  return !/^gpt-5(\.|-)/i.test(model); // false for any gpt-5.*
+function supportsTemperature(model = '') {
+  const m = String(model || '').toLowerCase();
+
+  if (m.startsWith('gpt-5')) return false;
+  if (/^o\d/.test(m)) return false;
+
+  return true;
 }
 
 // wrapper: build the request and include temperature only when supported
 async function responsesCall({ model, messages, temperature }) {
   const req = { model, input: messages };
+
   if (temperature !== undefined && supportsTemperature(model)) {
     req.temperature = temperature;
   }
+
   return await openai.responses.create(req);
 }
 // Difficulty ladder
