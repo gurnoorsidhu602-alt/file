@@ -2,516 +2,337 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>One Line Pimp Simulator</title>
+  <title>Medical Case Simulator</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root{
-      --bg:#090b0f;
-      --bg-2:#0c1016;
-      --panel:#10141c;
-      --panel-2:#0d1118;
-      --panel-3:#141a24;
-      --ink:#eef2f7;
-      --muted:#9aa4b2;
-      --muted-2:#687283;
-      --line:rgba(255,255,255,.075);
-      --line-2:rgba(255,255,255,.13);
-      --accent:#8fb3ff;
-      --accent-strong:#4f7cff;
-      --accent-soft:rgba(143,179,255,.105);
-      --ok:#69d6a3;
-      --ok-soft:rgba(105,214,163,.10);
-      --warn:#e5bb6a;
-      --warn-soft:rgba(229,187,106,.105);
-      --bad:#e98592;
-      --bad-soft:rgba(233,133,146,.105);
-      --shadow:0 10px 34px rgba(0,0,0,.28);
-      --radius:14px;
-      --radius-sm:10px;
+      --bg:#080b10; --bg2:#0d1118; --panel:#111722; --panel2:#0d131d; --panel3:#151d2a;
+      --ink:#eef3fb; --muted:#9aa7b7; --muted2:#667386; --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
+      --accent:#91b7ff; --accent2:#65d8b0; --bad:#ff6b7e; --bad2:rgba(255,107,126,.14); --warn:#e9bd68; --ok:#6ee7a8;
+      --shadow:0 18px 55px rgba(0,0,0,.32); --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
     }
-    *{box-sizing:border-box}
-    html,body{min-height:100%}
-    body{
-      margin:0;
-      color:var(--ink);
-      background:
-        radial-gradient(680px 380px at 16% -10%, rgba(143,179,255,.095), transparent 65%),
-        radial-gradient(650px 360px at 110% 5%, rgba(105,214,163,.055), transparent 62%),
-        linear-gradient(180deg,var(--bg),var(--bg-2));
-      font:13.5px/1.48 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      letter-spacing:.005em;
-    }
-    button,input,select,textarea{font:inherit}
-    header{
-      position:sticky;top:0;z-index:20;
-      background:rgba(9,11,15,.78);
-      backdrop-filter:blur(16px);
-      border-bottom:1px solid var(--line);
-    }
-    .nav{max-width:1120px;margin:0 auto;padding:8px 18px;display:flex;align-items:center;gap:10px}
-    .brand{display:flex;align-items:center;gap:9px;min-width:0}
-    .mark{width:20px;height:20px;border-radius:7px;background:linear-gradient(135deg,#91b2ff,#63d9a6);box-shadow:0 0 0 4px rgba(143,179,255,.055)}
-    .app-title{font-weight:700;letter-spacing:-.02em;white-space:nowrap}
-    .select-wrap select{
-      color:var(--ink);background:rgba(16,20,28,.86);border:1px solid var(--line);
-      border-radius:9px;padding:5px 28px 5px 9px;min-width:200px;outline:none;appearance:none;
-    }
-    .status-dot{width:7px;height:7px;border-radius:50%;background:#576173;border:1px solid #717a89}
-    .status-dot.ok{background:var(--ok);border-color:rgba(105,214,163,.78);box-shadow:0 0 0 3px rgba(105,214,163,.10)}
-    .spacer{flex:1}
-    .top-stat{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--line);border-radius:999px;background:rgba(16,20,28,.68);color:var(--muted);white-space:nowrap;font-size:12.5px}
-    .top-stat strong{color:var(--ink);font-size:13px}
+    *{box-sizing:border-box} html,body{height:100%}
+    body{margin:0;color:var(--ink);font:13px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:
+      radial-gradient(700px 360px at 18% -8%,rgba(145,183,255,.11),transparent 65%),
+      radial-gradient(600px 300px at 105% 5%,rgba(101,216,176,.07),transparent 60%),linear-gradient(180deg,var(--bg),var(--bg2));}
+    button,input,select,textarea{font:inherit;color:var(--ink)}
+    button{cursor:pointer}
+    header{height:48px;display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:rgba(8,11,16,.82);backdrop-filter:blur(14px);position:sticky;top:0;z-index:10}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.02em}.mark{width:22px;height:22px;border-radius:8px;background:linear-gradient(135deg,#8eb4ff,#65d8b0)}
+    .spacer{flex:1}.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;padding:4px 9px;background:rgba(255,255,255,.03);color:var(--muted);white-space:nowrap}.chip strong{color:var(--ink)}
+    .btn{border:1px solid var(--line2);border-radius:9px;background:#151d2a;padding:6px 10px;min-height:30px;font-weight:650;transition:.14s ease}
+    .btn:hover{background:#1b2535}.btn.primary{background:#203354;border-color:rgba(145,183,255,.34);color:#e7efff}.btn.primary:hover{background:#284064}.btn.ghost{background:transparent;color:var(--muted)}.btn.danger{background:#2a1720;border-color:rgba(255,107,126,.32);color:#ffd9de}.btn.sm{padding:4px 7px;min-height:25px;font-size:12px}.btn:disabled{opacity:.48;cursor:not-allowed}
+    input,select,textarea{background:#0b111a;border:1px solid var(--line);border-radius:10px;padding:8px 10px;outline:none} textarea{resize:vertical} input:focus,textarea:focus,select:focus{border-color:rgba(145,183,255,.55);box-shadow:0 0 0 2px rgba(145,183,255,.10)}
+    .setup{max-width:960px;margin:18px auto;padding:0 16px}.card{background:linear-gradient(180deg,rgba(17,23,34,.96),rgba(13,19,29,.96));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}.kicker{text-transform:uppercase;letter-spacing:.12em;color:var(--muted2);font-size:11px;font-weight:800;margin-bottom:6px} h1,h2,h3{margin:0;line-height:1.15;letter-spacing:-.025em} h1{font-size:25px} h2{font-size:18px} h3{font-size:14px}.sub{color:var(--muted);max-width:72ch}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px} label{display:block;color:var(--muted);font-size:12px;margin:0 0 5px}.hidden{display:none!important}.muted{color:var(--muted)}.bad{color:var(--bad)}.ok{color:var(--ok)}
+    .app{height:calc(100vh - 48px);display:grid;grid-template-columns:260px minmax(0,1fr)}
+    aside{border-right:1px solid var(--line);background:rgba(13,17,24,.66);overflow:auto}.side-head{padding:12px;border-bottom:1px solid var(--line)}.patient-list{display:grid;gap:6px;padding:10px}.patient{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03);padding:10px;text-align:left}.patient.active{border-color:rgba(145,183,255,.42);background:rgba(145,183,255,.10)}.patient-name{font-weight:780}.patient-meta{color:var(--muted);font-size:12px;margin-top:2px}.patient-complaint{font-size:12px;color:#c7d2e3;margin-top:7px}
+    main{min-width:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);overflow:hidden}.banner{padding:12px 14px;border-bottom:1px solid var(--line);background:rgba(11,17,26,.64)}.banner-top{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}.demog{font-size:20px;font-weight:830}.banner-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.tabs{display:flex;gap:2px;overflow:auto;border-bottom:1px solid var(--line);background:rgba(10,15,23,.8);padding:0 10px}.tab{border:0;border-radius:0;background:transparent;color:var(--muted);padding:12px 10px;border-bottom:2px solid transparent;white-space:nowrap;font-weight:700}.tab.active{color:var(--ink);border-bottom-color:var(--accent);background:rgba(145,183,255,.055)}.content{overflow:auto;padding:14px;min-width:0}.panel{background:rgba(255,255,255,.025);border:1px solid var(--line);border-radius:13px;padding:12px;margin-bottom:12px}.panel-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.scroll-x{overflow:auto} table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px} th,td{border-bottom:1px solid var(--line);padding:8px 9px;text-align:left;vertical-align:top} th{color:var(--muted);font-weight:760;background:rgba(255,255,255,.025);position:sticky;top:0} td.value{font-family:var(--mono);cursor:pointer}.abn{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.critical{background:rgba(255,107,126,.25)!important;color:#fff;font-weight:900}.low,.high{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.normal{color:#e8eef8}.list{display:grid;gap:8px}.item{border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025);padding:10px}.item:hover{border-color:rgba(255,255,255,.16)}.item-head{display:flex;justify-content:space-between;gap:10px}.item-title{font-weight:780}.item-meta{color:var(--muted);font-size:12px}.report{white-space:pre-wrap;background:#0a1018;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);line-height:1.45}.note-text{white-space:pre-wrap;color:#dce5f4}.split{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px}.order-list{display:grid;gap:8px}.order-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.activity{max-height:340px;overflow:auto;display:grid;gap:8px}.activity .item{font-size:12.5px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:100}.modal-card{max-width:780px;width:100%;max-height:86vh;overflow:auto}.toast{position:fixed;right:14px;bottom:14px;max-width:520px;background:#111a27;border:1px solid var(--line2);border-radius:12px;padding:11px 12px;box-shadow:var(--shadow);z-index:110}.codebox{white-space:pre-wrap;background:#080d14;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);font-size:12.5px}.refpop{position:fixed;z-index:120;background:#101826;border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);padding:9px;max-width:300px;color:#dbe5f4}
+    @media(max-width:980px){.app{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid var(--line)}.patient-list{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.split,.grid2,.grid3{grid-template-columns:1fr}main{overflow:visible}.content{overflow:visible}.banner-top{display:block}.app{display:block}}
 
-    .shell{max-width:1120px;margin:14px auto;padding:0 18px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px}
-    .shell.no-sidebar{grid-template-columns:minmax(0,1fr)}
-    .sidebar{position:sticky;top:62px;align-self:start}
-    .sidebar.hidden{display:none}
-    .card{background:linear-gradient(180deg,rgba(16,20,28,.96),rgba(13,17,24,.96));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px}
-    #stage{transition:max-width .18s ease, margin .18s ease;min-width:0}
-    #stage.compact{max-width:600px;margin:0 auto}
-    #stage.wide{max-width:900px;margin:0 auto}
-
-    h1,h2,h3{margin:0;line-height:1.14;letter-spacing:-.025em}
-    h2{font-size:24px;margin-bottom:6px;font-weight:760}
-    h3{font-size:14px;font-weight:730}
-    .subcopy{color:var(--muted);max-width:62ch;margin:0 0 12px}
-    .muted{color:var(--muted)}
-    .muted2{color:var(--muted-2)}
-    .kicker{text-transform:uppercase;letter-spacing:.12em;color:var(--muted-2);font-size:11px;font-weight:740;margin-bottom:8px}
-    .row{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
-    .split{display:flex;align-items:center;justify-content:space-between;gap:10px}
-    .stack{display:grid;gap:10px}
-    .grid-2{display:grid;grid-template-columns:1fr 180px;gap:10px}
-    .hidden{display:none!important}
-    label{display:block;color:var(--muted);font-size:12.5px;margin-bottom:5px}
-    input,textarea,select.field{
-      width:100%;color:var(--ink);background:#0b0f16;border:1px solid var(--line);border-radius:10px;outline:none;
-      padding:8px 10px;
-    }
-    textarea{resize:vertical;min-height:64px}
-    input:focus,textarea:focus,select.field:focus{border-color:rgba(143,179,255,.58);box-shadow:0 0 0 2px rgba(143,179,255,.105)}
-
-    .btn{
-      display:inline-flex;align-items:center;justify-content:center;gap:6px;
-      border:1px solid var(--line-2);border-radius:9px;background:#151b25;color:var(--ink);
-      padding:5px 9px;min-height:30px;cursor:pointer;box-shadow:none;
-      transition:background .14s ease,border-color .14s ease,transform .035s ease,color .14s ease,opacity .14s ease;
-      font-weight:620;font-size:13px;line-height:1.2;
-    }
-    .btn:hover{background:#1a2230;border-color:rgba(255,255,255,.17)}
-    .btn:active{transform:translateY(1px)}
-    .btn:disabled{opacity:.48;cursor:not-allowed}
-    .btn.primary{background:#1d2a44;border-color:rgba(143,179,255,.33);color:#e6edff}
-    .btn.primary:hover{background:#243552}
-    .btn.success{background:#1d2a44;border-color:rgba(143,179,255,.33);color:#e6edff}
-    .btn.success:hover{background:#243552}
-    .btn.danger{background:#241820;border-color:rgba(233,133,146,.26);color:#f4d5da}
-    .btn.danger:hover{background:#2c1b24}
-    .btn.ghost{background:transparent;border-color:var(--line);color:var(--muted)}
-    .btn.ghost:hover{color:var(--ink);background:rgba(255,255,255,.035)}
-    .btn.sm{font-size:12px;padding:4px 7px;min-height:26px;border-radius:8px;font-weight:610}
-
-    .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border:1px solid rgba(143,179,255,.22);border-radius:999px;background:var(--accent-soft);color:#dce7ff;font-weight:710;font-size:12px}
-    .scoreline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:11px}
-    .mini-stat{background:rgba(255,255,255,.026);border:1px solid var(--line);border-radius:11px;padding:9px}
-    .mini-stat span{display:block;color:var(--muted);font-size:11.5px}.mini-stat strong{display:block;font-size:17px;margin-top:1px}
-
-    .leaderboard h3{margin-bottom:2px}.leaderboard table{width:100%;border-collapse:separate;border-spacing:0 5px;font-size:12.5px}.leaderboard th{color:var(--muted);text-align:left;font-weight:650;padding:2px 6px}.leaderboard td{background:rgba(255,255,255,.028);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px}.leaderboard td:first-child{border-left:1px solid var(--line);border-radius:8px 0 0 8px;width:32px;text-align:center;font-weight:760;color:#d8e2ff}.leaderboard td:last-child{border-right:1px solid var(--line);border-radius:0 8px 8px 0}
-
-    .qa-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
-    .q-label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:13.5px;margin-bottom:7px}
-    .qnum{font-size:26px;font-weight:820;letter-spacing:-.04em;margin:0 0 5px}
-    #question{font-size:19px;line-height:1.48;letter-spacing:-.01em;max-width:72ch;margin-bottom:13px}
-    .answer-panel{background:rgba(255,255,255,.022);border:1px solid var(--line);border-radius:12px;padding:10px}
-    .actions{display:flex;gap:7px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:8px}
-
-    .result{margin-top:10px;border:1px solid var(--line);border-radius:12px;padding:10px;background:rgba(255,255,255,.028)}
-    .result.ok{background:var(--ok-soft);border-color:rgba(105,214,163,.30)}
-    .result.partial{background:var(--warn-soft);border-color:rgba(229,187,106,.32)}
-    .result.bad{background:var(--bad-soft);border-color:rgba(233,133,146,.30)}
-    .result.invalid{background:rgba(143,179,255,.08);border-color:rgba(143,179,255,.30)}
-    .result-title{display:flex;align-items:center;gap:7px;font-weight:790;margin-bottom:4px}
-    .credit-badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11.5px;color:var(--muted);font-weight:650;background:rgba(255,255,255,.028)}
-    .delta{font-weight:790;margin-top:6px}.delta.pos{color:var(--ok)}.delta.neg{color:var(--bad)}.delta.neutral{color:var(--warn)}
-
-    .discussion{margin-top:10px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.02);overflow:hidden}
-    .discussion-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.018)}
-    .discussion-top strong{font-size:13.5px}
-    .discussion-top p{margin:1px 0 0;color:var(--muted);font-size:12px}
-    .chat-log{display:grid;gap:7px;max-height:260px;overflow:auto;padding:10px}
-    .empty-chat{color:var(--muted);font-size:12.5px;border:1px dashed var(--line);border-radius:10px;padding:9px;background:rgba(0,0,0,.06)}
-    .msg{max-width:84%;padding:8px 10px;border-radius:11px;white-space:pre-wrap;font-size:13px;line-height:1.45}
-    .msg.user{justify-self:end;background:rgba(143,179,255,.115);border:1px solid rgba(143,179,255,.24)}
-    .msg.ai{justify-self:start;background:rgba(255,255,255,.035);border:1px solid var(--line);color:#e5ebf8}
-    .quick-prompts{display:flex;gap:6px;flex-wrap:wrap;padding:0 10px 9px}
-    .quick-prompts .btn{border-radius:999px;background:transparent;color:#c7d4ef}
-    .chat-compose{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;padding:0 10px 10px}
-    .chat-compose textarea{min-height:42px;max-height:118px;padding:8px 10px}
-    .discussion-status{padding:0 10px 9px;color:var(--muted);font-size:12.5px}
-
-    .history-list{display:grid;gap:8px}.history-item{padding:10px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.028)}
-    .step{opacity:0;transform:translateY(5px)}.step.show{opacity:1;transform:none;transition:opacity .16s ease,transform .16s ease}.pop{animation:pop .16s ease both}@keyframes pop{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
-    @media(max-width:900px){.shell{grid-template-columns:1fr;padding:0 12px}.sidebar{position:static}.grid-2{grid-template-columns:1fr}.nav{padding:8px 12px;flex-wrap:wrap}.spacer{display:none}.scoreline{grid-template-columns:1fr}.chat-compose{grid-template-columns:1fr}.msg{max-width:96%}#question{font-size:18px}#stage.wide{max-width:100%}}
+    .subtabs{display:flex;gap:6px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:6px;background:rgba(255,255,255,.018);margin-bottom:12px}
+    .subtab{border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);padding:6px 10px;font-weight:760;white-space:nowrap}
+    .subtab.active{background:rgba(145,183,255,.12);border-color:rgba(145,183,255,.34);color:var(--ink)}
+    .note-row{display:grid;grid-template-columns:170px minmax(120px,.7fr) minmax(120px,.8fr) minmax(140px,.8fr);gap:8px;align-items:center;text-align:left;width:100%}
+    .note-row .cell-label{display:none;color:var(--muted2);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+    .note-view-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+    .note-meta-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 12px}
+    .note-meta-card{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.022);padding:8px}
+    .note-meta-card span{display:block;color:var(--muted);font-size:11.5px;margin-bottom:2px}.note-meta-card strong{font-weight:760}
+    .editor-toolbar{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}.note-editor{min-height:420px;width:100%;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;line-height:1.45;background:#080d14}
+    @media(max-width:780px){.note-row{grid-template-columns:1fr}.note-row .cell-label{display:block}.note-meta-grid{grid-template-columns:1fr 1fr}}
   </style>
 </head>
 <body>
 <header>
-  <div class="nav">
-    <div class="brand">
-      <div class="mark" aria-hidden="true"></div>
-      <div class="select-wrap">
-        <select id="aiSelect" aria-label="Simulator">
-          <option value="pimp">One Line Pimp Simulator</option>
-          <option value="casesim">Medical Case Simulator</option>
-          <option value="learner">Med Learner</option>
-        </select>
-      </div>
-      <span id="conn" class="status-dot" title="connection"></span>
-    </div>
-    <div class="spacer"></div>
-    <div class="top-stat" id="scoreChip" style="display:none"><span>Score</span><strong id="scoreVal">0</strong></div>
-    <div class="top-stat" id="userChip" style="display:none"><span>User</span><strong id="userVal">—</strong></div>
-  </div>
+  <div class="brand"><div class="mark"></div><span>Medical Case Simulator</span></div>
+  <button class="btn ghost sm" onclick="location.href='/'">Pimp Simulator</button>
+  <button class="btn ghost sm" onclick="location.href='/learner'">Med Learner</button>
+  <div class="spacer"></div>
+  <span id="sessionChip" class="chip hidden">Session <strong id="sessionShort">—</strong></span>
+  <button id="btnPage" class="btn sm hidden">Page me / advance</button>
+  <a id="lockLink" class="btn ghost sm hidden" href="#" target="_blank" rel="noopener">Download locked file</a>
+  <button id="btnConcludeTop" class="btn danger sm hidden">Conclude</button>
 </header>
 
-<div id="shell" class="shell">
-  <aside id="sidebar" class="sidebar">
-    <div class="card leaderboard">
-      <div class="split" style="margin-bottom:8px">
-        <h3>Global leaderboard</h3>
-        <span class="pill">Top 10</span>
-      </div>
-      <div id="lbEmpty" class="muted">Fetching leaderboard…</div>
-      <table id="lbTable" class="hidden">
-        <thead><tr><th>#</th><th>User</th><th>Pts</th><th>Ans</th></tr></thead>
-        <tbody id="lbBody"></tbody>
-      </table>
+<section id="setup" class="setup">
+  <div class="card">
+    <div class="kicker">New simulation</div>
+    <h1>Start an EMR-based medical case</h1>
+    <p class="sub">Upload your exclusion list first. The server locks a hidden diagnosis at case generation, then only exposes the simulated chart, objective exam/history responses, orders, results, pages, and notes.</p>
+    <div class="grid3" style="margin-top:14px">
+      <div><label>User ID</label><input id="userId" value="Gurnoor" /></div>
+      <div><label>Mode</label><select id="mode"><option value="regular">Regular random mode</option><option value="zebra">Zebra mode</option></select></div>
+      <div><label>Difficulty</label><select id="difficulty"><option>MSI3-R1</option><option>MSI4-R2</option><option>R3-R5</option><option>Attending-level brutal</option></select></div>
     </div>
+    <div class="grid2" style="margin-top:12px">
+      <div><label>Optional field / setting</label><input id="specialty" placeholder="e.g., CTU, ED consult, nephrology, ICU, peds" /></div>
+      <div><label>Exclusion list .txt</label><input id="exclusionFile" type="file" accept=".txt,.md,.csv,text/plain" /></div>
+    </div>
+    <div style="margin-top:12px"><label>Exclusion list preview</label><textarea id="exclusionText" rows="7" placeholder="Upload your exclusion list, or paste it here. For a brand new list, click Use empty list."></textarea></div>
+    <div class="row" style="margin-top:12px">
+      <button id="btnEmptyList" class="btn ghost">Use empty list</button>
+      <button id="btnStart" class="btn primary">Generate locked case</button>
+      <span id="setupStatus" class="muted"></span>
+    </div>
+  </div>
+</section>
+
+<section id="app" class="app hidden">
+  <aside>
+    <div class="side-head">
+      <div class="kicker">Patients</div>
+      <button id="btnNewCase" class="btn primary sm">New case</button>
+    </div>
+    <div id="patientList" class="patient-list"></div>
   </aside>
 
-  <main id="stage" class="card step show compact">
-    <section id="step-connect">
-      <div class="kicker">Connection</div>
-      <h2>Welcome</h2>
-      <p id="connectMsg" class="subcopy">Checking the server connection.</p>
-      <button class="btn primary" id="goUserType" disabled>Continue</button>
-    </section>
-
-    <section id="step-user-type" class="hidden">
-      <div class="kicker">Sign in</div>
-      <h2>Who are you?</h2>
-      <p class="subcopy">Choose a username so your leaderboard score and exclusion list can be saved.</p>
-      <div class="row">
-        <button class="btn primary" id="btnNewUser">I’m new</button>
-        <button class="btn" id="btnExistingUser">I’ve been here</button>
-      </div>
-    </section>
-
-    <section id="step-new" class="hidden">
-      <div class="kicker">New user</div>
-      <h2>Create user</h2>
-      <label>Username</label>
-      <input id="newUsername" placeholder="e.g., Gurnoor" autocomplete="off" />
-      <div class="row" style="margin-top:12px">
-        <button class="btn primary" id="createUser">Create</button>
-        <button class="btn ghost" data-back="user-type">Back</button>
-      </div>
-      <div id="newUserMsg" class="muted" style="margin-top:10px"></div>
-    </section>
-
-    <section id="step-existing" class="hidden">
-      <div class="kicker">Existing user</div>
-      <h2>Sign in</h2>
-      <label>Username</label>
-      <input id="existingUsername" placeholder="Your exact username" autocomplete="off" />
-      <div class="row" style="margin-top:12px">
-        <button class="btn primary" id="useExisting">Continue</button>
-        <button class="btn ghost" data-back="user-type">Back</button>
-      </div>
-      <div id="existingMsg" class="muted" style="margin-top:10px"></div>
-    </section>
-
-    <section id="step-dashboard" class="hidden">
-      <div class="kicker">Session setup</div>
-      <h2>Build a session</h2>
-      <p id="exclInfo" class="subcopy">Loading your exclusion list.</p>
-      <div class="grid-2">
+  <main>
+    <div class="banner">
+      <div class="banner-top">
         <div>
-          <label>Topic</label>
-          <input id="topic" value="random" placeholder="random or e.g., cardiology" />
+          <div id="demog" class="demog">—</div>
+          <div id="bannerText" class="muted">—</div>
+          <div class="banner-grid" id="bannerChips"></div>
         </div>
-        <div>
-          <label>Starting difficulty</label>
-          <select id="difficulty" class="field">
-            <option>MSI1</option><option>MSI2</option><option selected>MSI3</option><option>MSI4</option>
-            <option>R1</option><option>R2</option><option>R3</option><option>R4</option><option>R5</option><option>Attending</option>
-          </select>
+        <div class="row" style="justify-content:flex-end">
+          <button id="btnAsk" class="btn">Ask / examine / chart request</button>
+          <button id="btnRefresh" class="btn ghost">Refresh</button>
         </div>
       </div>
-      <div class="scoreline">
-        <div class="mini-stat"><span>Current score</span><strong id="dashScore">0</strong></div>
-        <div class="mini-stat"><span>Answered</span><strong id="dashAnswered">0</strong></div>
-        <div class="mini-stat"><span>Accuracy</span><strong id="dashAccuracy">—</strong></div>
-      </div>
-      <div class="row" style="margin-top:14px">
-        <button class="btn primary" id="startSession">Launch session</button>
-        <button class="btn ghost" id="goHistory">Previous questions</button>
-      </div>
-      <div class="muted" id="settingsMsg" style="margin-top:10px"></div>
-    </section>
-
-    <section id="step-history" class="hidden">
-      <div class="kicker">History</div>
-      <h2>Previously asked questions</h2>
-      <div id="historyList" class="history-list" style="min-height:120px"></div>
-      <div class="row" style="margin-top:12px">
-        <button class="btn" id="reloadHistory">Reload</button>
-        <button class="btn ghost" data-back="dashboard">Back</button>
-      </div>
-      <div id="historyMsg" class="muted" style="margin-top:10px"></div>
-    </section>
-
-    <section id="step-qa" class="hidden">
-      <div class="qa-head">
-        <div>
-          <div class="q-label">Question <span id="pillDiff" class="pill">—</span></div>
-          <div id="qHeader" class="qnum">#—</div>
-        </div>
-        <div class="top-stat"><span>Score</span><strong id="scoreVal2">0</strong></div>
-      </div>
-      <div id="question"></div>
-
-      <div class="answer-panel">
-        <label>Your answer</label>
-        <input id="answer" placeholder="One word or short sentence…" autocomplete="off" />
-        <div class="actions">
-          <div class="row">
-            <button class="btn primary" id="submitAnswer">Submit</button>
-            <button class="btn ghost" id="btnSaveAndFeedback">End + feedback</button>
-          </div>
-          <button class="btn ghost" data-back="dashboard">End session</button>
-        </div>
-      </div>
-
-      <div id="resultBox" class="result hidden"></div>
-
-      <div class="actions" id="postAnswerActions" style="display:none">
-        <div class="row">
-          <button id="btnProceed" class="btn primary hidden">Next question</button>
-          <button id="showDiscussion" class="btn ghost hidden">Clarify</button>
-        </div>
-      </div>
-
-      <div id="discussionBox" class="discussion hidden">
-        <div class="discussion-top">
-          <div>
-            <strong>Question discussion</strong>
-            <p>Challenge the grading or ask for a cleaner explanation.</p>
-          </div>
-          <button class="btn sm ghost" id="toggleDiscussion">Collapse</button>
-        </div>
-        <div id="chatLog" class="chat-log">
-          <div id="emptyChat" class="empty-chat">No follow-up yet. Start with one of the prompts below or type your own.</div>
-        </div>
-        <div class="quick-prompts">
-          <button class="btn sm" data-discuss="I think the question or explanation may be physiologically inconsistent. Can you reassess it?">Challenge explanation</button>
-          <button class="btn sm" data-discuss="Explain the mechanism step by step.">Mechanism</button>
-          <button class="btn sm" data-discuss="What is the highest-yield exam distinction here?">High-yield distinction</button>
-          <button class="btn sm" data-discuss="How much credit should my answer receive and why?">Credit rationale</button>
-        </div>
-        <div class="chat-compose">
-          <textarea id="discussionInput" placeholder="Ask a follow-up…"></textarea>
-          <button class="btn primary" id="sendDiscussion">Send</button>
-        </div>
-        <div id="discussionStatus" class="discussion-status"></div>
-      </div>
-    </section>
-
-    <section id="step-summary" class="hidden">
-      <div class="kicker">Summary</div>
-      <h2>Session summary</h2>
-      <p id="sumStats" class="subcopy"></p>
-      <div id="sumFeedback" class="result"></div>
-      <div id="sumRating" style="font-size:26px;font-weight:850;margin-top:12px"></div>
-      <div class="row" style="margin-top:14px"><button class="btn primary" data-back="dashboard">Done</button></div>
-    </section>
+    </div>
+    <nav id="tabs" class="tabs"></nav>
+    <div id="content" class="content"></div>
   </main>
-</div>
+</section>
+
+<div id="modal" class="modal hidden"><div class="modal-card card"><div id="modalContent"></div></div></div>
+<div id="toast" class="toast hidden"></div>
+<div id="refpop" class="refpop hidden"></div>
 
 <script>
-  const SERVERS = { pimp: window.location.origin };
-  const state = { base:'', connected:false, username:'', sessionId:'', qNumber:null, difficulty:'', awaitingProceed:false, score:0, currentStep:'connect', discussionOpen:false };
-  const $ = id => document.getElementById(id);
-  const errMsg = e => e?.detail || e?.error || e?.message || 'Unexpected error';
-  function escapeHtml(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-  function setConn(ok){ state.connected=ok; $('conn').classList.toggle('ok', ok); }
-  function setUser(u){ state.username=u; $('userVal').textContent=u; $('userChip').style.display='inline-flex'; }
-  function updateScore(v){ state.score=Number(v)||0; $('scoreVal').textContent=state.score; $('scoreVal2').textContent=state.score; $('dashScore').textContent=state.score; $('scoreChip').style.display='inline-flex'; }
-  async function api(path,opts={}){
-    const r=await fetch(state.base+path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}});
-    const t=await r.text(); let d; try{d=JSON.parse(t);}catch{d={raw:t}}; if(!r.ok) throw d; return d;
-  }
+const API_BASE = window.location.origin;
+const tabs = ['Labs','Investigations','Vitals','Nursing Notes','Medications/MAR','Notes','Orders'];
+const state = { sessionId:null, patient:null, activity:[], orderHistory:[], activeTab:'Labs', report:null, activeLabCategory:'Hematology', noteMode:'list', selectedNoteId:null, exclusionLoaded:false };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg, bad=false){ const t=$('toast'); t.textContent=msg; t.style.borderColor=bad?'rgba(255,107,126,.42)':'var(--line2)'; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),4200); }
+async function api(path, opts={}){ const r=await fetch(API_BASE+path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}}); const txt=await r.text(); let j; try{j=JSON.parse(txt)}catch{j={raw:txt}}; if(!r.ok) throw j; return j; }
+function err(e){ return e?.detail || e?.error || e?.message || String(e || 'Error'); }
+function fmtTime(x){ return esc(x || ''); }
+function setBusy(el, on, text){ el.disabled=!!on; if(text!==undefined) el.textContent=text; }
 
-  async function connectAndBoot(){
-    state.base=SERVERS[$('aiSelect').value] || window.location.origin;
-    $('connectMsg').textContent='Checking connection…'; $('goUserType').disabled=true; setConn(false);
-    try{
-      const r=await fetch(state.base+'/health');
-      const j=await r.json().catch(()=>({}));
-      if(!r.ok || j.ok===false) throw new Error(j.error || 'Health check failed');
-      setConn(true); $('connectMsg').textContent='Connected. Ready to start.'; $('goUserType').disabled=false; await loadLeaderboard();
-    }catch(e){ $('connectMsg').textContent='Connection failed: '+errMsg(e); }
-  }
+$('exclusionFile').addEventListener('change', async e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const text=await file.text(); $('exclusionText').value=text; state.exclusionLoaded=true; $('setupStatus').textContent=`Loaded ${file.name} (${text.length} chars).`;
+});
+$('btnEmptyList').onclick=()=>{ $('exclusionText').value=''; state.exclusionLoaded=true; $('setupStatus').textContent='Empty exclusion list selected.'; };
+$('btnNewCase').onclick=()=>{ $('setup').classList.remove('hidden'); $('app').classList.add('hidden'); window.scrollTo({top:0,behavior:'smooth'}); };
+$('btnStart').onclick=startCase;
+$('btnRefresh').onclick=refreshCase;
+$('btnAsk').onclick=openAskModal;
+$('btnPage').onclick=advanceCase;
+$('btnConcludeTop').onclick=openConcludeModal;
 
-  function showStep(name){
-    state.currentStep=name;
-    ['connect','user-type','new','existing','dashboard','history','qa','summary'].forEach(s=>$('step-'+s).classList.add('hidden'));
-    $('step-'+name).classList.remove('hidden');
-    $('stage').classList.remove('show'); void $('stage').offsetWidth; $('stage').classList.add('show');
-    const wide = name==='qa' || name==='summary';
-    $('stage').classList.toggle('wide', wide); $('stage').classList.toggle('compact', !wide);
-    $('sidebar').classList.toggle('hidden', wide); $('shell').classList.toggle('no-sidebar', wide);
-    if(name==='dashboard') prepDashboard();
-  }
+document.addEventListener('click', e=>{ if(!e.target.closest('.refpop') && !e.target.classList.contains('value')) $('refpop').classList.add('hidden'); });
 
-  async function loadLeaderboard(){
-    try{
-      const r=await api('/api/leaderboard'); const rows=r.rows||r.leaderboard||[];
-      const body=$('lbBody'); body.innerHTML='';
-      if(!rows.length){ $('lbEmpty').textContent='No scores yet.'; $('lbTable').classList.add('hidden'); return; }
-      $('lbEmpty').textContent=''; $('lbTable').classList.remove('hidden');
-      rows.slice(0,10).forEach((x,i)=>{
-        const uname=x.username||x.member||'—'; const score=Number(x.score||0);
-        const tr=document.createElement('tr');
-        tr.innerHTML=`<td>${i+1}</td><td>${escapeHtml(uname)}</td><td><strong>${score}</strong></td><td id="lb-answered-${i}"><span class="muted">…</span></td>`;
-        body.appendChild(tr);
-        if(uname && uname!=='—') api('/api/score?username='+encodeURIComponent(uname)).then(s=>{ const el=$('lb-answered-'+i); if(el) el.innerHTML=`<strong>${Number(s.answered||0)}</strong>`; }).catch(()=>{ const el=$('lb-answered-'+i); if(el) el.textContent='n/a'; });
-      });
-    }catch(e){ $('lbEmpty').textContent='Failed to load leaderboard: '+errMsg(e); }
-  }
+async function startCase(){
+  const exclusionText=$('exclusionText').value;
+  if(!state.exclusionLoaded && exclusionText.trim()===''){ $('setupStatus').innerHTML='<span class="bad">Upload an exclusion list or click Use empty list first.</span>'; return; }
+  const btn=$('btnStart'); setBusy(btn,true,'Generating…'); $('setupStatus').textContent='Generating locked diagnosis and EMR chart…';
+  try{
+    const payload={ user_id:$('userId').value.trim()||'Gurnoor', mode:$('mode').value, specialty:$('specialty').value.trim(), difficulty:$('difficulty').value, exclusionText };
+    const j=await api('/case/sessions',{method:'POST',body:JSON.stringify(payload)});
+    applyCase(j); $('setup').classList.add('hidden'); $('app').classList.remove('hidden'); toast('Case generated. Diagnosis is locked server-side.');
+  }catch(e){ $('setupStatus').innerHTML='<span class="bad">'+esc(err(e))+'</span>'; }
+  finally{ setBusy(btn,false,'Generate locked case'); }
+}
 
-  async function prepDashboard(){
-    if(!state.username) return;
-    try{ const r=await api('/api/exclusions/count?username='+encodeURIComponent(state.username)); $('exclInfo').textContent=`You have ${r.count} question(s) in your exclusion list.`; }
-    catch(e){ $('exclInfo').textContent='Could not fetch exclusions: '+errMsg(e); }
-    try{ const s=await api('/api/score?username='+encodeURIComponent(state.username)); updateScore(s.score||0); $('dashAnswered').textContent=Number(s.answered||0); $('dashAccuracy').textContent=s.answered ? `${Math.round((s.accuracy||0)*100)}%` : '—'; } catch{}
-    loadLeaderboard();
-  }
+function applyCase(j){
+  state.sessionId=j.sessionId; state.patient=j.patient; state.activity=j.activity||[]; state.orderHistory=j.orderHistory||[];
+  $('sessionChip').classList.remove('hidden'); $('sessionShort').textContent=String(state.sessionId).slice(0,8);
+  $('lockLink').href='/case/sessions/'+encodeURIComponent(state.sessionId)+'/lockfile'; $('lockLink').classList.remove('hidden');
+  $('btnPage').classList.remove('hidden'); $('btnConcludeTop').classList.remove('hidden');
+  renderAll();
+}
+async function refreshCase(){ if(!state.sessionId) return; try{ const j=await api('/case/sessions/'+state.sessionId); applyCase(j); toast('Chart refreshed.'); }catch(e){ toast(err(e),true); } }
 
-  async function loadHistory(){
-    $('historyMsg').textContent='Loading…';
-    try{
-      const r=await api('/api/history?username='+encodeURIComponent(state.username)); const items=r.items||[]; const box=$('historyList');
-      if(!items.length) box.innerHTML='<span class="muted">No history yet.</span>';
-      else{
-        box.innerHTML='';
-        items.forEach(it=>{
-          const verdict=it.verdict ? ` <span class="pill">${escapeHtml(it.verdict)}</span>` : '';
-          const credit=Number.isFinite(Number(it.credit)) ? ` <span class="pill">${Math.round(Number(it.credit)*100)}%</span>` : '';
-          const div=document.createElement('div'); div.className='history-item';
-          div.innerHTML=`<div>${escapeHtml(it.q||it.question||'—')}</div><div class="row" style="margin-top:7px"><span class="pill">${escapeHtml(it.difficulty||'')}</span>${verdict}${credit}</div>`;
-          box.appendChild(div);
-        });
-      }
-      $('historyMsg').textContent='';
-    }catch(e){ $('historyMsg').textContent='Failed to load history: '+errMsg(e); }
-  }
+function renderAll(){ renderPatientList(); renderBanner(); renderTabs(); renderTab(); }
+function renderPatientList(){
+  const p=state.patient; const box=$('patientList'); box.innerHTML=''; if(!p) return;
+  const div=document.createElement('button'); div.className='patient active'; div.innerHTML=`<div class="patient-name">${esc(p.displayName)} ${esc(p.age)}${esc(p.sex)}</div><div class="patient-meta">${esc(p.location||'')}</div><div class="patient-complaint">${esc(p.presentingComplaint||'')}</div>`; box.appendChild(div);
+}
+function renderBanner(){
+  const p=state.patient||{}; $('demog').textContent=`${p.displayName||'—'} · ${p.age||'—'}${p.sex||''}`; $('bannerText').textContent=p.banner||p.presentingComplaint||'—';
+  $('bannerChips').innerHTML=`<span class="chip">Location <strong>${esc(p.location||'—')}</strong></span><span class="chip">Allergies <strong>${esc((p.allergies||[]).join(', ')||'None documented')}</strong></span><span class="chip">Code <strong>${esc(p.codeStatus||'—')}</strong></span>`;
+}
+function renderTabs(){ const box=$('tabs'); box.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.className='tab '+(state.activeTab===t?'active':''); b.textContent=t; b.onclick=()=>{state.activeTab=t; state.report=null; state.noteMode='list'; state.selectedNoteId=null; renderTabs(); renderTab();}; box.appendChild(b); }); }
+function renderTab(){ const t=state.activeTab; if(t==='Labs') return renderLabs(); if(t==='Investigations') return renderInvestigations(); if(t==='Vitals') return renderVitals(); if(t==='Nursing Notes') return renderNursing(); if(t==='Medications/MAR') return renderMAR(); if(t==='Notes') return renderNotes(); if(t==='Orders') return renderOrders(); }
 
-  async function startSession(){
-    const topic=$('topic').value.trim()||'random'; const startingDifficulty=$('difficulty').value; $('settingsMsg').textContent='';
-    try{ const r=await api('/api/sessions',{method:'POST',body:JSON.stringify({username:state.username,topic,startingDifficulty})}); state.sessionId=r.sessionId; state.difficulty=r.difficulty; $('pillDiff').textContent=state.difficulty; showStep('qa'); await nextQuestion(); }
-    catch(e){ $('settingsMsg').textContent='Failed to start session: '+errMsg(e); }
+const LAB_ORDER = ['Hematology','Chemistry','Blood Gas','Serology','Urine','Misc'];
+function canonicalLabCategoryName(name){
+  const n=String(name||'').toLowerCase();
+  if(/hema|cbc|coag/.test(n)) return 'Hematology';
+  if(/blood\s*gas|abg|vbg|gas/.test(n)) return 'Blood Gas';
+  if(/serolog|immunolog|autoimmune|viral|hepatitis|hiv|antibody|antigen/.test(n)) return 'Serology';
+  if(/urine|urinalysis|u\/a|ua|microscopy/.test(n)) return 'Urine';
+  if(/misc|other|special|toxic|drug|endo|hormone/.test(n)) return 'Misc';
+  // LFTs, renal panel, electrolytes, enzymes, osmolality, lipase, CRP, etc belong here.
+  if(/chem|electrolyte|renal|kidney|liver|lft|hepatic|enzyme|metabolic|crp|esr|osmol|glucose|calcium|mag|phos|lipase|amylase|bilirubin|albumin|protein|troponin|bnp/.test(n)) return 'Chemistry';
+  return 'Misc';
+}
+function getCanonicalLabCategories(){
+  const p=state.patient||{};
+  const map=new Map(LAB_ORDER.map(x=>[x,{name:x,rows:[]} ]));
+  (p.labCategories||[]).forEach(cat=>{
+    const cname=canonicalLabCategoryName(cat.name);
+    const target=map.get(cname)||map.get('Misc');
+    (cat.rows||[]).forEach(r=>target.rows.push(r));
+  });
+  return LAB_ORDER.map(x=>map.get(x));
+}
+function renderLabs(){
+  const cats=getCanonicalLabCategories();
+  const available=cats.filter(c=>(c.rows||[]).length>0).map(c=>c.name);
+  if(!LAB_ORDER.includes(state.activeLabCategory)) state.activeLabCategory='Hematology';
+  if(!available.includes(state.activeLabCategory) && available.length) state.activeLabCategory=available[0];
+  const active=cats.find(c=>c.name===state.activeLabCategory) || cats[0];
+  let html=`<div class="subtabs">${LAB_ORDER.map(name=>`<button class="subtab ${state.activeLabCategory===name?'active':''}" data-labcat="${esc(name)}">${esc(name)}${available.includes(name)?'':''}</button>`).join('')}</div>`;
+  html+=`<div class="panel"><div class="panel-title"><h2>${esc(active.name)}</h2><span class="muted">Click a value for reference range</span></div>`;
+  if(!(active.rows||[]).length){
+    html+=`<div class="muted">No ${esc(active.name.toLowerCase())} results available.</div></div>`;
+    $('content').innerHTML=html;
+    document.querySelectorAll('[data-labcat]').forEach(b=>b.onclick=()=>{state.activeLabCategory=b.dataset.labcat; renderLabs();});
+    return;
   }
+  const times=[...new Set((active.rows||[]).flatMap(r=>(r.values||[]).map(v=>v.datetime)))].sort();
+  html+=`<div class="scroll-x"><table><thead><tr><th>Test</th><th>Reference</th>${times.map(x=>`<th>${fmtTime(x)}</th>`).join('')}</tr></thead><tbody>`;
+  (active.rows||[]).forEach(row=>{
+    const vals=Object.fromEntries((row.values||[]).map(v=>[v.datetime,v]));
+    html+=`<tr><td><strong>${esc(row.test)}</strong><div class="muted">${esc(row.unit||'')}</div></td><td>${esc(row.referenceRange||'')}</td>`;
+    times.forEach(tm=>{
+      const v=vals[tm]; const flag=(v?.flag||'normal').toLowerCase();
+      html+=`<td class="value ${esc(flag)}" data-test="${esc(row.test)}" data-ref="${esc(row.referenceRange||'')}" data-unit="${esc(row.unit||'')}">${v?esc(v.value):'<span class="muted">—</span>'}</td>`;
+    });
+    html+='</tr>';
+  });
+  html+='</tbody></table></div></div>';
+  $('content').innerHTML=html;
+  document.querySelectorAll('[data-labcat]').forEach(b=>b.onclick=()=>{state.activeLabCategory=b.dataset.labcat; renderLabs();});
+  document.querySelectorAll('td.value').forEach(td=>td.onclick=e=>showRef(e,td));
+}
+function showRef(e,td){ const r=$('refpop'); r.innerHTML=`<strong>${td.dataset.test}</strong><br><span class="muted">Reference</span><br>${td.dataset.ref||'Not provided'}<br><span class="muted">Unit</span><br>${td.dataset.unit||'—'}`; r.style.left=Math.min(e.clientX, window.innerWidth-320)+'px'; r.style.top=Math.min(e.clientY+10, window.innerHeight-170)+'px'; r.classList.remove('hidden'); }
 
-  function resetDiscussion(){
-    $('chatLog').innerHTML='<div id="emptyChat" class="empty-chat">No follow-up yet. Start with one of the prompts below or type your own.</div>';
-    $('discussionStatus').textContent=''; $('discussionInput').value=''; $('discussionBox').classList.add('hidden'); $('showDiscussion').classList.add('hidden'); $('postAnswerActions').style.display='none'; state.discussionOpen=false;
-  }
-  function appendMsg(who,text){
-    const empty=$('emptyChat'); if(empty) empty.remove();
-    const div=document.createElement('div'); div.className='msg '+(who==='user'?'user':'ai'); div.textContent=text;
-    $('chatLog').appendChild(div); $('chatLog').scrollTop=$('chatLog').scrollHeight;
-  }
-  function openDiscussion(){ $('discussionBox').classList.remove('hidden'); $('showDiscussion').classList.add('hidden'); state.discussionOpen=true; $('discussionInput').focus(); }
-  function hideDiscussion(){ $('discussionBox').classList.add('hidden'); $('showDiscussion').classList.remove('hidden'); state.discussionOpen=false; }
-  async function sendDiscussion(messageOverride){
-    const message=(messageOverride||$('discussionInput').value).trim(); if(!message) return;
-    openDiscussion(); appendMsg('user',message); $('discussionInput').value=''; $('discussionStatus').textContent='Thinking…'; $('sendDiscussion').disabled=true;
-    try{ const r=await api('/api/discuss',{method:'POST',body:JSON.stringify({sessionId:state.sessionId,message})}); appendMsg('ai', r.reply || 'No reply returned.'); $('discussionStatus').textContent=''; }
-    catch(e){ appendMsg('ai','Discussion failed: '+errMsg(e)); $('discussionStatus').textContent=''; }
-    finally{ $('sendDiscussion').disabled=false; $('discussionInput').focus(); }
-  }
+function renderInvestigations(){
+  const inv=[...(state.patient?.investigations||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
+  if(state.report){ const x=state.report; $('content').innerHTML=`<div class="panel"><button class="btn ghost" id="backInv">← Back to list</button><h2 style="margin-top:10px">${esc(x.title)}</h2><div class="muted">${esc(x.group||'')} · ${esc(x.datetime||'')} · ${esc(x.status||'')}</div><div class="report" style="margin-top:12px">${esc(x.report||'No report text.')}</div></div>`; $('backInv').onclick=()=>{state.report=null; renderInvestigations();}; return; }
+  let html='<div class="panel"><div class="panel-title"><h2>Investigations</h2><span class="muted">Latest first</span></div><div class="list">';
+  if(!inv.length) html+='<div class="muted">No investigations available.</div>';
+  inv.forEach(x=>{ html+=`<button class="item" data-id="${esc(x.id)}"><div class="item-head"><div><div class="item-title">${esc(x.title)}</div><div class="item-meta">${esc(x.group||'')} · ${esc(x.datetime||'')}</div></div><span class="chip">${esc(x.status||'')}</span></div></button>`; });
+  html+='</div></div>'; $('content').innerHTML=html; document.querySelectorAll('.item[data-id]').forEach(b=>b.onclick=()=>{ state.report=inv.find(x=>String(x.id)===b.dataset.id); renderInvestigations(); });
+}
+function renderVitals(){
+  const vs=[...(state.patient?.vitals||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
+  let html='<div class="panel"><div class="panel-title"><h2>Vitals</h2></div><div class="scroll-x"><table><thead><tr><th>Date/time</th><th>T °C</th><th>HR</th><th>BP</th><th>RR</th><th>SpO₂</th><th>O₂</th><th>Pain</th><th>Notes</th></tr></thead><tbody>';
+  vs.forEach(v=>{ html+=`<tr><td>${esc(v.datetime||'')}</td><td>${esc(v.temperature_C||'')}</td><td>${esc(v.hr||'')}</td><td>${esc(v.bp||'')}</td><td>${esc(v.rr||'')}</td><td>${esc(v.spo2||'')}</td><td>${esc(v.oxygen||'')}</td><td>${esc(v.pain||'')}</td><td>${esc(v.notes||'')}</td></tr>`; });
+  html+='</tbody></table></div></div>'; $('content').innerHTML=html;
+}
+function renderNursing(){ renderChronList('Nursing Notes', state.patient?.nursingNotes||[], x=>`<div class="item-title">${esc(x.datetime||'')} · ${esc(x.author||'RN')}</div><div class="note-text">${esc(x.text||'')}</div>`); }
+function renderChronList(title, arr, rowFn){ const rows=[...arr].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||''))); let html=`<div class="panel"><div class="panel-title"><h2>${esc(title)}</h2></div><div class="list">`; if(!rows.length) html+='<div class="muted">No entries.</div>'; rows.forEach(x=>html+=`<div class="item">${rowFn(x)}</div>`); html+='</div></div>'; $('content').innerHTML=html; }
+function renderMAR(filter='active'){
+  const meds=state.patient?.medications||[]; const filtered=filter==='all'?meds:meds.filter(m=>String(m.status||'').toLowerCase()===filter);
+  let html=`<div class="panel"><div class="panel-title"><h2>Medications / MAR</h2><div class="row"><button class="btn sm ${filter==='active'?'primary':''}" data-f="active">Active</button><button class="btn sm ${filter==='discontinued'?'primary':''}" data-f="discontinued">Discontinued</button><button class="btn sm ${filter==='all'?'primary':''}" data-f="all">All</button></div></div><div class="scroll-x"><table><thead><tr><th>Medication</th><th>Dose</th><th>Route</th><th>Frequency</th><th>Status</th><th>Start</th><th>Stop</th><th>Comments</th></tr></thead><tbody>`;
+  filtered.forEach(m=>{ html+=`<tr><td><strong>${esc(m.name||'')}</strong></td><td>${esc(m.dose||'')}</td><td>${esc(m.route||'')}</td><td>${esc(m.frequency||'')}</td><td>${esc(m.status||'')}</td><td>${esc(m.start||'')}</td><td>${esc(m.stop||'')}</td><td>${esc(m.comments||'')}</td></tr>`; });
+  html+='</tbody></table></div></div>'; $('content').innerHTML=html; document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>renderMAR(b.dataset.f));
+}
+function noteService(n){ return n.service || n.department || n.specialty || ''; }
+function noteProvider(n){ return n.providerName || n.provider || n.author || ''; }
+function noteType(n){ return n.noteType || n.type || 'Note'; }
+function noteTitle(n){ return n.title || noteType(n); }
+function renderNotes(){
+  if(state.noteMode==='detail') return renderNoteDetail();
+  if(state.noteMode==='create') return renderNoteCreator();
+  return renderNoteList();
+}
+function renderNoteList(){
+  const notes=[...(state.patient?.notes||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
+  let html=`<div class="panel"><div class="panel-title"><h2>Provider Notes</h2><button id="createNoteBtn" class="btn primary sm">Create note</button></div>`;
+  html+=`<div class="scroll-x"><table><thead><tr><th>Timestamp</th><th>Service</th><th>Provider</th><th>Note type</th></tr></thead><tbody>`;
+  if(!notes.length){ html+=`<tr><td colspan="4" class="muted">No provider notes.</td></tr>`; }
+  notes.forEach(n=>{
+    html+=`<tr class="item" style="cursor:pointer" data-note-id="${esc(n.id)}"><td>${esc(n.datetime||'')}</td><td>${esc(noteService(n)||'—')}</td><td>${esc(noteProvider(n)||'—')}</td><td><strong>${esc(noteType(n))}</strong></td></tr>`;
+  });
+  html+=`</tbody></table></div></div>`;
+  $('content').innerHTML=html;
+  $('createNoteBtn').onclick=()=>{state.noteMode='create'; state.selectedNoteId=null; renderNotes();};
+  document.querySelectorAll('[data-note-id]').forEach(row=>row.onclick=()=>{state.selectedNoteId=row.dataset.noteId; state.noteMode='detail'; renderNotes();});
+}
+function renderNoteDetail(){
+  const notes=state.patient?.notes||[];
+  const n=notes.find(x=>String(x.id)===String(state.selectedNoteId));
+  if(!n){ state.noteMode='list'; return renderNoteList(); }
+  let html=`<div class="panel"><div class="note-view-head"><div><h2>${esc(noteTitle(n))}</h2><div class="muted">${esc(noteType(n))}</div></div><div class="row"><button id="backNoteList" class="btn ghost sm">← Back to notes</button><button id="createNoteBtn" class="btn primary sm">Create note</button></div></div>`;
+  html+=`<div class="note-meta-grid"><div class="note-meta-card"><span>Timestamp</span><strong>${esc(n.datetime||'—')}</strong></div><div class="note-meta-card"><span>Service</span><strong>${esc(noteService(n)||'—')}</strong></div><div class="note-meta-card"><span>Provider</span><strong>${esc(noteProvider(n)||'—')}</strong></div><div class="note-meta-card"><span>Note type</span><strong>${esc(noteType(n)||'—')}</strong></div></div>`;
+  html+=`<div class="report" style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;white-space:pre-wrap">${esc(n.text||'No note text.')}</div></div>`;
+  $('content').innerHTML=html;
+  $('backNoteList').onclick=()=>{state.noteMode='list'; state.selectedNoteId=null; renderNotes();};
+  $('createNoteBtn').onclick=()=>{state.noteMode='create'; state.selectedNoteId=null; renderNotes();};
+}
+function renderNoteCreator(){
+  const now=new Date().toISOString().slice(0,16).replace('T',' ');
+  let html=`<div class="panel"><div class="note-view-head"><div><h2>Create provider note</h2><div class="muted">Primitive charting editor</div></div><button id="backNoteList" class="btn ghost sm">← Back to notes</button></div>`;
+  html+=`<div class="grid3"><div><label>Note type</label><select id="noteType"><option>Progress note</option><option>Consult note</option><option>Admission note</option><option>Procedure note</option><option>Discharge summary</option><option>Event note</option></select></div><div><label>Service</label><input id="noteService" value="Internal Medicine"></div><div><label>Provider name</label><input id="noteProvider" value="Learner"></div></div>`;
+  html+=`<div class="grid2" style="margin-top:10px"><div><label>Title</label><input id="noteTitle" value="Learner progress note"></div><div><label>Timestamp</label><input id="noteTimestamp" value="${esc(now)}"></div></div>`;
+  html+=`<div class="editor-toolbar"><button id="addHeading" class="btn sm">Add heading</button><button id="addBullets" class="btn sm">Bullet list</button><button id="addVitalsHeading" class="btn sm">Vitals/Labs heading</button><button id="clearNote" class="btn ghost sm">Clear</button></div>`;
+  html+=`<textarea id="noteText" class="note-editor" rows="20" placeholder="Reason for consult\n\nHPI\n\nPast medical history\n\nMedications\n\nPhysical exam\n\nInvestigations\n\nAssessment and plan"></textarea>`;
+  html+=`<div class="row" style="margin-top:10px"><button id="saveNote" class="btn primary">Save note</button><span id="noteMsg" class="muted"></span></div></div>`;
+  $('content').innerHTML=html;
+  $('backNoteList').onclick=()=>{state.noteMode='list'; renderNotes();};
+  $('addHeading').onclick=()=>insertIntoNote('\n\n' + (prompt('Heading name')||'Heading') + '\n');
+  $('addBullets').onclick=()=>insertIntoNote('\n- \n- \n- ');
+  $('addVitalsHeading').onclick=()=>insertIntoNote('\n\nVitals\n\nLabs\n\nImaging/Investigations\n');
+  $('clearNote').onclick=()=>{ if(confirm('Clear note text?')) $('noteText').value=''; };
+  $('saveNote').onclick=saveNote;
+}
+function insertIntoNote(text){
+  const el=$('noteText'); const start=el.selectionStart ?? el.value.length; const end=el.selectionEnd ?? start;
+  el.value=el.value.slice(0,start)+text+el.value.slice(end); el.focus(); el.selectionStart=el.selectionEnd=start+text.length;
+}
+async function saveNote(){
+  const text=$('noteText').value.trim(); if(!text){$('noteMsg').textContent='Enter note text.';return;}
+  try{
+    const payload={ noteType:$('noteType').value, type:$('noteType').value, service:$('noteService').value, providerName:$('noteProvider').value, author:$('noteProvider').value, title:$('noteTitle').value, datetime:$('noteTimestamp').value, text };
+    const j=await api('/case/sessions/'+state.sessionId+'/note',{method:'POST',body:JSON.stringify(payload)});
+    applyCase(j); state.activeTab='Notes'; state.noteMode='list'; state.selectedNoteId=null; renderTabs(); renderNotes(); toast('Note saved.');
+  }catch(e){ $('noteMsg').textContent=err(e); }
+}
+function renderOrders(){
+  let html=`<div class="split"><div><div class="panel"><div class="panel-title"><h2>Orders</h2><button id="addOrder" class="btn sm">Add order</button></div><div id="orderList" class="order-list"></div><div class="row" style="margin-top:10px"><button id="enterOrders" class="btn primary">Enter orders</button><span id="orderMsg" class="muted"></span></div></div></div><div><div class="panel"><h2>Order history</h2><div class="activity">`;
+  const hist=[...(state.orderHistory||[])].reverse(); if(!hist.length) html+='<div class="muted">No orders entered yet.</div>';
+  hist.forEach(o=>{ html+=`<div class="item"><div><strong>${esc(o.order)}</strong></div><div class="item-meta">${esc(o.at||'')} · ${esc(o.status||'')}</div><div class="muted">${esc(o.comment||'')}</div></div>`; });
+  html+=`</div></div><div class="panel"><h2>Activity</h2><div class="activity">${activityHtml()}</div></div></div></div>`;
+  $('content').innerHTML=html; initOrderDraft();
+}
+function activityHtml(){ const acts=[...(state.activity||[])].reverse(); if(!acts.length) return '<div class="muted">No activity.</div>'; return acts.map(a=>`<div class="item"><div class="item-meta">${esc(a.at||'')} · ${esc(a.type||'')}</div><div class="note-text">${esc(a.text||'')}</div></div>`).join(''); }
+let orderDraft=[];
+function initOrderDraft(){ orderDraft=['']; renderOrderDraft(); $('addOrder').onclick=()=>{orderDraft.push(''); renderOrderDraft();}; $('enterOrders').onclick=enterOrders; }
+function renderOrderDraft(){ const box=$('orderList'); if(!box) return; box.innerHTML=''; orderDraft.forEach((o,i)=>{ const div=document.createElement('div'); div.className='order-row'; div.innerHTML=`<input data-ord="${i}" value="${esc(o)}" placeholder="e.g., CBC, extended electrolytes tomorrow AM"><button class="btn ghost sm" data-del="${i}">Remove</button>`; box.appendChild(div); }); box.querySelectorAll('input[data-ord]').forEach(inp=>inp.oninput=()=>orderDraft[Number(inp.dataset.ord)]=inp.value); box.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ orderDraft.splice(Number(b.dataset.del),1); if(!orderDraft.length) orderDraft=['']; renderOrderDraft();}); }
+async function enterOrders(){ const orders=orderDraft.map(s=>s.trim()).filter(Boolean); if(!orders.length){$('orderMsg').textContent='No orders to enter.';return;} if(!confirm('Enter these orders?')) return; const btn=$('enterOrders'); setBusy(btn,true,'Entering…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/orders',{method:'POST',body:JSON.stringify({orders})}); applyCase(j); state.activeTab='Orders'; renderTabs(); renderOrders(); toast(j.visibleEvent || 'Orders entered.'); }catch(e){ $('orderMsg').textContent=err(e); } finally{ setBusy(btn,false,'Enter orders'); } }
 
-  async function nextQuestion(){
-    try{
-      resetDiscussion();
-      const r=await api('/api/next',{method:'POST',body:JSON.stringify({sessionId:state.sessionId})});
-      state.qNumber=r.q_number; state.difficulty=r.difficulty;
-      $('qHeader').textContent=`#${state.qNumber}`; $('pillDiff').textContent=r.difficulty; $('question').textContent=r.question; $('answer').value='';
-      $('resultBox').classList.add('hidden'); $('btnProceed').classList.add('hidden'); state.awaitingProceed=false;
-      $('answer').disabled=false; $('submitAnswer').disabled=false; $('answer').focus();
-      ['question','qHeader'].forEach(id=>{ $(id).classList.remove('pop'); void $(id).offsetWidth; $(id).classList.add('pop'); });
-    }catch(e){ const box=$('resultBox'); box.className='result bad'; box.textContent='Failed to get next question: '+errMsg(e); box.classList.remove('hidden'); }
-  }
-
-  function renderResult(payload){
-    const box=$('resultBox');
-    const verdict=payload.verdict || (payload.invalid_question?'invalid':(payload.correct?'correct':'incorrect'));
-    const credit=Number(payload.credit ?? (payload.correct?1:0));
-    const points=Number(payload.points_delta||0);
-    const max=Number(payload.max_points||0);
-    let cls='bad', title='Incorrect', subtitle='';
-    if(payload.invalid_question || verdict==='invalid'){ cls='invalid'; title='Question flagged as ambiguous or flawed'; subtitle='No penalty applied.'; }
-    else if(verdict==='correct'){ cls='ok'; title='Correct'; subtitle='Full credit.'; }
-    else if(verdict==='partial'){ cls='partial'; title='Partially correct'; subtitle=`${Math.round(credit*100)}% credit.`; }
-    else { cls='bad'; title='Incorrect'; subtitle='Penalty applied.'; }
-    const deltaClass=points>0?'pos':(points<0?'neg':'neutral');
-    const maxText=max ? ` / ${max}` : '';
-    box.className='result '+cls;
-    box.innerHTML=`
-      <div class="result-title"><span>${escapeHtml(title)}</span><span class="credit-badge">${escapeHtml(subtitle)}</span></div>
-      ${payload.explanation?`<div class="muted">${escapeHtml(payload.explanation)}</div>`:''}
-      <div class="delta ${deltaClass}">${points>0?'+':''}${points} pts${maxText}</div>
-    `;
-    if(payload.nextDifficulty) $('pillDiff').textContent=payload.nextDifficulty;
-    box.classList.remove('hidden'); box.classList.remove('pop'); void box.offsetWidth; box.classList.add('pop');
-    $('postAnswerActions').style.display='flex'; $('showDiscussion').classList.remove('hidden');
-  }
-
-  async function submitAnswer(){
-    if(state.awaitingProceed) return; const answer=$('answer').value.trim(); if(!answer){ $('answer').focus(); return; }
-    try{
-      const r=await api('/api/answer',{method:'POST',body:JSON.stringify({sessionId:state.sessionId,answer})});
-      renderResult(r); if(typeof r.score!=='undefined') updateScore(r.score); $('btnProceed').classList.remove('hidden'); state.awaitingProceed=true; $('answer').disabled=true; $('submitAnswer').disabled=true; loadLeaderboard();
-    }catch(e){ const box=$('resultBox'); box.className='result bad'; box.textContent='Grading failed: '+errMsg(e); box.classList.remove('hidden'); }
-  }
-
-  async function concludeWithFeedback(){
-    if(!state.sessionId) return;
-    try{ const r=await api('/api/conclude',{method:'POST',body:JSON.stringify({sessionId:state.sessionId})}); $('sumStats').innerHTML=`New exclusion count: <strong>${r.new_count}</strong> · Next number: <strong>${r.next_number}</strong>`+(typeof r.session_points!=='undefined'?` · Session points: <strong>${r.session_points}</strong>`:''); $('sumFeedback').textContent=r.feedback||''; $('sumRating').textContent=r.rating||''; showStep('summary'); }
-    catch(e){ alert('Failed to save & get feedback: '+errMsg(e)); }
-  }
-
-  $('aiSelect').addEventListener('change', ()=>{ const v=$('aiSelect').value; if(v==='casesim') window.location.href='/casesim'; else if(v==='learner') window.location.href='/learner'; else connectAndBoot(); });
-  window.addEventListener('load', ()=>{ connectAndBoot(); showStep('connect'); });
-  $('goUserType').addEventListener('click', ()=>showStep('user-type'));
-  $('btnNewUser').addEventListener('click', ()=>showStep('new'));
-  $('btnExistingUser').addEventListener('click', ()=>showStep('existing'));
-  document.querySelectorAll('[data-back]').forEach(b=>b.addEventListener('click',e=>showStep(e.currentTarget.getAttribute('data-back'))));
-  $('createUser').addEventListener('click', async()=>{ const u=$('newUsername').value.trim(); if(!u){$('newUserMsg').textContent='Please enter a username.';return;} try{ await api('/api/users',{method:'POST',body:JSON.stringify({username:u})}); setUser(u); $('newUserMsg').textContent=`User "${u}" created.`; await prepDashboard(); showStep('dashboard'); }catch(e){ $('newUserMsg').textContent=errMsg(e); } });
-  $('useExisting').addEventListener('click', async()=>{ const u=$('existingUsername').value.trim(); if(!u){$('existingMsg').textContent='Please enter your username.';return;} try{ await api('/api/exclusions/count?username='+encodeURIComponent(u)); setUser(u); $('existingMsg').textContent=`Welcome back, ${u}.`; await prepDashboard(); showStep('dashboard'); }catch(e){ $('existingMsg').textContent=errMsg(e); } });
-  $('startSession').addEventListener('click', startSession);
-  $('goHistory').addEventListener('click', async()=>{ await loadHistory(); showStep('history'); });
-  $('reloadHistory').addEventListener('click', loadHistory);
-  $('submitAnswer').addEventListener('click', submitAnswer);
-  $('btnProceed').addEventListener('click', nextQuestion);
-  $('btnSaveAndFeedback').addEventListener('click', concludeWithFeedback);
-  $('showDiscussion').addEventListener('click', openDiscussion);
-  $('toggleDiscussion').addEventListener('click', hideDiscussion);
-  $('sendDiscussion').addEventListener('click', ()=>sendDiscussion());
-  $('discussionInput').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendDiscussion(); } });
-  document.querySelectorAll('[data-discuss]').forEach(b=>b.addEventListener('click',e=>sendDiscussion(e.currentTarget.getAttribute('data-discuss'))));
-  $('answer').addEventListener('keydown', e=>{ if(e.key==='Enter') submitAnswer(); });
+function openAskModal(){
+  showModal(`<div class="kicker">Interaction</div><h2>Ask, examine, or request chart information</h2><p class="sub">The response should be objective only. Examples: “ask about travel history”, “perform JVP and cardiac auscultation”, “review previous creatinine values”, “look at abdominal exam”.</p><textarea id="askText" rows="5" placeholder="Type your request..."></textarea><div class="row" style="margin-top:10px"><button id="sendAsk" class="btn primary">Send</button><button id="closeModal" class="btn ghost">Close</button></div><div id="askResponse" class="report hidden" style="margin-top:12px"></div>`);
+  $('closeModal').onclick=closeModal; $('sendAsk').onclick=sendAsk;
+}
+async function sendAsk(){ const request=$('askText').value.trim(); if(!request) return; const btn=$('sendAsk'); setBusy(btn,true,'Sending…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/interact',{method:'POST',body:JSON.stringify({request})}); applyCase(j); $('askResponse').textContent=j.response||''; $('askResponse').classList.remove('hidden'); }catch(e){ $('askResponse').textContent=err(e); $('askResponse').classList.remove('hidden'); } finally{ setBusy(btn,false,'Send'); } }
+async function advanceCase(){ const btn=$('btnPage'); setBusy(btn,true,'Advancing…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/advance',{method:'POST',body:JSON.stringify({})}); applyCase(j); toast(j.event || 'No new events.'); }catch(e){ toast(err(e),true); } finally{ setBusy(btn,false,'Page me / advance'); } }
+function openConcludeModal(){
+  showModal(`<div class="kicker">Conclude</div><h2>End case and get attending feedback</h2><p class="sub">Paste your final consult/progress note and final orders if you want them included in the assessment.</p><label>Final note</label><textarea id="finalNote" rows="8"></textarea><label style="margin-top:8px">Final orders / disposition</label><textarea id="finalOrders" rows="5"></textarea><div class="row" style="margin-top:10px"><button id="doConclude" class="btn danger">Conclude case</button><button id="closeModal" class="btn ghost">Cancel</button></div><div id="conclusionBox" class="hidden" style="margin-top:12px"></div>`);
+  $('closeModal').onclick=closeModal; $('doConclude').onclick=concludeCase;
+}
+async function concludeCase(){ const btn=$('doConclude'); setBusy(btn,true,'Concluding…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/conclude',{method:'POST',body:JSON.stringify({finalNoteText:$('finalNote').value,finalOrdersText:$('finalOrders').value})}); applyCase(j); renderConclusion(j.conclusion); }catch(e){ $('conclusionBox').className='report'; $('conclusionBox').textContent=err(e); } finally{ setBusy(btn,false,'Conclude case'); } }
+function renderConclusion(c){ const list=x=>(x||[]).map(v=>`<li>${esc(v)}</li>`).join(''); const html=`<div class="panel"><h2>Diagnosis: ${esc(c.diagnosis||'')}</h2><p class="sub">${esc(c.caseSummary||'')}</p><h3>Diagnostic feedback</h3><ul>${list(c.diagnosticFeedback)}</ul><h3>Management feedback</h3><ul>${list(c.managementFeedback)}</ul><h3>Documentation feedback</h3><ul>${list(c.documentationFeedback)}</ul><h3>Safety issues</h3><ul>${list(c.safetyIssues)}</ul><h3>What good looked like</h3><ul>${list(c.whatGoodLookedLike)}</ul><div class="chip">Overall rating <strong>${esc(c.overallRating||'')}</strong></div><h3 style="margin-top:12px">Update + Conclude exclusion text</h3><div class="codebox">${esc(c.exclusionEntry||'')}</div></div>`; $('conclusionBox').innerHTML=html; $('conclusionBox').classList.remove('hidden'); }
+function showModal(html){ $('modalContent').innerHTML=html; $('modal').classList.remove('hidden'); }
+function closeModal(){ $('modal').classList.add('hidden'); $('modalContent').innerHTML=''; }
+$('modal').addEventListener('click',e=>{ if(e.target.id==='modal') closeModal(); });
 </script>
 </body>
 </html>
