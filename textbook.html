@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>IM Textbook</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem('theme')==='dark'?'dark':'light'}catch(e){}</script>
+<link rel="stylesheet" href="/assets/theme.css" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap" />
+<script src="/assets/theme.js"></script>
+<style>
+  :root { --serif: 'IBM Plex Serif', Georgia, 'Times New Roman', serif; }
+  .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: calc(100vh - 52px); }
+  .side { display: grid; grid-template-rows: auto minmax(0, 1fr); border-right: 1px solid var(--line); background: var(--surface); min-height: 0; }
+  .side-top { padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
+  .side-top input { padding: 9px 12px; }
+  .side-top .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  .tree { overflow: auto; padding: 6px 8px 32px; }
+  details > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 8px; padding: 7px 8px; border-radius: var(--r-sm); font-weight: 600; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary:hover { background: var(--surface-2); }
+  summary .num { font-family: var(--mono); color: var(--muted); font-weight: 500; font-size: 12px; min-width: 18px; }
+  summary .name { flex: 1; }
+  summary .count { color: var(--muted); font-weight: 400; font-size: 12px; font-family: var(--mono); }
+  .art-link { display: flex; gap: 8px; align-items: center; padding: 5px 8px 5px 34px; border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; font-size: 13.5px; }
+  .art-link:hover { background: var(--surface-2); color: var(--ink); }
+  .art-link[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 500; }
+  .art-link .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--line-strong); flex: none; }
+  .art-link.read .dot { background: var(--accent); border-color: var(--accent); }
+
+  .main { overflow: auto; scroll-behavior: smooth; }
+  .page { max-width: 1120px; margin: 0 auto; padding: 32px 28px 80px; }
+  .home h1 { font-family: var(--serif); font-size: 34px; font-weight: 600; letter-spacing: -.01em; margin-bottom: 8px; }
+  .home .lede { color: var(--ink-2); max-width: 62ch; line-height: 1.6; margin-bottom: 28px; }
+  .spec-list { columns: 2 320px; column-gap: 40px; }
+  .spec { break-inside: avoid; display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); }
+  .spec:hover .t { color: var(--accent); }
+  .spec .n { font-family: var(--mono); color: var(--muted); font-size: 13px; }
+  .spec .t { font-weight: 600; }
+  .spec .c { color: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+  .spec .bar { grid-column: 2 / 4; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .spec .bar span { display: block; height: 100%; background: var(--accent); }
+
+  .article-grid { display: grid; grid-template-columns: minmax(0, 72ch) 220px; gap: 48px; justify-content: center; }
+  .crumbs { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+  .crumbs a { color: var(--muted); text-decoration: none; }
+  .crumbs a:hover { color: var(--accent); }
+  .art-head h1 { font-family: var(--serif); font-size: 32px; line-height: 1.2; font-weight: 600; letter-spacing: -.01em; }
+  .art-meta { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin: 10px 0 26px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+  .art-meta .spacer { flex: 1; }
+  .prose { font-family: var(--serif); font-size: 16.5px; line-height: 1.7; color: var(--ink); }
+  .prose h2 { font-family: var(--sans); font-size: 20px; margin: 34px 0 10px; scroll-margin-top: 16px; }
+  .prose h3 { font-family: var(--sans); font-size: 16px; margin: 24px 0 8px; scroll-margin-top: 16px; }
+  .prose h4 { font-family: var(--sans); font-size: 14.5px; color: var(--ink-2); margin: 18px 0 6px; scroll-margin-top: 16px; }
+  .prose p { margin: 0 0 12px; }
+  .prose ul, .prose ol { margin: 0 0 12px; padding-left: 24px; }
+  .prose li { margin: 3px 0; }
+  .prose li > ul, .prose li > ol { margin: 4px 0; }
+  .prose a { color: var(--accent); }
+  .prose img { max-width: 100%; height: auto; border-radius: var(--r-sm); border: 1px solid var(--line); margin: 8px 0; }
+  .prose .table-wrap { overflow-x: auto; margin: 6px 0 16px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+  .prose table { font-family: var(--sans); font-size: 13.5px; line-height: 1.5; }
+  .prose td, .prose th { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); position: static; }
+  .prose td p, .prose th p { margin: 0 0 4px; }
+  .prose th { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+  .prose mark, .snip mark { background: var(--warn-soft); color: inherit; padding: 0 1px; border-radius: 2px; }
+  .flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { background: var(--warn-soft); } to { background: transparent; } }
+
+  .toc { position: sticky; top: 24px; align-self: start; font-size: 13px; max-height: calc(100vh - 120px); overflow: auto; }
+  .toc h2 { font-size: 12.5px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+  .toc a { display: block; padding: 4px 0 4px 10px; border-left: 2px solid var(--line); color: var(--muted); text-decoration: none; line-height: 1.35; }
+  .toc a.d2 { padding-left: 22px; }
+  .toc a.d3 { padding-left: 34px; font-size: 12.5px; }
+  .toc a:hover { color: var(--ink); }
+  .toc a.active { color: var(--ink); border-left-color: var(--accent); }
+
+  .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); }
+  .pager a { display: block; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); text-decoration: none; color: var(--ink); background: var(--surface); }
+  .pager a:hover { border-color: var(--line-strong); }
+  .pager .lbl { display: block; color: var(--muted); font-size: 12px; }
+  .pager .next { text-align: right; }
+
+  .results h1 { font-size: 22px; margin-bottom: 4px; }
+  .result { display: block; padding: 14px 0; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); max-width: 80ch; }
+  .result:hover .rt { color: var(--accent); }
+  .result .rp { color: var(--muted); font-size: 12.5px; }
+  .result .rt { font-weight: 600; margin: 2px 0 4px; }
+  .snip { color: var(--ink-2); font-size: 13.5px; line-height: 1.55; }
+  .notice { padding: 16px; border-radius: var(--r); background: var(--warn-soft); color: var(--ink); max-width: 70ch; line-height: 1.6; }
+  .empty { color: var(--muted); padding: 40px 0; }
+
+  @media (max-width: 1180px) { .article-grid { grid-template-columns: minmax(0, 72ch); } .toc { display: none; } }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; height: auto; } .side { max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); } .main { overflow: visible; } .page { padding: 20px 16px 60px; } .art-head h1 { font-size: 26px; } }
+  @media print { .appbar, .side, .toc, .pager, .art-meta button { display: none !important; } .layout { display: block; height: auto; } .main { overflow: visible; } }
+</style>
+</head>
+<body>
+<header class="appbar">
+  <span class="brand">Clinical practice</span>
+  <nav aria-label="Tools">
+    <a href="/">One Line Pimp</a>
+    <a href="/casesim">Case Simulator</a>
+    <a href="/textbook" aria-current="page">Textbook</a>
+  </nav>
+  <span class="spacer"></span>
+  <span id="who" class="who"></span>
+  <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle dark theme"><span class="track"><span class="knob"></span></span><span class="label">Light</span></button>
+</header>
+
+<div class="layout">
+  <aside class="side" aria-label="Textbook contents">
+    <div class="side-top">
+      <form id="searchForm" role="search"><input id="q" type="search" placeholder="Search the textbook" aria-label="Search the textbook" autocomplete="off"></form>
+      <div class="meta"><span id="progress"></span><span id="synced"></span></div>
+    </div>
+    <nav class="tree" id="tree" aria-label="Subspecialties"></nav>
+  </aside>
+  <main class="main" id="main"><div class="page" id="page"></div></main>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const TOKEN = localStorage.getItem('authToken') || '';
+const S = { specs: [], status: {}, read: new Set(), current: null, openSpec: null };
+const readKey = (id) => 'tb:' + id;
+
+function toast(m, bad) { const t = $('toast'); t.textContent = m; t.className = 'toast' + (bad ? ' bad' : ''); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), 3500); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {}) } });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) throw Object.assign(new Error('Sign in to read the textbook.'), { auth: true });
+  if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
+  return j;
+}
+const artHref = (id, anchor) => `#/a/${encodeURIComponent(id)}${anchor ? '?s=' + encodeURIComponent(anchor) : ''}`;
+
+// ---------- Sidebar ----------
+function renderTree() {
+  const all = S.specs.flatMap(s => s.articles);
+  const done = all.filter(a => S.read.has(a.id)).length;
+  $('progress').textContent = all.length ? `${done} of ${all.length} read` : '';
+  $('synced').textContent = S.status.lastSync ? 'Updated ' + new Date(S.status.lastSync).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '';
+  $('tree').innerHTML = S.specs.map(s => {
+    const r = s.articles.filter(a => S.read.has(a.id)).length;
+    const open = S.openSpec === s.specialty || s.articles.some(a => a.id === S.current);
+    return `<details ${open ? 'open' : ''} data-spec="${esc(s.specialty)}"><summary><span class="num">${String(s.order).padStart(2, '0')}</span><span class="name">${esc(s.specialty)}</span><span class="count">${r}/${s.articles.length}</span></summary>
+      ${s.articles.map(a => `<a class="art-link ${S.read.has(a.id) ? 'read' : ''}" href="${artHref(a.id)}" ${a.id === S.current ? 'aria-current="page"' : ''}><span class="dot" aria-hidden="true"></span><span>${esc(a.title)}</span></a>`).join('')}</details>`;
+  }).join('') || '<p class="muted" style="padding:12px">No articles yet.</p>';
+  $('tree').querySelectorAll('details').forEach(d => d.addEventListener('toggle', () => { if (d.open) S.openSpec = d.dataset.spec; }));
+  const cur = $('tree').querySelector('[aria-current="page"]');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+// ---------- Views ----------
+function renderHome() {
+  S.current = null;
+  const st = S.status;
+  let html = `<div class="home"><h1>Internal Medicine textbook</h1><p class="lede">Your CTU clinical manual, organized by subspecialty. Search across every topic, or open a subspecialty on the left. The text comes from the IM Textbook Project documents in Google Drive and refreshes automatically when they change.</p>`;
+  if (!st.configured) html += `<div class="notice"><b>The textbook isn't connected to Google Drive yet.</b><br>Add a Google service account key to the server as <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> and share the "IM Textbook Project" folder with that account. Articles appear after the first sync.</div>`;
+  else if (!S.specs.length) html += `<div class="notice">${st.syncing ? 'Loading the textbook from Google Drive. This takes a minute or two the first time; refresh shortly.' : `No articles yet.${st.lastError ? ' Last sync error: ' + esc(st.lastError) : ''}`}</div>`;
+  html += `<div class="spec-list">${S.specs.map(s => {
+    const r = s.articles.filter(a => S.read.has(a.id)).length;
+    return `<a class="spec" href="${s.articles[0] ? artHref(s.articles[0].id) : '#/'}"><span class="n">${String(s.order).padStart(2, '0')}</span><span class="t">${esc(s.specialty)}</span><span class="c">${s.articles.length} topics</span><span class="bar"><span style="width:${s.articles.length ? r / s.articles.length * 100 : 0}%"></span></span></a>`;
+  }).join('')}</div></div>`;
+  $('page').innerHTML = html;
+  renderTree();
+}
+
+let tocObserver = null;
+async function renderArticle(id, anchor) {
+  S.current = id;
+  renderTree();
+  $('page').innerHTML = '<p class="empty">Loading…</p>';
+  let a;
+  try { a = await api('/textbook/api/article?id=' + encodeURIComponent(id)); }
+  catch (e) { $('page').innerHTML = `<p class="empty">${esc(e.message)} <a href="#/">Back to contents</a></p>`; return; }
+  const isRead = S.read.has(a.id);
+  const minutes = Math.max(1, Math.round((a.words || 0) / 200));
+  const toc = (a.toc || []).filter(t => t.depth <= 2);
+  $('page').innerHTML = `<div class="article-grid"><article>
+      <div class="art-head"><div class="crumbs"><a href="#/">Textbook</a> / <a href="#/" data-open="${esc(a.specialty)}">${esc(a.specialty)}</a></div><h1>${esc(a.title)}</h1></div>
+      <div class="art-meta"><span>${minutes} min read</span>${a.updated ? `<span>Source updated ${esc(new Date(a.updated).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }))}</span>` : ''}<span class="spacer"></span>
+        <button class="btn ${isRead ? '' : 'primary'} sm" id="btnRead" aria-pressed="${isRead}">${isRead ? 'Read' : 'Mark as read'}</button></div>
+      <div class="prose" id="prose">${a.html}</div>
+      <nav class="pager" aria-label="Previous and next topic">${a.prev ? `<a href="${artHref(a.prev.id)}"><span class="lbl">Previous</span>${esc(a.prev.title)}</a>` : '<span></span>'}${a.next ? `<a class="next" href="${artHref(a.next.id)}"><span class="lbl">Next${a.next.specialty !== a.specialty ? ', ' + esc(a.next.specialty) : ''}</span>${esc(a.next.title)}</a>` : '<span></span>'}</nav>
+    </article>
+    ${toc.length > 1 ? `<nav class="toc" aria-label="On this page"><h2>On this page</h2>${toc.map(t => `<a class="d${t.depth}" href="#" data-anchor="${esc(t.anchor)}">${esc(t.text)}</a>`).join('')}</nav>` : '<div></div>'}</div>`;
+  document.title = `${a.title}, IM Textbook`;
+  $('page').querySelectorAll('[data-open]').forEach(l => l.onclick = () => { S.openSpec = l.dataset.open; });
+  $('page').querySelectorAll('.toc a').forEach(l => l.onclick = (e) => { e.preventDefault(); jumpTo(l.dataset.anchor); });
+  $('btnRead').onclick = toggleRead;
+  if (anchor) jumpTo(anchor, true); else $('main').scrollTop = 0;
+  // Scroll-spy for the contents list.
+  if (tocObserver) tocObserver.disconnect();
+  const links = new Map([...$('page').querySelectorAll('.toc a')].map(l => [l.dataset.anchor, l]));
+  if (links.size) {
+    tocObserver = new IntersectionObserver((entries) => {
+      const vis = entries.filter(e => e.isIntersecting).sort((x, y) => x.boundingClientRect.top - y.boundingClientRect.top)[0];
+      if (vis && links.has(vis.target.id)) { links.forEach(l => l.classList.remove('active')); links.get(vis.target.id).classList.add('active'); }
+    }, { root: $('main'), rootMargin: '0px 0px -70% 0px' });
+    $('prose').querySelectorAll('h2[id], h3[id]').forEach(h => tocObserver.observe(h));
+  }
+}
+function jumpTo(anchor, flash) {
+  const el = document.getElementById(anchor);
+  if (!el) return;
+  el.scrollIntoView({ behavior: flash ? 'auto' : 'smooth', block: 'start' });
+  if (flash) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+}
+async function toggleRead() {
+  const id = S.current, was = S.read.has(id);
+  try {
+    await api('/med/topics', { method: was ? 'DELETE' : 'POST', body: JSON.stringify({ topic: readKey(id) }) });
+    was ? S.read.delete(id) : S.read.add(id);
+    const b = $('btnRead'); b.textContent = was ? 'Mark as read' : 'Read'; b.className = 'btn sm ' + (was ? 'primary' : ''); b.setAttribute('aria-pressed', String(!was));
+    renderTree();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function renderSearch(qtext) {
+  S.current = null; renderTree();
+  $('q').value = qtext;
+  if (!qtext.trim()) return renderHome();
+  $('page').innerHTML = '<p class="empty">Searching…</p>';
+  try {
+    const { results, total } = await api('/textbook/api/search?q=' + encodeURIComponent(qtext));
+    $('page').innerHTML = `<div class="results"><h1>Results for “${esc(qtext)}”</h1><p class="muted" style="margin-bottom:10px">${total ? `${total} matching section${total === 1 ? '' : 's'}` : ''}</p>
+      ${results.length ? results.map(r => `<a class="result" href="${artHref(r.articleId, r.anchor)}"><div class="rp">${esc(r.specialty)} / ${esc(r.articleTitle)}</div><div class="rt">${esc(r.sectionTitle || r.articleTitle)}</div><div class="snip">${r.snippet}</div></a>`).join('') : '<p class="empty">Nothing matched. Try fewer or different words, or an abbreviation spelled out.</p>'}</div>`;
+    $('main').scrollTop = 0;
+  } catch (e) { $('page').innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
+}
+
+// ---------- Routing ----------
+function route() {
+  const h = location.hash || '#/';
+  let m = h.match(/^#\/a\/([^?]+)(?:\?s=(.+))?$/);
+  if (m) return renderArticle(decodeURIComponent(m[1]), m[2] ? decodeURIComponent(m[2]) : '');
+  m = h.match(/^#\/search\?q=(.*)$/);
+  if (m) return renderSearch(decodeURIComponent(m[1]));
+  document.title = 'IM Textbook';
+  renderHome();
+}
+window.addEventListener('hashchange', route);
+$('searchForm').addEventListener('submit', (e) => { e.preventDefault(); location.hash = '#/search?q=' + encodeURIComponent($('q').value.trim()); });
+let typing;
+$('q').addEventListener('input', () => { clearTimeout(typing); const v = $('q').value.trim(); if (v.length >= 3) typing = setTimeout(() => { history.replaceState(null, '', '#/search?q=' + encodeURIComponent(v)); renderSearch(v); }, 300); });
+document.addEventListener('keydown', (e) => { if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); $('q').focus(); } });
+
+(async () => {
+  if (!TOKEN) { $('page').innerHTML = '<div class="home"><h1>Internal Medicine textbook</h1><p class="lede">Sign in with your One Line Pimp account to read the textbook.</p><a class="btn primary" href="/">Sign in</a></div>'; return; }
+  try {
+    const [me, tree, topics] = await Promise.all([api('/auth/me'), api('/textbook/api/tree'), api('/med/topics').catch(() => ({ topics: [] }))]);
+    $('who').textContent = me.username;
+    S.specs = tree.specialties; S.status = tree.status;
+    S.read = new Set((topics.topics || []).filter(t => t.startsWith('tb:')).map(t => t.slice(3)));
+  } catch (e) {
+    $('page').innerHTML = `<div class="home"><h1>Internal Medicine textbook</h1><p class="lede">${esc(e.message)}</p>${e.auth ? '<a class="btn primary" href="/">Sign in</a>' : ''}</div>`;
+    return;
+  }
+  route();
+})();
+</script>
+</body>
+</html>
