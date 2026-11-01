@@ -1,0 +1,3 @@
+node_modules/
+medlearner.db*
+.env

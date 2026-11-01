@@ -1,412 +1,632 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Medical Case Simulator</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    :root{
-      --bg:#080b10; --bg2:#0d1118; --panel:#111722; --panel2:#0d131d; --panel3:#151d2a;
-      --ink:#eef3fb; --muted:#9aa7b7; --muted2:#667386; --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
-      --accent:#91b7ff; --accent2:#65d8b0; --bad:#ff6b7e; --bad2:rgba(255,107,126,.14); --warn:#e9bd68; --ok:#6ee7a8;
-      --shadow:0 18px 55px rgba(0,0,0,.32); --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
-    }
-    *{box-sizing:border-box} html,body{height:100%}
-    body{margin:0;color:var(--ink);font:13px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:
-      radial-gradient(700px 360px at 18% -8%,rgba(145,183,255,.11),transparent 65%),
-      radial-gradient(600px 300px at 105% 5%,rgba(101,216,176,.07),transparent 60%),linear-gradient(180deg,var(--bg),var(--bg2));}
-    button,input,select,textarea{font:inherit;color:var(--ink)}
-    button{cursor:pointer}
-    header{height:48px;display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:rgba(8,11,16,.82);backdrop-filter:blur(14px);position:sticky;top:0;z-index:10}
-    .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.02em}.mark{width:22px;height:22px;border-radius:8px;background:linear-gradient(135deg,#8eb4ff,#65d8b0)}
-    .spacer{flex:1}.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;padding:4px 9px;background:rgba(255,255,255,.03);color:var(--muted);white-space:nowrap}.chip strong{color:var(--ink)}
-    .btn{border:1px solid var(--line2);border-radius:9px;background:#151d2a;padding:6px 10px;min-height:30px;font-weight:650;transition:.14s ease}
-    .btn:hover{background:#1b2535}.btn.primary{background:#203354;border-color:rgba(145,183,255,.34);color:#e7efff}.btn.primary:hover{background:#284064}.btn.ghost{background:transparent;color:var(--muted)}.btn.danger{background:#2a1720;border-color:rgba(255,107,126,.32);color:#ffd9de}.btn.sm{padding:4px 7px;min-height:25px;font-size:12px}.btn:disabled{opacity:.48;cursor:not-allowed}
-    input,select,textarea{background:#0b111a;border:1px solid var(--line);border-radius:10px;padding:8px 10px;outline:none} textarea{resize:vertical} input:focus,textarea:focus,select:focus{border-color:rgba(145,183,255,.55);box-shadow:0 0 0 2px rgba(145,183,255,.10)}
-    .setup{max-width:960px;margin:18px auto;padding:0 16px}.card{background:linear-gradient(180deg,rgba(17,23,34,.96),rgba(13,19,29,.96));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}.kicker{text-transform:uppercase;letter-spacing:.12em;color:var(--muted2);font-size:11px;font-weight:800;margin-bottom:6px} h1,h2,h3{margin:0;line-height:1.15;letter-spacing:-.025em} h1{font-size:25px} h2{font-size:18px} h3{font-size:14px}.sub{color:var(--muted);max-width:72ch}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px} label{display:block;color:var(--muted);font-size:12px;margin:0 0 5px}.hidden{display:none!important}.muted{color:var(--muted)}.bad{color:var(--bad)}.ok{color:var(--ok)}
-    .app{height:calc(100vh - 48px);display:grid;grid-template-columns:260px minmax(0,1fr)}
-    aside{border-right:1px solid var(--line);background:rgba(13,17,24,.66);overflow:auto}.side-head{padding:12px;border-bottom:1px solid var(--line)}.patient-list{display:grid;gap:6px;padding:10px}.patient{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03);padding:10px;text-align:left}.patient.active{border-color:rgba(145,183,255,.42);background:rgba(145,183,255,.10)}.patient-name{font-weight:780}.patient-meta{color:var(--muted);font-size:12px;margin-top:2px}.patient-complaint{font-size:12px;color:#c7d2e3;margin-top:7px}
-    main{min-width:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);overflow:hidden}.banner{padding:12px 14px;border-bottom:1px solid var(--line);background:rgba(11,17,26,.64)}.banner-top{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}.demog{font-size:20px;font-weight:830}.banner-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.tabs{display:flex;gap:2px;overflow:auto;border-bottom:1px solid var(--line);background:rgba(10,15,23,.8);padding:0 10px}.tab{border:0;border-radius:0;background:transparent;color:var(--muted);padding:12px 10px;border-bottom:2px solid transparent;white-space:nowrap;font-weight:700}.tab.active{color:var(--ink);border-bottom-color:var(--accent);background:rgba(145,183,255,.055)}.content{overflow:auto;padding:14px;min-width:0}.panel{background:rgba(255,255,255,.025);border:1px solid var(--line);border-radius:13px;padding:12px;margin-bottom:12px}.panel-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.scroll-x{overflow:auto} table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px} th,td{border-bottom:1px solid var(--line);padding:8px 9px;text-align:left;vertical-align:top} th{color:var(--muted);font-weight:760;background:rgba(255,255,255,.025);position:sticky;top:0} td.value{font-family:var(--mono);cursor:pointer}.abn{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.critical{background:rgba(255,107,126,.25)!important;color:#fff;font-weight:900}.low,.high{background:var(--bad2)!important;color:#ffd5dc;font-weight:800}.normal{color:#e8eef8}.list{display:grid;gap:8px}.item{border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.025);padding:10px}.item:hover{border-color:rgba(255,255,255,.16)}.item-head{display:flex;justify-content:space-between;gap:10px}.item-title{font-weight:780}.item-meta{color:var(--muted);font-size:12px}.report{white-space:pre-wrap;background:#0a1018;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);line-height:1.45}.note-text{white-space:pre-wrap;color:#dce5f4}.split{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px}.order-list{display:grid;gap:8px}.order-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.activity{max-height:340px;overflow:auto;display:grid;gap:8px}.activity .item{font-size:12.5px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:100}.modal-card{max-width:780px;width:100%;max-height:86vh;overflow:auto}.toast{position:fixed;right:14px;bottom:14px;max-width:520px;background:#111a27;border:1px solid var(--line2);border-radius:12px;padding:11px 12px;box-shadow:var(--shadow);z-index:110}.codebox{white-space:pre-wrap;background:#080d14;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:var(--mono);font-size:12.5px}.refpop{position:fixed;z-index:120;background:#101826;border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);padding:9px;max-width:300px;color:#dbe5f4}
-    @media(max-width:980px){.app{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid var(--line)}.patient-list{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.split,.grid2,.grid3{grid-template-columns:1fr}main{overflow:visible}.content{overflow:visible}.banner-top{display:block}.app{display:block}}
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Case Simulator</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem('theme')==='dark'?'dark':'light'}catch(e){}</script>
+<link rel="stylesheet" href="/assets/theme.css" />
+<script src="/assets/theme.js"></script>
+<style>
+  /* ---------- Setup ---------- */
+  .setup { max-width: 1040px; margin: 28px auto; padding: 0 20px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; align-items: start; }
+  .setup h1 { margin-bottom: 6px; }
+  .setup .lede { color: var(--muted); max-width: 60ch; margin-bottom: 20px; }
+  .choice-row { margin-bottom: 16px; }
+  .start-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+  .case-list { display: grid; gap: 8px; }
+  .case-item { display: grid; gap: 2px; width: 100%; padding: 10px 12px; text-align: left; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); cursor: pointer; }
+  .case-item:hover { border-color: var(--line-strong); background: var(--surface-2); }
+  .case-item .t { font-weight: 600; }
+  .case-item .m { color: var(--muted); font-size: 12.5px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .login-box { max-width: 360px; }
 
-    .subtabs{display:flex;gap:6px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:6px;background:rgba(255,255,255,.018);margin-bottom:12px}
-    .subtab{border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);padding:6px 10px;font-weight:760;white-space:nowrap}
-    .subtab.active{background:rgba(145,183,255,.12);border-color:rgba(145,183,255,.34);color:var(--ink)}
-    .note-row{display:grid;grid-template-columns:180px minmax(130px,.8fr) minmax(130px,.8fr) minmax(150px,.8fr);gap:10px;align-items:center;text-align:left;width:100%}
-    .note-row .cell-label{display:block;color:var(--muted2);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px}
-    .note-row strong{font-weight:780}.note-row .note-list-value{color:#e7eefb}
-    .note-view-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
-    .note-meta-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 12px}
-    .note-meta-card{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.022);padding:8px}
-    .note-meta-card span{display:block;color:var(--muted);font-size:11.5px;margin-bottom:2px}.note-meta-card strong{font-weight:760}
-    .note-full{background:#0a1018;border:1px solid var(--line);border-radius:12px;padding:14px;line-height:1.55;color:#e8eef8}
-    .note-line{margin:0 0 7px}.note-spacer{height:8px}.note-heading{font-weight:820;text-decoration:underline;text-underline-offset:3px;color:#f2f6ff}.note-full ul{margin:4px 0 10px 20px;padding:0}.note-full li{margin:2px 0}
-    .editor-toolbar{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}
-    .rich-note-editor{min-height:460px;width:100%;background:#080d14;border:1px solid var(--line);border-radius:12px;padding:12px;line-height:1.5;outline:none;overflow:auto}
-    .rich-note-editor:focus{border-color:rgba(145,183,255,.55);box-shadow:0 0 0 2px rgba(145,183,255,.10)}
-    .rich-note-editor:empty:before{content:attr(data-placeholder);color:var(--muted2);white-space:pre-wrap}
-    .rich-note-editor ul{margin:6px 0 10px 22px;padding:0}.rich-note-editor li{margin:2px 0}
-    .editor-heading{font-weight:820;text-decoration:underline;text-underline-offset:3px;margin-top:10px;color:#f2f6ff}
-    @media(max-width:780px){.note-row{grid-template-columns:1fr}.note-meta-grid{grid-template-columns:1fr 1fr}}
-  </style>
+  /* ---------- Workspace ---------- */
+  .patientbar { display: flex; align-items: center; gap: 20px; padding: 10px 20px; background: var(--surface); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .who-block { min-width: 0; flex: 1; }
+  .pt-name { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+  .pt-meta { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+  .pt-meta b { font-weight: 600; color: var(--ink); }
+  .pt-meta .allergy b { color: var(--high); }
+  .toast { right: auto; left: 16px; }
+  .pt-complaint { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  /* The simulated clock is the one prominent element: it is what the learner controls. */
+  .clock { display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 14px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
+  .clock-face { display: grid; line-height: 1.1; }
+  .clock-time { font-family: var(--mono); font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .clock-day { color: var(--muted); font-size: 12px; }
+  .clock-ctl { display: flex; gap: 6px; align-items: center; }
+  .clock-ctl select { width: auto; padding: 6px 8px; }
+
+  .ws { display: grid; grid-template-columns: minmax(0, 1fr) 380px; height: calc(100vh - 52px - var(--pbar, 68px)); }
+  .chart { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; border-right: 1px solid var(--line); }
+  .tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .tab { padding: 11px 12px 9px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font-weight: 500; cursor: pointer; white-space: nowrap; }
+  .tab:hover { color: var(--ink); }
+  .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .tab .count { color: var(--muted); font-weight: 400; margin-left: 4px; font-size: 12px; }
+  .content { overflow: auto; padding: 16px; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: var(--r); }
+
+  /* Labs */
+  .lab-table { width: auto; }
+  .lab-wrap:has(.lab-table) { display: inline-block; max-width: 100%; }
+  .lab-table td.v, .lab-table th:not(:first-child) { min-width: 110px; width: 110px; }
+  .lab-wrap { overflow: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+  .lab-table th:first-child, .lab-table td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; min-width: 210px; }
+  .lab-table th:first-child { background: var(--surface-2); z-index: 2; }
+  .lab-table th { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .lab-table td.v { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .lab-test { font-weight: 500; }
+  .lab-ref { color: var(--muted); font-size: 12px; }
+  .v.high { color: var(--high); font-weight: 600; background: var(--high-soft); }
+  .v.low { color: var(--low); font-weight: 600; background: var(--low-soft); }
+  .v.critical { color: var(--crit); background: var(--crit-bg); font-weight: 700; }
+  .v .f { font-size: 11px; margin-left: 3px; }
+  .cat-tabs { display: flex; width: max-content; max-width: 100%; overflow-x: auto; margin-bottom: 12px; }
+
+  /* Lists */
+  .rows { display: grid; gap: 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+  .row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); align-items: start; }
+  .row:last-child { border-bottom: 0; }
+  button.row { width: 100%; text-align: left; border-left: 0; border-right: 0; border-top: 0; background: none; cursor: pointer; }
+  button.row:hover { background: var(--surface-2); }
+  .row .when { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .row .what { font-weight: 500; }
+  .row .sub { color: var(--muted); font-size: 13px; }
+  .report { white-space: pre-wrap; font-family: var(--mono); font-size: 13px; line-height: 1.55; padding: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+  .note-body { padding: 18px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); line-height: 1.6; max-width: 80ch; }
+  .note-body .h { font-weight: 600; margin-top: 10px; }
+  .note-body ul { margin: 2px 0 6px 18px; padding: 0; }
+  .note-editor textarea { min-height: 360px; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+
+  /* Orders */
+  .order-entry textarea { min-height: 96px; font-family: var(--mono); font-size: 13px; }
+  .order-entry .hint { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .status { font-size: 12px; }
+
+  /* Encounter panel */
+  .encounter { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; min-height: 0; background: var(--surface); }
+  .enc-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .feed { overflow: auto; padding: 12px 16px; display: grid; gap: 10px; align-content: start; }
+  .msg { max-width: 92%; padding: 8px 11px; border-radius: var(--r); line-height: 1.45; white-space: pre-wrap; font-size: 13.5px; }
+  .msg.q { justify-self: end; background: var(--accent-soft); color: var(--ink); }
+  .msg.a { justify-self: start; background: var(--surface-2); border: 1px solid var(--line); }
+  .msg .ts { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .evt { justify-self: stretch; padding: 8px 11px; border-left: 3px solid var(--line-strong); background: var(--surface-2); border-radius: 0 var(--r-sm) var(--r-sm) 0; white-space: pre-wrap; font-size: 13px; }
+  .evt.urgent { border-left-color: var(--warn); background: var(--warn-soft); }
+  .evt.critical { border-left-color: var(--high); background: var(--high-soft); }
+  .evt .ts { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .pending { border-top: 1px solid var(--line); padding: 10px 16px; max-height: 160px; overflow: auto; }
+  .pending h3 { font-size: 13px; margin-bottom: 6px; }
+  .pending li { font-size: 13px; color: var(--ink-2); }
+  .pending ul { margin: 0; padding-left: 18px; }
+  .composer { border-top: 1px solid var(--line); padding: 12px 16px; display: grid; gap: 8px; }
+  .composer textarea { min-height: 64px; }
+  .composer .row2 { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+  .notice { margin: 12px 16px 0; padding: 10px 12px; border-radius: var(--r-sm); background: var(--warn-soft); color: var(--warn); }
+
+  /* Debrief */
+  .debrief { max-width: 820px; margin: 28px auto; padding: 0 20px 40px; }
+  .debrief .dx { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin: 6px 0 10px; }
+  .debrief h2 { margin: 22px 0 8px; }
+  .debrief ul { margin: 0; padding-left: 20px; line-height: 1.6; }
+  .debrief .summary { color: var(--ink-2); line-height: 1.6; max-width: 72ch; }
+
+  dialog { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--ink); padding: 20px; width: min(640px, 92vw); box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(10, 15, 20, .45); }
+
+  @media (max-width: 1000px) {
+    .setup { grid-template-columns: 1fr; }
+    .ws { grid-template-columns: 1fr; height: auto; }
+    .chart { border-right: 0; }
+    .content { overflow: visible; }
+    .encounter { border-top: 1px solid var(--line); }
+    .feed { max-height: 50vh; }
+    .row { grid-template-columns: 1fr; gap: 2px; }
+    .grid3 { grid-template-columns: 1fr; }
+  }
+</style>
 </head>
 <body>
-<header>
-  <div class="brand"><div class="mark"></div><span>Medical Case Simulator</span></div>
-  <button class="btn ghost sm" onclick="location.href='/'">Pimp Simulator</button>
-  <button class="btn ghost sm" onclick="location.href='/learner'">Med Learner</button>
-  <div class="spacer"></div>
-  <span id="clockChip" class="chip hidden"><span id="clockDay">—</span> <strong id="clockTime">—</strong></span>
-  <span id="userChip" class="chip hidden">User <strong id="userVal">—</strong></span>
-  <span id="sessionChip" class="chip hidden">Session <strong id="sessionShort">—</strong></span>
-  <button id="btnPage" class="btn sm hidden">Page me / advance</button>
-  <button id="lockLink" class="btn ghost sm hidden">Download locked file</button>
-  <button id="btnConcludeTop" class="btn danger sm hidden">Conclude</button>
+<header class="appbar">
+  <span class="brand">Clinical practice</span>
+  <nav aria-label="Tools">
+    <a href="/">One Line Pimp</a>
+    <a href="/casesim" aria-current="page">Case Simulator</a>
+    <a href="/learner">Med Learner</a>
+  </nav>
+  <span class="spacer"></span>
+  <span id="who" class="who"></span>
+  <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle dark theme"><span class="track"><span class="knob"></span></span><span class="label">Light</span></button>
 </header>
 
-<section id="setup" class="setup">
-  <div class="card">
-    <div class="kicker">New simulation</div>
-    <h1>Start an EMR-based medical case</h1>
-    <p class="sub">The server locks a hidden diagnosis at case generation. Your prior completed-case exclusion list is now stored automatically under your logged-in account.</p>
-    <div class="grid3" style="margin-top:14px">
-      <div><label>Mode</label><select id="mode"><option value="regular">Regular random mode</option><option value="zebra">Zebra mode</option></select></div>
-      <div><label>Difficulty</label><select id="difficulty"><option>Easy</option><option>Medium</option><option selected>Hard</option><option>Expert</option><option>Brutal</option></select></div>
-      <div><label>Optional field / setting</label><input id="specialty" placeholder="e.g., CTU, ED consult, nephrology, ICU, peds" /></div>
-    </div>
-    <div class="row" style="margin-top:12px">
-      <button id="btnStart" class="btn primary">Generate locked case</button>
-      <button class="btn ghost" onclick="location.href='/'">Log in / switch user</button>
-      <span id="caseExclInfo" class="chip hidden">Case exclusions <strong id="caseExclCount">0</strong></span>
-      <span id="setupStatus" class="muted"></span>
-    </div>
+<!-- Sign in -->
+<section id="login" class="setup hidden">
+  <div class="panel panel-pad login-box">
+    <h1>Sign in</h1>
+    <p class="lede">Use your One Line Pimp account. Cases are saved to it.</p>
+    <form id="loginForm">
+      <div class="field"><label for="lu">Username</label><input id="lu" autocomplete="username" required></div>
+      <div class="field"><label for="lp">Password</label><input id="lp" type="password" autocomplete="current-password" required></div>
+      <button class="btn primary" type="submit">Sign in</button>
+      <a class="btn quiet" href="/">Create an account</a>
+      <p id="loginMsg" class="muted" style="margin-top:10px"></p>
+    </form>
   </div>
 </section>
 
-<section id="app" class="app hidden">
-  <aside>
-    <div class="side-head">
-      <div class="kicker">Patients</div>
-      <button id="btnNewCase" class="btn primary sm">New case</button>
-    </div>
-    <div id="patientList" class="patient-list"></div>
-  </aside>
-
-  <main>
-    <div class="banner">
-      <div class="banner-top">
-        <div>
-          <div id="demog" class="demog">—</div>
-          <div id="bannerText" class="muted">—</div>
-          <div class="banner-grid" id="bannerChips"></div>
-        </div>
-        <div class="row" style="justify-content:flex-end">
-          <button id="btnAsk" class="btn">Ask / examine / chart request</button>
-          <button id="btnRefresh" class="btn ghost">Refresh</button>
-        </div>
+<!-- Setup -->
+<section id="setup" class="setup hidden">
+  <div class="panel panel-pad">
+    <h1>Start a case</h1>
+    <p class="lede">You'll get a patient chart and work the case yourself: take a history, examine, order, treat and document. Teaching comes in the debrief after you conclude.</p>
+    <div class="choice-row">
+      <label>Case type</label>
+      <div class="segmented" role="radiogroup" aria-label="Case type">
+        <label><input type="radio" name="mode" value="regular" checked><span>Regular</span></label>
+        <label><input type="radio" name="mode" value="zebra"><span>Zebra</span></label>
       </div>
     </div>
-    <nav id="tabs" class="tabs"></nav>
-    <div id="content" class="content"></div>
-  </main>
+    <div class="choice-row">
+      <label>Difficulty</label>
+      <div class="segmented" role="radiogroup" aria-label="Difficulty">
+        <label><input type="radio" name="difficulty" value="Easy"><span>Easy</span></label>
+        <label><input type="radio" name="difficulty" value="Medium"><span>Medium</span></label>
+        <label><input type="radio" name="difficulty" value="Hard" checked><span>Hard</span></label>
+        <label><input type="radio" name="difficulty" value="Expert"><span>Expert</span></label>
+        <label><input type="radio" name="difficulty" value="Brutal"><span>Brutal</span></label>
+      </div>
+    </div>
+    <div class="field" style="max-width:420px">
+      <label for="specialty">Setting (optional)</label>
+      <input id="specialty" placeholder="e.g. CTU consult from ED, ICU, nephrology">
+    </div>
+    <div class="start-row">
+      <button id="btnStart" class="btn primary">Generate case</button>
+      <span id="setupStatus" class="muted"></span>
+    </div>
+  </div>
+  <div class="panel panel-pad">
+    <div class="section-head"><h2>Your cases</h2><span id="exclCount" class="muted"></span></div>
+    <div id="caseList" class="case-list"><p class="muted">Loading…</p></div>
+  </div>
 </section>
 
-<div id="modal" class="modal hidden"><div class="modal-card card"><div id="modalContent"></div></div></div>
-<div id="toast" class="toast hidden"></div>
-<div id="refpop" class="refpop hidden"></div>
+<!-- Workspace -->
+<section id="workspace" class="hidden">
+  <div class="patientbar" id="patientbar">
+    <div class="who-block">
+      <div class="pt-name" id="ptName"></div>
+      <div class="pt-meta" id="ptMeta"></div>
+      <div class="pt-complaint" id="ptComplaint"></div>
+    </div>
+    <div class="clock" aria-live="polite">
+      <div class="clock-face"><span class="clock-time" id="clockTime">--:--</span><span class="clock-day" id="clockDay"></span></div>
+      <div class="clock-ctl">
+        <button id="btnNext" class="btn primary sm" title="Move to the next scheduled event">Next event</button>
+        <select id="advSelect" aria-label="Advance by">
+          <option value="15">+15 min</option><option value="60" selected>+1 h</option><option value="240">+4 h</option><option value="720">+12 h</option>
+        </select>
+        <button id="btnAdvance" class="btn sm">Advance</button>
+      </div>
+    </div>
+    <div style="display:flex; gap:6px">
+      <button id="btnCases" class="btn quiet sm">All cases</button>
+      <button id="btnConclude" class="btn danger sm">Conclude</button>
+    </div>
+  </div>
+  <div id="legacyNotice" class="notice hidden">This case was created before the simulator upgrade. You can review it and conclude it for a debrief; start a new case to keep playing.</div>
+  <div class="ws">
+    <div class="chart">
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div class="content" id="content"></div>
+    </div>
+    <aside class="encounter" aria-label="Encounter">
+      <div class="enc-head"><h2>Encounter</h2><span class="muted" id="encCount"></span></div>
+      <div class="feed" id="feed" aria-live="polite"></div>
+      <div class="pending" id="pendingBox"></div>
+      <form class="composer" id="askForm">
+        <label for="ask" class="hidden">Ask, examine or review the chart</label>
+        <textarea id="ask" placeholder="Ask the patient, examine, or review the chart. e.g. &quot;When did the pain start?&quot;, &quot;Cardiac exam&quot;"></textarea>
+        <div class="row2"><span class="muted" style="font-size:12px">Enter sends. Shift+Enter adds a line.</span><button class="btn primary sm" type="submit" id="btnAsk">Send</button></div>
+      </form>
+    </aside>
+  </div>
+</section>
+
+<!-- Debrief -->
+<section id="debrief" class="debrief hidden"></section>
+
+<dialog id="concludeDlg">
+  <form method="dialog" id="concludeForm">
+    <h2>Conclude this case</h2>
+    <p class="muted" style="margin:6px 0 14px">Your notes and orders are already included. Add a final impression and plan if you haven't written one.</p>
+    <div class="field"><label for="finalNote">Final impression and plan</label><textarea id="finalNote" rows="8"></textarea></div>
+    <div class="field"><label for="finalOrders">Disposition / final orders</label><textarea id="finalOrders" rows="3"></textarea></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end">
+      <button class="btn quiet" value="cancel" formnovalidate>Keep working</button>
+      <button class="btn primary" id="btnDoConclude" value="ok">Conclude and see debrief</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hidden" role="status"></div>
 
 <script>
-const API_BASE = window.location.origin;
-const AUTH_TOKEN = localStorage.getItem('authToken') || '';
-let AUTH_USER = '';
-const tabs = ['Labs','Investigations','Vitals','Nursing Notes','Medications/MAR','Notes','Orders'];
-const state = { sessionId:null, patient:null, activity:[], orderHistory:[], currentTime:'', currentDayLabel:'', activeTab:'Labs', report:null, activeLabCategory:'Hematology', noteMode:'list', selectedNoteId:null };
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function toast(msg, bad=false){ const t=$('toast'); t.textContent=msg; t.style.borderColor=bad?'rgba(255,107,126,.42)':'var(--line2)'; t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),4200); }
-async function api(path, opts={}){ const headers={'Content-Type':'application/json',...(opts.headers||{})}; if(AUTH_TOKEN) headers.Authorization='Bearer '+AUTH_TOKEN; const r=await fetch(API_BASE+path,{...opts,headers}); const txt=await r.text(); let j; try{j=JSON.parse(txt)}catch{j={raw:txt}}; if(!r.ok){ if(r.status===401){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; } throw j; } return j; }
-function err(e){ return e?.detail || e?.error || e?.message || String(e || 'Error'); }
-function fmtTime(x){ return esc(x || ''); }
-function formatClockTime(x){
-  const s=String(x||'');
-  const m=s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
-  if(!m) return s || '—';
-  return `${m[4]}:${m[5]}`;
-}
-function renderClock(){
-  const chip=$('clockChip');
-  if(!chip) return;
-  if(!state.currentTime){ chip.classList.add('hidden'); return; }
-  $('clockDay').textContent=state.currentDayLabel || '';
-  $('clockTime').textContent=formatClockTime(state.currentTime);
-  chip.classList.remove('hidden');
-}
-function setBusy(el, on, text){ el.disabled=!!on; if(text!==undefined) el.textContent=text; }
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const rid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+let TOKEN = localStorage.getItem('authToken') || '';
+const ACTIVE_KEY = 'activeCaseId';
+const TABS = ['Labs', 'Investigations', 'Vitals', 'Nursing', 'MAR', 'Notes', 'Orders'];
+const S = { c: null, tab: 'Labs', labCat: null, inv: null, note: null, noteMode: 'list', marFilter: 'active', busy: false };
 
-$('btnNewCase').onclick=()=>{ $('setup').classList.remove('hidden'); $('app').classList.add('hidden'); window.scrollTo({top:0,behavior:'smooth'}); };
-$('btnStart').onclick=startCase;
-$('btnRefresh').onclick=refreshCase;
-$('btnAsk').onclick=openAskModal;
-$('btnPage').onclick=advanceCase;
-$('btnConcludeTop').onclick=openConcludeModal;
-$('lockLink').onclick=downloadLockFile;
+function toast(msg, bad = false) {
+  const t = $('toast'); t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : '');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), 4500);
+}
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {}) };
+  const r = await fetch(path, { ...opts, headers });
+  const txt = await r.text();
+  let j; try { j = JSON.parse(txt); } catch { j = { error: txt }; }
+  if (r.status === 401) { showLogin(); throw new Error('Please sign in.'); }
+  if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
+  return j;
+}
+function show(id) { ['login', 'setup', 'workspace', 'debrief'].forEach(x => $(x).classList.toggle('hidden', x !== id)); }
 
-document.addEventListener('click', e=>{ if(!e.target.closest('.refpop') && !e.target.classList.contains('value')) $('refpop').classList.add('hidden'); });
-async function initAuth(){
-  if(!AUTH_TOKEN){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; $('btnStart').disabled=true; return; }
-  try{ const me=await api('/auth/me'); AUTH_USER=me.username; $('userVal').textContent=AUTH_USER; $('userChip').classList.remove('hidden'); const c=await api('/case/exclusions/count'); $('caseExclCount').textContent=c.count||0; $('caseExclInfo').classList.remove('hidden'); }
-  catch(e){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; $('btnStart').disabled=true; }
-}
-initAuth();
+// ---------- Auth ----------
+function showLogin() { show('login'); $('who').textContent = ''; }
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('loginMsg').textContent = 'Signing in…';
+  try {
+    const r = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: $('lu').value.trim(), password: $('lp').value }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Sign in failed');
+    TOKEN = j.token; localStorage.setItem('authToken', j.token); localStorage.setItem('authUsername', j.username);
+    $('lp').value = ''; boot();
+  } catch (err) { $('loginMsg').textContent = err.message; }
+});
 
-
-async function startCase(){
-  if(!AUTH_TOKEN){ $('setupStatus').innerHTML='<span class="bad">Login required. Open Pimp Simulator and log in first.</span>'; return; }
-  const btn=$('btnStart'); setBusy(btn,true,'Generating…'); $('setupStatus').textContent='Generating locked diagnosis and EMR chart…';
-  try{
-    const payload={ mode:$('mode').value, specialty:$('specialty').value.trim(), difficulty:$('difficulty').value };
-    const j=await api('/case/sessions',{method:'POST',body:JSON.stringify(payload)});
-    applyCase(j); $('setup').classList.add('hidden'); $('app').classList.remove('hidden'); toast('Case generated. Diagnosis is locked server-side.');
-  }catch(e){ $('setupStatus').innerHTML='<span class="bad">'+esc(err(e))+'</span>'; }
-  finally{ setBusy(btn,false,'Generate locked case'); }
-}
-
-async function downloadLockFile(){
-  if(!state.sessionId) return;
-  try{
-    const r=await fetch(API_BASE+'/case/sessions/'+encodeURIComponent(state.sessionId)+'/lockfile',{headers:{Authorization:'Bearer '+AUTH_TOKEN}});
-    if(!r.ok) throw new Error(await r.text());
-    const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement('a');
-    a.href=url; a.download='case-lock-'+state.sessionId+'.txt'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  }catch(e){ toast('Could not download lock file: '+err(e),true); }
-}
-
-function applyCase(j){
-  state.sessionId=j.sessionId; state.patient=j.patient; state.activity=j.activity||[]; state.orderHistory=j.orderHistory||[]; state.currentTime=j.currentTime||state.currentTime||''; state.currentDayLabel=j.currentDayLabel||state.currentDayLabel||'';
-  $('sessionChip').classList.remove('hidden'); $('sessionShort').textContent=String(state.sessionId).slice(0,8);
-  $('lockLink').classList.remove('hidden');
-  $('btnPage').classList.remove('hidden'); $('btnConcludeTop').classList.remove('hidden');
-  renderClock();
-  renderAll();
-}
-async function refreshCase(){ if(!state.sessionId) return; try{ const j=await api('/case/sessions/'+state.sessionId); applyCase(j); toast('Chart refreshed.'); }catch(e){ toast(err(e),true); } }
-
-function renderAll(){ renderPatientList(); renderBanner(); renderTabs(); renderTab(); }
-function renderPatientList(){
-  const p=state.patient; const box=$('patientList'); box.innerHTML=''; if(!p) return;
-  const div=document.createElement('button'); div.className='patient active'; div.innerHTML=`<div class="patient-name">${esc(p.displayName)} ${esc(p.age)}${esc(p.sex)}</div><div class="patient-meta">${esc(p.location||'')}</div><div class="patient-complaint">${esc(p.presentingComplaint||'')}</div>`; box.appendChild(div);
-}
-function renderBanner(){
-  const p=state.patient||{}; $('demog').textContent=`${p.displayName||'—'} · ${p.age||'—'}${p.sex||''}`; $('bannerText').textContent=p.banner||p.presentingComplaint||'—';
-  $('bannerChips').innerHTML=`<span class="chip">Location <strong>${esc(p.location||'—')}</strong></span><span class="chip">Allergies <strong>${esc((p.allergies||[]).join(', ')||'None documented')}</strong></span><span class="chip">Code <strong>${esc(p.codeStatus||'—')}</strong></span>`;
-}
-function renderTabs(){ const box=$('tabs'); box.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.className='tab '+(state.activeTab===t?'active':''); b.textContent=t; b.onclick=()=>{state.activeTab=t; state.report=null; state.noteMode='list'; state.selectedNoteId=null; renderTabs(); renderTab();}; box.appendChild(b); }); }
-function renderTab(){ const t=state.activeTab; if(t==='Labs') return renderLabs(); if(t==='Investigations') return renderInvestigations(); if(t==='Vitals') return renderVitals(); if(t==='Nursing Notes') return renderNursing(); if(t==='Medications/MAR') return renderMAR(); if(t==='Notes') return renderNotes(); if(t==='Orders') return renderOrders(); }
-
-const LAB_ORDER = ['Hematology','Chemistry','Blood Gas','Serology','Urine','Misc'];
-function canonicalLabCategoryName(name){
-  const n=String(name||'').toLowerCase();
-  if(/hema|cbc|coag/.test(n)) return 'Hematology';
-  if(/blood\s*gas|abg|vbg|gas/.test(n)) return 'Blood Gas';
-  if(/serolog|immunolog|autoimmune|viral|hepatitis|hiv|antibody|antigen/.test(n)) return 'Serology';
-  if(/urine|urinalysis|u\/a|ua|microscopy/.test(n)) return 'Urine';
-  if(/misc|other|special|toxic|drug|endo|hormone/.test(n)) return 'Misc';
-  // LFTs, renal panel, electrolytes, enzymes, osmolality, lipase, CRP, etc belong here.
-  if(/chem|electrolyte|renal|kidney|liver|lft|hepatic|enzyme|metabolic|crp|esr|osmol|glucose|calcium|mag|phos|lipase|amylase|bilirubin|albumin|protein|troponin|bnp/.test(n)) return 'Chemistry';
-  return 'Misc';
-}
-function getCanonicalLabCategories(){
-  const p=state.patient||{};
-  const map=new Map(LAB_ORDER.map(x=>[x,{name:x,rows:[]} ]));
-  (p.labCategories||[]).forEach(cat=>{
-    const cname=canonicalLabCategoryName(cat.name);
-    const target=map.get(cname)||map.get('Misc');
-    (cat.rows||[]).forEach(r=>target.rows.push(r));
-  });
-  return LAB_ORDER.map(x=>map.get(x));
-}
-function renderLabs(){
-  const cats=getCanonicalLabCategories();
-  const available=cats.filter(c=>(c.rows||[]).length>0).map(c=>c.name);
-  if(!LAB_ORDER.includes(state.activeLabCategory)) state.activeLabCategory='Hematology';
-  if(!available.includes(state.activeLabCategory) && available.length) state.activeLabCategory=available[0];
-  const active=cats.find(c=>c.name===state.activeLabCategory) || cats[0];
-  let html=`<div class="subtabs" role="tablist" aria-label="Lab categories">${LAB_ORDER.map(name=>`<button class="subtab ${state.activeLabCategory===name?'active':''}" data-labcat="${esc(name)}" role="tab" aria-selected="${state.activeLabCategory===name?'true':'false'}">${esc(name)}</button>`).join('')}</div>`;
-  html+=`<div class="panel"><div class="panel-title"><h2>${esc(active.name)}</h2><span class="muted">Click a value for reference range</span></div>`;
-  if(!(active.rows||[]).length){
-    html+=`<div class="muted">No ${esc(active.name.toLowerCase())} results available.</div></div>`;
-    $('content').innerHTML=html;
-    document.querySelectorAll('[data-labcat]').forEach(b=>b.onclick=()=>{state.activeLabCategory=b.dataset.labcat; renderLabs();});
-    return;
+async function boot() {
+  if (!TOKEN) return showLogin();
+  try {
+    const me = await api('/auth/me');
+    $('who').textContent = me.username;
+  } catch { return; }
+  const active = localStorage.getItem(ACTIVE_KEY);
+  if (active) {
+    try { const c = await api('/case/sessions/' + encodeURIComponent(active)); if (!c.concluded) return openCase(c); } catch {}
+    localStorage.removeItem(ACTIVE_KEY);
   }
-  const times=[...new Set((active.rows||[]).flatMap(r=>(r.values||[]).map(v=>v.datetime)))].sort();
-  html+=`<div class="scroll-x"><table><thead><tr><th>Test</th>${times.map(x=>`<th>${fmtTime(x)}</th>`).join('')}</tr></thead><tbody>`;
-  (active.rows||[]).forEach(row=>{
-    const vals=Object.fromEntries((row.values||[]).map(v=>[v.datetime,v]));
-    html+=`<tr><td><strong>${esc(row.test)}</strong><div class="muted">${esc(row.unit||'')}</div></td>`;
-    times.forEach(tm=>{
-      const v=vals[tm]; const flag=(v?.flag||'normal').toLowerCase();
-      html+=`<td class="value ${esc(flag)}" data-test="${esc(row.test)}" data-ref="${esc(row.referenceRange||'')}" data-unit="${esc(row.unit||'')}">${v?esc(v.value):'<span class="muted">—</span>'}</td>`;
-    });
-    html+='</tr>';
-  });
-  html+='</tbody></table></div></div>';
-  $('content').innerHTML=html;
-  document.querySelectorAll('[data-labcat]').forEach(b=>b.onclick=()=>{state.activeLabCategory=b.dataset.labcat; renderLabs();});
-  document.querySelectorAll('td.value').forEach(td=>td.onclick=e=>showRef(e,td));
+  showSetup();
 }
-function showRef(e,td){ const r=$('refpop'); r.innerHTML=`<strong>${td.dataset.test}</strong><br><span class="muted">Reference</span><br>${td.dataset.ref||'Not provided'}<br><span class="muted">Unit</span><br>${td.dataset.unit||'—'}`; r.style.left=Math.min(e.clientX, window.innerWidth-320)+'px'; r.style.top=Math.min(e.clientY+10, window.innerHeight-170)+'px'; r.classList.remove('hidden'); }
 
-function renderInvestigations(){
-  const inv=[...(state.patient?.investigations||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
-  if(state.report){ const x=state.report; $('content').innerHTML=`<div class="panel"><button class="btn ghost" id="backInv">← Back to list</button><h2 style="margin-top:10px">${esc(x.title)}</h2><div class="muted">${esc(x.group||'')} · ${esc(x.datetime||'')} · ${esc(x.status||'')}</div><div class="report" style="margin-top:12px">${esc(x.report||'No report text.')}</div></div>`; $('backInv').onclick=()=>{state.report=null; renderInvestigations();}; return; }
-  let html='<div class="panel"><div class="panel-title"><h2>Investigations</h2><span class="muted">Latest first</span></div><div class="list">';
-  if(!inv.length) html+='<div class="muted">No investigations available.</div>';
-  inv.forEach(x=>{ html+=`<button class="item" data-id="${esc(x.id)}"><div class="item-head"><div><div class="item-title">${esc(x.title)}</div><div class="item-meta">${esc(x.group||'')} · ${esc(x.datetime||'')}</div></div><span class="chip">${esc(x.status||'')}</span></div></button>`; });
-  html+='</div></div>'; $('content').innerHTML=html; document.querySelectorAll('.item[data-id]').forEach(b=>b.onclick=()=>{ state.report=inv.find(x=>String(x.id)===b.dataset.id); renderInvestigations(); });
+// ---------- Setup ----------
+async function showSetup() {
+  show('setup');
+  try { const x = await api('/case/exclusions/count'); $('exclCount').textContent = x.count ? `${x.count} completed` : ''; } catch {}
+  try {
+    const { sessions } = await api('/case/sessions');
+    const box = $('caseList');
+    if (!sessions.length) { box.innerHTML = '<p class="muted">No cases yet. Generate one to begin.</p>'; return; }
+    box.innerHTML = sessions.map(s => `<button class="case-item" data-id="${esc(s.id)}">
+      <span class="t">${esc(s.title || s.complaint || 'Case')}</span>
+      <span class="m"><span>${esc(s.patient)}</span><span>${esc(s.difficulty || '')}${s.mode === 'zebra' ? ', zebra' : ''}</span>
+      ${s.concluded ? '<span class="badge">Concluded</span>' : '<span class="badge ok">In progress</span>'}<span class="mono">${esc(s.simTime || '')}</span></span></button>`).join('');
+    box.querySelectorAll('[data-id]').forEach(b => b.onclick = async () => {
+      try { const c = await api('/case/sessions/' + encodeURIComponent(b.dataset.id)); c.concluded ? showDebrief(c) : openCase(c); } catch (err) { toast(err.message, true); }
+    });
+  } catch (err) { $('caseList').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
 }
-function renderVitals(){
-  const vs=[...(state.patient?.vitals||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
-  let html='<div class="panel"><div class="panel-title"><h2>Vitals</h2></div><div class="scroll-x"><table><thead><tr><th>Date/time</th><th>T °C</th><th>HR</th><th>BP</th><th>RR</th><th>SpO₂</th><th>O₂</th><th>Pain</th><th>Notes</th></tr></thead><tbody>';
-  vs.forEach(v=>{ html+=`<tr><td>${esc(v.datetime||'')}</td><td>${esc(v.temperature_C||'')}</td><td>${esc(v.hr||'')}</td><td>${esc(v.bp||'')}</td><td>${esc(v.rr||'')}</td><td>${esc(v.spo2||'')}</td><td>${esc(v.oxygen||'')}</td><td>${esc(v.pain||'')}</td><td>${esc(v.notes||'')}</td></tr>`; });
-  html+='</tbody></table></div></div>'; $('content').innerHTML=html;
+
+$('btnStart').onclick = async () => {
+  const btn = $('btnStart');
+  btn.disabled = true;
+  const t0 = Date.now();
+  const tick = setInterval(() => { $('setupStatus').textContent = `Building the patient… ${Math.round((Date.now() - t0) / 1000)} s`; }, 500);
+  try {
+    const body = { mode: document.querySelector('input[name=mode]:checked').value, difficulty: document.querySelector('input[name=difficulty]:checked').value, specialty: $('specialty').value.trim(), requestId: rid() };
+    const c = await api('/case/sessions', { method: 'POST', body: JSON.stringify(body) });
+    $('setupStatus').textContent = '';
+    openCase(c);
+  } catch (err) { $('setupStatus').textContent = err.message; }
+  finally { clearInterval(tick); btn.disabled = false; }
+};
+
+// ---------- Workspace ----------
+function openCase(c) {
+  S.c = c; S.tab = S.tab || 'Labs'; S.inv = null; S.note = null; S.noteMode = 'list';
+  localStorage.setItem(ACTIVE_KEY, c.sessionId);
+  show('workspace');
+  render();
 }
-function renderNursing(){ renderChronList('Nursing Notes', state.patient?.nursingNotes||[], x=>`<div class="item-title">${esc(x.datetime||'')} · ${esc(x.author||'RN')}</div><div class="note-text">${esc(x.text||'')}</div>`); }
-function renderChronList(title, arr, rowFn){ const rows=[...arr].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||''))); let html=`<div class="panel"><div class="panel-title"><h2>${esc(title)}</h2></div><div class="list">`; if(!rows.length) html+='<div class="muted">No entries.</div>'; rows.forEach(x=>html+=`<div class="item">${rowFn(x)}</div>`); html+='</div></div>'; $('content').innerHTML=html; }
-function renderMAR(filter='active'){
-  const meds=state.patient?.medications||[]; const filtered=filter==='all'?meds:meds.filter(m=>String(m.status||'').toLowerCase()===filter);
-  let html=`<div class="panel"><div class="panel-title"><h2>Medications / MAR</h2><div class="row"><button class="btn sm ${filter==='active'?'primary':''}" data-f="active">Active</button><button class="btn sm ${filter==='discontinued'?'primary':''}" data-f="discontinued">Discontinued</button><button class="btn sm ${filter==='all'?'primary':''}" data-f="all">All</button></div></div><div class="scroll-x"><table><thead><tr><th>Medication</th><th>Dose</th><th>Route</th><th>Frequency</th><th>Status</th><th>Start</th><th>Stop</th><th>Comments</th></tr></thead><tbody>`;
-  filtered.forEach(m=>{ html+=`<tr><td><strong>${esc(m.name||'')}</strong></td><td>${esc(m.dose||'')}</td><td>${esc(m.route||'')}</td><td>${esc(m.frequency||'')}</td><td>${esc(m.status||'')}</td><td>${esc(m.start||'')}</td><td>${esc(m.stop||'')}</td><td>${esc(m.comments||'')}</td></tr>`; });
-  html+='</tbody></table></div></div>'; $('content').innerHTML=html; document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>renderMAR(b.dataset.f));
+function setCase(c) { S.c = c; render(); }
+
+function render() {
+  const c = S.c, p = c.patient || {};
+  $('ptName').textContent = `${p.displayName || ''}, ${p.age ?? ''}${p.sex || ''}`;
+  const allergies = (p.allergies || []).join(', ') || 'None documented';
+  const noAllergy = /nkda|no known|none/i.test(allergies);
+  $('ptMeta').innerHTML = `<span>${esc(p.location || '')}</span><span class="${noAllergy ? '' : 'allergy'}">Allergies: <b>${esc(allergies)}</b></span><span>Code status: <b>${esc(p.codeStatus || '')}</b></span>`;
+  $('ptComplaint').textContent = p.presentingComplaint || '';
+  const m = String(c.currentTime || '').match(/(\d{2}:\d{2})/);
+  $('clockTime').textContent = m ? m[1] : '--:--';
+  $('clockDay').textContent = c.currentDayLabel || '';
+  const locked = c.legacy || c.concluded;
+  ['btnNext', 'btnAdvance', 'btnAsk'].forEach(id => $(id).disabled = locked || S.busy);
+  $('ask').disabled = locked;
+  $('legacyNotice').classList.toggle('hidden', !c.legacy);
+  $('btnConclude').classList.toggle('hidden', !!c.concluded);
+  $('askForm').classList.toggle('hidden', !!c.concluded);
+  document.documentElement.style.setProperty('--pbar', $('patientbar').offsetHeight + 'px');
+  renderTabs(); renderTab(); renderFeed(); renderPending();
 }
-function noteService(n){ return n.service || n.department || n.specialty || ''; }
-function noteProvider(n){ return n.providerName || n.provider || n.author || ''; }
-function noteType(n){ return n.noteType || n.type || 'Note'; }
-function noteTitle(n){ return n.title || noteType(n); }
-const NOTE_HEADING_RE=/^(reason for consult|reason for admission|request|hpi|history of presenting illness|pmh|past medical history|past history|meds|medications|allergies|family hx|family history|social hx|social history|exam|physical exam|physical examination|vitals|labs|laboratory data|investigations|imaging|data review|assessment|impression|plan|assessment and plan|recommendations|procedure details|procedure|course in hospital|discharge medications|follow-up|follow up|disposition)\b\s*:?(.*)$/i;
-function cleanHeadingText(h){ return String(h||'').replace(/^#+\s*/,'').replace(/\s*:$/,'').trim(); }
-function formatNoteText(text){
-  const lines=String(text||'').split(/\r?\n/);
-  let html=''; let inList=false;
-  const closeList=()=>{ if(inList){ html+='</ul>'; inList=false; } };
-  lines.forEach(raw=>{
-    const trimmed=raw.trim();
-    if(!trimmed){ closeList(); html+='<div class="note-spacer"></div>'; return; }
-    const bullet=trimmed.match(/^[-*]\s+(.+)$/);
-    if(bullet){ if(!inList){ html+='<ul>'; inList=true; } html+=`<li>${esc(bullet[1])}</li>`; return; }
-    closeList();
-    const md=trimmed.match(/^#{1,4}\s+(.+)$/);
-    if(md){ html+=`<div class="note-line"><span class="note-heading">${esc(cleanHeadingText(md[1]))}</span></div>`; return; }
-    const m=trimmed.match(NOTE_HEADING_RE);
-    if(m && (trimmed.includes(':') || trimmed.length < 55 || !m[2].trim())){
-      const heading=cleanHeadingText(m[1]); const rest=m[2].trim();
-      html+=`<div class="note-line"><span class="note-heading">${esc(heading)}</span>${rest?`: ${esc(rest)}`:''}</div>`;
+
+function counts() {
+  const p = S.c.patient;
+  return { Investigations: p.investigations.length, Vitals: p.vitals.length, Nursing: p.nursingNotes.length, MAR: p.medications.filter(x => x.status === 'active').length, Notes: p.notes.length, Orders: p.orders.length };
+}
+function renderTabs() {
+  const n = counts();
+  $('tabs').innerHTML = TABS.map(t => `<button class="tab" role="tab" aria-selected="${S.tab === t}" data-tab="${t}">${t}${n[t] ? `<span class="count">${n[t]}</span>` : ''}</button>`).join('');
+  $('tabs').querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.inv = null; S.noteMode = 'list'; renderTabs(); renderTab(); });
+}
+function renderTab() {
+  const fn = { Labs: renderLabs, Investigations: renderInv, Vitals: renderVitals, Nursing: renderNursing, MAR: renderMAR, Notes: renderNotes, Orders: renderOrders }[S.tab];
+  fn();
+}
+const byTimeDesc = (arr, k = 'datetime') => [...arr].sort((a, b) => String(b[k] || '').localeCompare(String(a[k] || '')));
+const shortTime = (s) => String(s || '').replace(/^\d{4}-/, '');
+
+function renderLabs() {
+  const cats = (S.c.patient.labCategories || []).filter(c => (c.rows || []).length);
+  if (!cats.length) { $('content').innerHTML = '<div class="empty">No laboratory results yet. Order tests from the Orders tab.</div>'; return; }
+  if (!cats.some(c => c.name === S.labCat)) S.labCat = cats[0].name;
+  const cat = cats.find(c => c.name === S.labCat);
+  const times = [...new Set(cat.rows.flatMap(r => (r.values || []).map(v => v.datetime)))].sort().reverse();
+  const flagMark = { high: 'H', low: 'L', critical: '!!' };
+  let html = `<div class="segmented cat-tabs" role="tablist">${cats.map(c => `<label><input type="radio" name="labcat" value="${esc(c.name)}" ${c.name === S.labCat ? 'checked' : ''}><span>${esc(c.name)}</span></label>`).join('')}</div>`;
+  html += `<div class="lab-wrap"><table class="lab-table"><thead><tr><th>Test</th>${times.map(t => `<th>${esc(shortTime(t))}</th>`).join('')}</tr></thead><tbody>`;
+  for (const r of cat.rows) {
+    const vals = Object.fromEntries((r.values || []).map(v => [v.datetime, v]));
+    html += `<tr><td><div class="lab-test">${esc(r.test)}</div><div class="lab-ref">${esc([r.referenceRange, r.unit].filter(Boolean).join(' '))}</div></td>`;
+    for (const t of times) {
+      const v = vals[t];
+      const f = String(v?.flag || 'normal').toLowerCase();
+      html += v ? `<td class="v ${esc(f)}">${esc(v.value)}${flagMark[f] ? `<span class="f">${flagMark[f]}</span>` : ''}</td>` : '<td class="v"><span class="muted">·</span></td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  $('content').innerHTML = html;
+  $('content').querySelectorAll('input[name=labcat]').forEach(i => i.onchange = () => { S.labCat = i.value; renderLabs(); });
+}
+
+function renderInv() {
+  const list = byTimeDesc(S.c.patient.investigations || []);
+  if (S.inv) {
+    const x = list.find(i => i.id === S.inv);
+    if (x) {
+      $('content').innerHTML = `<div class="section-head"><div><h2>${esc(x.title)}</h2><div class="muted">${esc(x.group || '')}, ${esc(x.datetime || '')}, ${esc(x.status || '')}</div></div><button class="btn sm" id="invBack">Back to list</button></div><div class="report">${esc(x.report || 'No report text.')}</div>`;
+      $('invBack').onclick = () => { S.inv = null; renderInv(); };
       return;
     }
-    html+=`<div class="note-line">${esc(raw)}</div>`;
-  });
-  closeList();
-  return html || '<span class="muted">No note text.</span>';
-}
-function renderNotes(){
-  if(state.noteMode==='detail') return renderNoteDetail();
-  if(state.noteMode==='create') return renderNoteCreator();
-  return renderNoteList();
-}
-function renderNoteList(){
-  const notes=[...(state.patient?.notes||[])].sort((a,b)=>String(b.datetime||'').localeCompare(String(a.datetime||'')));
-  let html=`<div class="panel"><div class="panel-title"><h2>Provider Notes</h2><button id="createNoteBtn" class="btn primary sm">Create new note</button></div><div class="list">`;
-  if(!notes.length){ html+=`<div class="muted">No provider notes.</div>`; }
-  notes.forEach(n=>{
-    html+=`<button class="item" data-note-id="${esc(n.id)}"><div class="note-row"><div><span class="cell-label">Timestamp</span><span class="note-list-value">${esc(n.datetime||'—')}</span></div><div><span class="cell-label">Service</span><span class="note-list-value">${esc(noteService(n)||'—')}</span></div><div><span class="cell-label">Provider</span><span class="note-list-value">${esc(noteProvider(n)||'—')}</span></div><div><span class="cell-label">Note type</span><strong>${esc(noteType(n)||'—')}</strong></div></div></button>`;
-  });
-  html+=`</div></div>`;
-  $('content').innerHTML=html;
-  $('createNoteBtn').onclick=()=>{state.noteMode='create'; state.selectedNoteId=null; renderNotes();};
-  document.querySelectorAll('[data-note-id]').forEach(row=>row.onclick=()=>{state.selectedNoteId=row.dataset.noteId; state.noteMode='detail'; renderNotes();});
-}
-function renderNoteDetail(){
-  const notes=state.patient?.notes||[];
-  const n=notes.find(x=>String(x.id)===String(state.selectedNoteId));
-  if(!n){ state.noteMode='list'; return renderNoteList(); }
-  let html=`<div class="panel"><div class="note-view-head"><div><h2>${esc(noteTitle(n))}</h2><div class="muted">${esc(noteType(n))}</div></div><div class="row"><button id="backNoteList" class="btn ghost sm">← Back to notes</button><button id="createNoteBtn" class="btn primary sm">Create new note</button></div></div>`;
-  html+=`<div class="note-meta-grid"><div class="note-meta-card"><span>Timestamp</span><strong>${esc(n.datetime||'—')}</strong></div><div class="note-meta-card"><span>Service</span><strong>${esc(noteService(n)||'—')}</strong></div><div class="note-meta-card"><span>Provider</span><strong>${esc(noteProvider(n)||'—')}</strong></div><div class="note-meta-card"><span>Note type</span><strong>${esc(noteType(n)||'—')}</strong></div></div>`;
-  html+=`<div class="note-full">${formatNoteText(n.text||'')}</div></div>`;
-  $('content').innerHTML=html;
-  $('backNoteList').onclick=()=>{state.noteMode='list'; state.selectedNoteId=null; renderNotes();};
-  $('createNoteBtn').onclick=()=>{state.noteMode='create'; state.selectedNoteId=null; renderNotes();};
-}
-function renderNoteCreator(){
-  const now=state.currentTime || new Date().toISOString().slice(0,16).replace('T',' ');
-  let html=`<div class="panel"><div class="note-view-head"><div><h2>Create provider note</h2><div class="muted">Use the heading button for underlined headings. Use bullet list for point-form charting.</div></div><button id="backNoteList" class="btn ghost sm">← Back to notes</button></div>`;
-  html+=`<div class="grid3"><div><label>Note type</label><select id="noteType"><option>Progress note</option><option>Consult note</option><option>Admission note</option><option>Procedure note</option><option>Discharge summary</option><option>Event note</option></select></div><div><label>Service</label><input id="noteService" value="Internal Medicine"></div><div><label>Provider name</label><input id="noteProvider" value="Learner"></div></div>`;
-  html+=`<div class="grid2" style="margin-top:10px"><div><label>Title</label><input id="noteTitle" value="Learner progress note"></div><div><label>Timestamp</label><input id="noteTimestamp" value="${esc(now)}"></div></div>`;
-  html+=`<div class="editor-toolbar"><button id="addHeading" class="btn sm">Add underlined heading</button><button id="addBullets" class="btn sm">Bullet list</button><button id="addTemplate" class="btn sm">Consult template</button><button id="clearNote" class="btn ghost sm">Clear</button></div>`;
-  html+=`<div id="noteText" class="rich-note-editor" contenteditable="true" data-placeholder="Start typing your note here. Use Add underlined heading for sections like HPI, Physical exam, Investigations, Assessment and Plan."></div>`;
-  html+=`<div class="row" style="margin-top:10px"><button id="saveNote" class="btn primary">Save note</button><span id="noteMsg" class="muted"></span></div></div>`;
-  $('content').innerHTML=html;
-  $('backNoteList').onclick=()=>{state.noteMode='list'; renderNotes();};
-  $('addHeading').onclick=()=>insertHeadingIntoEditor(prompt('Heading name')||'Heading');
-  $('addBullets').onclick=()=>insertHtmlAtCursor('<ul><li><br></li><li><br></li><li><br></li></ul>');
-  $('addTemplate').onclick=()=>insertConsultTemplate();
-  $('clearNote').onclick=()=>{ if(confirm('Clear note text?')) $('noteText').innerHTML=''; };
-  $('saveNote').onclick=saveNote;
-}
-function insertHtmlAtCursor(html){
-  const el=$('noteText'); el.focus();
-  if(document.queryCommandSupported && document.queryCommandSupported('insertHTML')){
-    document.execCommand('insertHTML', false, html); return;
   }
-  const sel=window.getSelection(); if(!sel || !sel.rangeCount){ el.insertAdjacentHTML('beforeend', html); return; }
-  const range=sel.getRangeAt(0); range.deleteContents();
-  const tmp=document.createElement('div'); tmp.innerHTML=html;
-  const frag=document.createDocumentFragment(); let node,last;
-  while((node=tmp.firstChild)){ last=frag.appendChild(node); }
-  range.insertNode(frag);
-  if(last){ range.setStartAfter(last); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); }
+  if (!list.length) { $('content').innerHTML = '<div class="empty">No investigations yet.</div>'; return; }
+  $('content').innerHTML = `<div class="rows">${list.map(x => `<button class="row" data-id="${esc(x.id)}"><span class="when">${esc(x.datetime)}</span><span><span class="what">${esc(x.title)}</span><br><span class="sub">${esc(x.group || '')}</span></span><span class="badge">${esc(x.status || '')}</span></button>`).join('')}</div>`;
+  $('content').querySelectorAll('[data-id]').forEach(b => b.onclick = () => { S.inv = b.dataset.id; renderInv(); });
 }
-function insertHeadingIntoEditor(heading){ insertHtmlAtCursor(`<div class="editor-heading">${esc(heading)}</div><div><br></div>`); }
-function insertConsultTemplate(){
-  const sections=['Reason for consult','HPI','Past medical history','Medications','Allergies','Physical exam','Investigations','Assessment and plan'];
-  insertHtmlAtCursor(sections.map(h=>`<div class="editor-heading">${esc(h)}</div><div><br></div>`).join(''));
-}
-function getNoteEditorText(){ const el=$('noteText'); return (el?.innerText || '').replace(/\n{3,}/g,'\n\n').trim(); }
-async function saveNote(){
-  const text=getNoteEditorText(); if(!text){$('noteMsg').textContent='Enter note text.';return;}
-  try{
-    const payload={ noteType:$('noteType').value, type:$('noteType').value, service:$('noteService').value, providerName:$('noteProvider').value, author:$('noteProvider').value, title:$('noteTitle').value, datetime:$('noteTimestamp').value, text };
-    const j=await api('/case/sessions/'+state.sessionId+'/note',{method:'POST',body:JSON.stringify(payload)});
-    applyCase(j); state.activeTab='Notes'; state.noteMode='list'; state.selectedNoteId=null; renderTabs(); renderNotes(); toast('Note saved.');
-  }catch(e){ $('noteMsg').textContent=err(e); }
-}
-function renderOrders(){
-  let html=`<div class="split"><div><div class="panel"><div class="panel-title"><h2>Orders</h2><button id="addOrder" class="btn sm">Add order</button></div><div id="orderList" class="order-list"></div><div class="row" style="margin-top:10px"><button id="enterOrders" class="btn primary">Enter orders</button><span id="orderMsg" class="muted"></span></div></div></div><div><div class="panel"><h2>Order history</h2><div class="activity">`;
-  const hist=[...(state.orderHistory||[])].reverse(); if(!hist.length) html+='<div class="muted">No orders entered yet.</div>';
-  hist.forEach(o=>{ html+=`<div class="item"><div><strong>${esc(o.order)}</strong></div><div class="item-meta">${esc(o.at||'')} · ${esc(o.status||'')}</div><div class="muted">${esc(o.comment||'')}</div></div>`; });
-  html+=`</div></div><div class="panel"><h2>Activity</h2><div class="activity">${activityHtml()}</div></div></div></div>`;
-  $('content').innerHTML=html; initOrderDraft();
-}
-function activityHtml(){ const acts=[...(state.activity||[])].reverse(); if(!acts.length) return '<div class="muted">No activity.</div>'; return acts.map(a=>`<div class="item"><div class="item-meta">${esc(a.at||'')} · ${esc(a.type||'')}</div><div class="note-text">${esc(a.text||'')}</div></div>`).join(''); }
-let orderDraft=[];
-function initOrderDraft(){ orderDraft=['']; renderOrderDraft(); $('addOrder').onclick=()=>{orderDraft.push(''); renderOrderDraft();}; $('enterOrders').onclick=enterOrders; }
-function renderOrderDraft(){ const box=$('orderList'); if(!box) return; box.innerHTML=''; orderDraft.forEach((o,i)=>{ const div=document.createElement('div'); div.className='order-row'; div.innerHTML=`<input data-ord="${i}" value="${esc(o)}" placeholder="e.g., CBC, extended electrolytes tomorrow AM"><button class="btn ghost sm" data-del="${i}">Remove</button>`; box.appendChild(div); }); box.querySelectorAll('input[data-ord]').forEach(inp=>inp.oninput=()=>orderDraft[Number(inp.dataset.ord)]=inp.value); box.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ orderDraft.splice(Number(b.dataset.del),1); if(!orderDraft.length) orderDraft=['']; renderOrderDraft();}); }
-async function enterOrders(){ const orders=orderDraft.map(s=>s.trim()).filter(Boolean); if(!orders.length){$('orderMsg').textContent='No orders to enter.';return;} if(!confirm('Enter these orders?')) return; const btn=$('enterOrders'); setBusy(btn,true,'Entering…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/orders',{method:'POST',body:JSON.stringify({orders})}); applyCase(j); state.activeTab='Orders'; renderTabs(); renderOrders(); toast(j.visibleEvent || 'Orders entered.'); }catch(e){ $('orderMsg').textContent=err(e); } finally{ setBusy(btn,false,'Enter orders'); } }
 
-function openAskModal(){
-  showModal(`<div class="kicker">Interaction</div><h2>Ask, examine, or request chart information</h2><p class="sub">The response should be objective only. Examples: “ask about travel history”, “perform JVP and cardiac auscultation”, “review previous creatinine values”, “look at abdominal exam”.</p><textarea id="askText" rows="5" placeholder="Type your request..."></textarea><div class="row" style="margin-top:10px"><button id="sendAsk" class="btn primary">Send</button><button id="closeModal" class="btn ghost">Close</button></div><div id="askResponse" class="report hidden" style="margin-top:12px"></div>`);
-  $('closeModal').onclick=closeModal; $('sendAsk').onclick=sendAsk;
+function renderVitals() {
+  const vs = byTimeDesc(S.c.patient.vitals || []);
+  if (!vs.length) { $('content').innerHTML = '<div class="empty">No vitals recorded.</div>'; return; }
+  $('content').innerHTML = `<div class="lab-wrap"><table><thead><tr><th>Time</th><th>T °C</th><th>HR</th><th>BP</th><th>RR</th><th>SpO₂</th><th>O₂</th><th>Pain</th><th>Notes</th></tr></thead><tbody>${vs.map(v => `<tr><td class="mono">${esc(v.datetime)}</td><td class="mono">${esc(v.temperature_C)}</td><td class="mono">${esc(v.hr)}</td><td class="mono">${esc(v.bp)}</td><td class="mono">${esc(v.rr)}</td><td class="mono">${esc(v.spo2)}</td><td>${esc(v.oxygen)}</td><td class="mono">${esc(v.pain)}</td><td>${esc(v.notes)}</td></tr>`).join('')}</tbody></table></div>`;
 }
-async function sendAsk(){ const request=$('askText').value.trim(); if(!request) return; const btn=$('sendAsk'); setBusy(btn,true,'Sending…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/interact',{method:'POST',body:JSON.stringify({request})}); applyCase(j); $('askResponse').textContent=j.response||''; $('askResponse').classList.remove('hidden'); }catch(e){ $('askResponse').textContent=err(e); $('askResponse').classList.remove('hidden'); } finally{ setBusy(btn,false,'Send'); } }
-async function advanceCase(){ const btn=$('btnPage'); setBusy(btn,true,'Advancing…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/advance',{method:'POST',body:JSON.stringify({})}); applyCase(j); toast(j.event || 'No new events.'); }catch(e){ toast(err(e),true); } finally{ setBusy(btn,false,'Page me / advance'); } }
-function openConcludeModal(){
-  showModal(`<div class="kicker">Conclude</div><h2>End case and get attending feedback</h2><p class="sub">Paste your final consult/progress note and final orders if you want them included in the assessment.</p><label>Final note</label><textarea id="finalNote" rows="8"></textarea><label style="margin-top:8px">Final orders / disposition</label><textarea id="finalOrders" rows="5"></textarea><div class="row" style="margin-top:10px"><button id="doConclude" class="btn danger">Conclude case</button><button id="closeModal" class="btn ghost">Cancel</button></div><div id="conclusionBox" class="hidden" style="margin-top:12px"></div>`);
-  $('closeModal').onclick=closeModal; $('doConclude').onclick=concludeCase;
+
+function renderNursing() {
+  const ns = byTimeDesc(S.c.patient.nursingNotes || []);
+  if (!ns.length) { $('content').innerHTML = '<div class="empty">No nursing notes.</div>'; return; }
+  $('content').innerHTML = `<div class="rows">${ns.map(n => `<div class="row"><span class="when">${esc(n.datetime)}</span><span>${esc(n.text)}</span><span class="muted">${esc(n.author || 'RN')}</span></div>`).join('')}</div>`;
 }
-async function concludeCase(){ const btn=$('doConclude'); setBusy(btn,true,'Concluding…'); try{ const j=await api('/case/sessions/'+state.sessionId+'/conclude',{method:'POST',body:JSON.stringify({finalNoteText:$('finalNote').value,finalOrdersText:$('finalOrders').value})}); applyCase(j); renderConclusion(j.conclusion); }catch(e){ $('conclusionBox').className='report'; $('conclusionBox').textContent=err(e); } finally{ setBusy(btn,false,'Conclude case'); } }
-function renderConclusion(c){ const list=x=>(x||[]).map(v=>`<li>${esc(v)}</li>`).join(''); const html=`<div class="panel"><h2>Diagnosis: ${esc(c.diagnosis||'')}</h2><p class="sub">${esc(c.caseSummary||'')}</p><h3>Diagnostic feedback</h3><ul>${list(c.diagnosticFeedback)}</ul><h3>Management feedback</h3><ul>${list(c.managementFeedback)}</ul><h3>Documentation feedback</h3><ul>${list(c.documentationFeedback)}</ul><h3>Safety issues</h3><ul>${list(c.safetyIssues)}</ul><h3>What good looked like</h3><ul>${list(c.whatGoodLookedLike)}</ul><div class="chip">Overall rating <strong>${esc(c.overallRating||'')}</strong></div><h3 style="margin-top:12px">Update + Conclude exclusion text</h3><div class="codebox">${esc(c.exclusionEntry||'')}</div></div>`; $('conclusionBox').innerHTML=html; $('conclusionBox').classList.remove('hidden'); }
-function showModal(html){ $('modalContent').innerHTML=html; $('modal').classList.remove('hidden'); }
-function closeModal(){ $('modal').classList.add('hidden'); $('modalContent').innerHTML=''; }
-$('modal').addEventListener('click',e=>{ if(e.target.id==='modal') closeModal(); });
+
+function renderMAR() {
+  const all = S.c.patient.medications || [];
+  const groups = { active: m => m.status === 'active', held: m => /held|hold/.test(m.status), stopped: m => /discontinued|completed|cancelled/.test(m.status), all: () => true };
+  const meds = byTimeDesc(all.filter(groups[S.marFilter]), 'start');
+  let html = `<div class="section-head"><div class="segmented" role="radiogroup" aria-label="Filter">${['active', 'held', 'stopped', 'all'].map(f => `<label><input type="radio" name="marf" value="${f}" ${S.marFilter === f ? 'checked' : ''}><span>${f[0].toUpperCase() + f.slice(1)}</span></label>`).join('')}</div></div>`;
+  if (!meds.length) html += '<div class="empty">No medications in this view.</div>';
+  else html += `<div class="lab-wrap"><table><thead><tr><th>Medication</th><th>Dose</th><th>Route</th><th>Frequency</th><th>Status</th><th>Start</th><th>Stop</th><th></th></tr></thead><tbody>${meds.map(m => `<tr><td><b>${esc(m.name)}</b>${m.comments ? `<div class="lab-ref">${esc(m.comments)}</div>` : ''}</td><td class="mono">${esc(m.dose)}</td><td>${esc(m.route)}</td><td>${esc(m.frequency)}</td><td><span class="badge ${m.status === 'active' ? 'ok' : /hold|held/.test(m.status) ? 'warn' : ''}">${esc(m.status)}</span></td><td class="mono">${esc(m.start)}</td><td class="mono">${esc(m.stop)}</td><td style="white-space:nowrap">${m.status === 'active' && !S.c.legacy && !S.c.concluded ? `<button class="btn quiet sm" data-stop="${esc(m.name)}">Stop</button><button class="btn quiet sm" data-hold="${esc(m.name)}">Hold</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+  $('content').innerHTML = html;
+  $('content').querySelectorAll('input[name=marf]').forEach(i => i.onchange = () => { S.marFilter = i.value; renderMAR(); });
+  $('content').querySelectorAll('[data-stop]').forEach(b => b.onclick = () => submitOrders([`d/c ${b.dataset.stop}`], true));
+  $('content').querySelectorAll('[data-hold]').forEach(b => b.onclick = () => submitOrders([`hold ${b.dataset.hold}`], true));
+}
+
+function formatNote(text) {
+  const out = []; let inList = false;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const t = raw.trim();
+    const bullet = t.match(/^[-*•]\s+(.+)/);
+    if (bullet) { if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${esc(bullet[1])}</li>`); continue; }
+    if (inList) { out.push('</ul>'); inList = false; }
+    if (!t) { out.push('<div style="height:6px"></div>'); continue; }
+    const h = t.match(/^(#{1,3}\s+)?([A-Za-z /&]{2,40}):\s*(.*)$/);
+    if (h && (h[1] || /^(reason|hpi|history|pmh|past|meds|medications|allergies|social|family|exam|physical|vitals|labs|investigations|imaging|assessment|impression|plan|a\/p|recommendations|disposition|ros|id|cc)/i.test(h[2]))) out.push(`<div class="h">${esc(h[2])}${h[3] ? `: <span style="font-weight:400">${esc(h[3])}</span>` : ''}</div>`);
+    else out.push(`<div>${esc(raw)}</div>`);
+  }
+  if (inList) out.push('</ul>');
+  return out.join('');
+}
+
+function renderNotes() {
+  const notes = byTimeDesc(S.c.patient.notes || []);
+  if (S.noteMode === 'view') {
+    const n = notes.find(x => x.id === S.note);
+    if (n) {
+      $('content').innerHTML = `<div class="section-head"><div><h2>${esc(n.title)}</h2><div class="muted">${esc(n.noteType)}, ${esc(n.service || '')}, ${esc(n.providerName || '')}, ${esc(n.datetime)}</div></div><button class="btn sm" id="noteBack">Back to notes</button></div><div class="note-body">${formatNote(n.text)}</div>`;
+      $('noteBack').onclick = () => { S.noteMode = 'list'; renderNotes(); };
+      return;
+    }
+  }
+  if (S.noteMode === 'new') {
+    const draftKey = 'noteDraft:' + S.c.sessionId;
+    $('content').innerHTML = `<div class="note-editor"><div class="section-head"><h2>New note</h2><button class="btn sm" id="noteBack">Cancel</button></div>
+      <div class="grid3"><div class="field"><label for="nType">Type</label><select id="nType"><option>Consult note</option><option>Admission note</option><option>Progress note</option><option>Event note</option><option>Procedure note</option><option>Discharge summary</option></select></div>
+      <div class="field"><label for="nService">Service</label><input id="nService" value="Internal Medicine"></div>
+      <div class="field"><label for="nTitle">Title</label><input id="nTitle" value="Consult note"></div></div>
+      <div class="field"><label for="nText">Note</label><textarea id="nText" placeholder="Use 'Heading:' lines and '- ' bullets."></textarea></div>
+      <div style="display:flex; gap:8px"><button class="btn primary" id="nSave">Sign note</button><button class="btn" id="nTemplate">Insert consult template</button><span class="muted" id="nMsg" style="align-self:center"></span></div></div>`;
+    const ta = $('nText');
+    ta.value = localStorage.getItem(draftKey) || '';
+    ta.oninput = () => localStorage.setItem(draftKey, ta.value);
+    $('nType').onchange = () => { $('nTitle').value = $('nType').value; };
+    $('noteBack').onclick = () => { S.noteMode = 'list'; renderNotes(); };
+    $('nTemplate').onclick = () => { ta.value += (ta.value ? '\n\n' : '') + ['Reason for consult:', 'HPI:', 'PMH:', 'Medications:', 'Allergies:', 'Social:', 'Exam:', 'Investigations:', 'Impression:', 'Plan:', '- '].join('\n'); ta.oninput(); ta.focus(); };
+    $('nSave').onclick = async () => {
+      if (!ta.value.trim()) { $('nMsg').textContent = 'Write the note first.'; return; }
+      $('nSave').disabled = true;
+      try {
+        const c = await api(`/case/sessions/${S.c.sessionId}/note`, { method: 'POST', body: JSON.stringify({ noteType: $('nType').value, service: $('nService').value, title: $('nTitle').value, text: ta.value, requestId: rid() }) });
+        localStorage.removeItem(draftKey);
+        S.noteMode = 'view'; S.note = c.savedNoteId; setCase(c); toast('Note signed.');
+      } catch (err) { $('nMsg').textContent = err.message; $('nSave').disabled = false; }
+    };
+    return;
+  }
+  let html = `<div class="section-head"><h2>Notes</h2>${S.c.concluded ? '' : '<button class="btn primary sm" id="noteNew">New note</button>'}</div>`;
+  html += notes.length ? `<div class="rows">${notes.map(n => `<button class="row" data-id="${esc(n.id)}"><span class="when">${esc(n.datetime)}</span><span><span class="what">${esc(n.title)}</span><br><span class="sub">${esc(n.noteType)}, ${esc(n.service || '')}</span></span><span class="muted">${esc(n.providerName || '')}</span></button>`).join('')}</div>` : '<div class="empty">No notes yet.</div>';
+  $('content').innerHTML = html;
+  if ($('noteNew')) $('noteNew').onclick = () => { S.noteMode = 'new'; renderNotes(); };
+  $('content').querySelectorAll('[data-id]').forEach(b => b.onclick = () => { S.note = b.dataset.id; S.noteMode = 'view'; renderNotes(); });
+}
+
+const STATUS_BADGE = { pending: 'warn', 'partially resulted': 'warn', active: 'ok', resulted: '', completed: '', acknowledged: '', cancelled: '', unclear: 'bad', 'on hold': 'bad', held: 'warn', discontinued: '' };
+function renderOrders() {
+  const orders = byTimeDesc(S.c.patient.orders || []);
+  const locked = S.c.legacy || S.c.concluded;
+  let html = locked ? '' : `<div class="panel panel-pad order-entry" style="margin-bottom:16px"><label for="orderText">Enter orders, one per line</label>
+    <textarea id="orderText" placeholder="CBC, lytes, creatinine, glucose&#10;ECG&#10;Ceftriaxone 2 g IV q24h&#10;NS 1 L IV bolus&#10;Vitals q1h"></textarea>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:8px; flex-wrap:wrap"><span class="hint">Include dose, route and frequency for medications. Use "d/c", "hold" or "cancel" to change an order.</span><button class="btn primary" id="btnOrders">Sign orders</button></div></div>`;
+  html += orders.length ? `<div class="rows">${orders.map(o => `<div class="row"><span class="when">${esc(o.datetime)}</span><span><span class="what mono" style="font-weight:500">${esc(o.order)}</span>${o.comment ? `<br><span class="sub">${esc(o.comment)}</span>` : ''}</span><span style="display:flex; gap:6px; align-items:center"><span class="badge status ${STATUS_BADGE[o.status] || ''}">${esc(o.status)}</span>${!locked && o.status === 'pending' ? `<button class="btn quiet sm" data-cancel="${esc(o.order)}">Cancel</button>` : ''}</span></div>`).join('')}</div>` : '<div class="empty">No orders yet.</div>';
+  $('content').innerHTML = html;
+  if ($('btnOrders')) {
+    const ta = $('orderText');
+    $('btnOrders').onclick = () => { const lines = ta.value.split('\n').map(s => s.trim()).filter(Boolean); if (!lines.length) return toast('Enter at least one order.', true); submitOrders(lines).then(ok => { if (ok) ta.value = ''; }); };
+  }
+  $('content').querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => submitOrders([`cancel ${b.dataset.cancel}`], true));
+}
+
+async function submitOrders(lines, quiet = false) {
+  if (S.busy) return false;
+  S.busy = true;
+  try {
+    const c = await api(`/case/sessions/${S.c.sessionId}/orders`, { method: 'POST', body: JSON.stringify({ orders: lines, requestId: rid() }) });
+    setCase(c);
+    const unclear = (c.orderResults || []).filter(r => r.status === 'unclear' || r.status === 'on hold');
+    if (unclear.length) toast(unclear.map(r => `${r.order}: ${r.comment}`).join('\n'), true);
+    else if (!quiet) toast(c.visibleEvent || 'Orders signed.');
+    return true;
+  } catch (err) { toast(err.message, true); return false; }
+  finally { S.busy = false; render(); }
+}
+
+// ---------- Encounter feed ----------
+function renderFeed() {
+  const acts = (S.c.activity || []).filter(a => ['learner_request', 'case_response', 'advance', 'orders', 'user_note', 'system'].includes(a.type));
+  $('encCount').textContent = '';
+  const feed = $('feed');
+  if (!acts.length) { feed.innerHTML = '<p class="muted">Nothing yet. Start with the chart, then ask or examine below.</p>'; return; }
+  feed.innerHTML = acts.map(a => {
+    const ts = `<span class="ts">${esc(shortTime(a.at))}</span>`;
+    if (a.type === 'learner_request') return `<div class="msg q">${ts}${esc(a.text)}</div>`;
+    if (a.type === 'case_response') return `<div class="msg a">${ts}${esc(a.text)}</div>`;
+    if (a.type === 'advance') return `<div class="evt ${esc(a.urgency || '')}">${ts}${esc(a.text)}</div>`;
+    if (a.type === 'orders') return `<div class="evt">${ts}Orders signed:\n${esc(a.text)}</div>`;
+    if (a.type === 'user_note') return `<div class="evt">${ts}Note signed: ${esc(a.text)}</div>`;
+    return `<div class="evt">${ts}${esc(a.text)}</div>`;
+  }).join('');
+  feed.scrollTop = feed.scrollHeight;
+}
+function renderPending() {
+  const p = S.c.pending || [];
+  $('pendingBox').innerHTML = p.length ? `<h3>Pending (${p.length})</h3><ul>${p.map(x => `<li>${esc(x.order)} <span class="muted mono">${esc(shortTime(x.placedAt))}</span></li>`).join('')}</ul>` : '<span class="muted" style="font-size:13px">No pending results.</span>';
+}
+
+$('askForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('ask').value.trim();
+  if (!text || S.busy) return;
+  S.busy = true; $('btnAsk').disabled = true;
+  const feed = $('feed');
+  feed.insertAdjacentHTML('beforeend', `<div class="msg q" id="pendingQ">${esc(text)}</div><div class="msg a muted" id="pendingA">…</div>`);
+  feed.scrollTop = feed.scrollHeight;
+  $('ask').value = '';
+  try { setCase(await api(`/case/sessions/${S.c.sessionId}/interact`, { method: 'POST', body: JSON.stringify({ request: text, requestId: rid() }) })); }
+  catch (err) { $('pendingA')?.remove(); $('pendingQ')?.remove(); $('ask').value = text; toast(err.message, true); }
+  finally { S.busy = false; render(); }
+});
+$('ask').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('askForm').requestSubmit(); } });
+
+async function advance(body) {
+  if (S.busy) return;
+  S.busy = true; render();
+  try {
+    const c = await api(`/case/sessions/${S.c.sessionId}/advance`, { method: 'POST', body: JSON.stringify({ ...body, requestId: rid() }) });
+    setCase(c);
+    if (c.urgency === 'urgent' || c.urgency === 'critical') toast(c.event, c.urgency === 'critical');
+  } catch (err) { toast(err.message, true); }
+  finally { S.busy = false; render(); }
+}
+$('btnNext').onclick = () => advance({ mode: 'next' });
+$('btnAdvance').onclick = () => advance({ mode: 'minutes', minutes: Number($('advSelect').value) });
+$('btnCases').onclick = () => { localStorage.removeItem(ACTIVE_KEY); showSetup(); };
+
+// ---------- Conclude + debrief ----------
+$('btnConclude').onclick = () => $('concludeDlg').showModal();
+$('concludeForm').addEventListener('submit', async (e) => {
+  if (e.submitter?.value !== 'ok') return;
+  e.preventDefault();
+  const btn = $('btnDoConclude'); btn.disabled = true; btn.textContent = 'Preparing debrief…';
+  try {
+    const c = await api(`/case/sessions/${S.c.sessionId}/conclude`, { method: 'POST', body: JSON.stringify({ finalNoteText: $('finalNote').value, finalOrdersText: $('finalOrders').value, requestId: rid() }) });
+    $('concludeDlg').close();
+    localStorage.removeItem(ACTIVE_KEY);
+    showDebrief(c);
+  } catch (err) { toast(err.message, true); }
+  finally { btn.disabled = false; btn.textContent = 'Conclude and see debrief'; }
+});
+
+function showDebrief(c) {
+  S.c = c;
+  const d = c.conclusion || {};
+  const list = (title, xs) => (xs && xs.length) ? `<h2>${title}</h2><ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  $('debrief').innerHTML = `<p class="muted">${esc(c.patient.displayName)}, ${esc(c.patient.age)}${esc(c.patient.sex)}: ${esc(c.caseTitle)}</p>
+    <div class="dx">${esc(d.diagnosis || 'Diagnosis unavailable')}</div>
+    ${(d.secondaryDiagnoses || []).length ? `<p class="muted">Also: ${esc(d.secondaryDiagnoses.join('; '))}</p>` : ''}
+    <p class="summary" style="margin-top:12px">${esc(d.caseSummary || '')}</p>
+    <p style="margin-top:12px">Performance level: <span class="badge">${esc(d.overallRating || '')}</span></p>
+    ${list('Diagnostic reasoning', d.diagnosticFeedback)}${list('Management', d.managementFeedback)}${list('Safety', d.safetyIssues)}${list('Documentation', d.documentationFeedback)}${list('What a strong approach looked like', d.whatGoodLookedLike)}
+    <div style="display:flex; gap:8px; margin-top:28px; flex-wrap:wrap"><button class="btn primary" id="dNew">Start another case</button><button class="btn" id="dChart">Review the chart</button><button class="btn quiet" id="dFile">Download case file</button></div>`;
+  show('debrief');
+  $('dNew').onclick = showSetup;
+  $('dChart').onclick = () => { show('workspace'); render(); };
+  $('dFile').onclick = async () => {
+    const r = await fetch(`/case/sessions/${c.sessionId}/lockfile`, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!r.ok) return toast('Case file unavailable.', true);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = `case-${c.sessionId}.txt`; a.click(); URL.revokeObjectURL(a.href);
+  };
+}
+
+window.addEventListener('resize', () => { if (!$('workspace').classList.contains('hidden')) document.documentElement.style.setProperty('--pbar', $('patientbar').offsetHeight + 'px'); });
+boot();
 </script>
 </body>
 </html>

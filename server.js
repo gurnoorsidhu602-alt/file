@@ -1,1318 +1,157 @@
-// server.js  (hardcoded TOC version)
-// NOTE: This keeps your existing endpoints. Only the /med/toc route is replaced,
-// and three small read endpoints are added for convenience.
+// server.js
+// Shared backend for One Line Pimp Simulator (incl. MCCQE mode), Medical Case
+// Simulator and Med Learner. Serves the three pages and the JSON API from the
+// same Render web service.
+//
+// Module map:
+//   lib/ai.js           OpenAI wrapper, model routing, usage/latency/cost logging
+//   lib/caseCatalog.js  lab tests (SI), panels, studies, medications, order parser
+//   lib/caseEngine.js   simulated clock, physiology, orders/MAR, scheduled results
+//   lib/caseAi.js       case prompts (generation, questions, progression, debrief)
+//   lib/caseStore.js    case persistence (Postgres or Redis) with version checks
+//   lib/learnerStore.js Med Learner persistence (Postgres or SQLite)
+//   lib/db.js           optional Postgres pool + migrations
 
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { Redis } from '@upstash/redis';
-import OpenAI from 'openai';
-import Database from 'better-sqlite3';
 import multer from 'multer';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import { v4 as uuid, v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 
-////////////////////////////////////////////////////////////////////////////////
-// CONFIG & INIT
-////////////////////////////////////////////////////////////////////////////////
+import {
+  responsesCall, aiJSON, parseResponsesJSON, extractOutputText, setUsageSink, recentUsage, summarizeUsage,
+  BASE_MODEL, STRICT_MODEL, PIMP_MODEL, PIMP_GRADER_MODEL, PIMP_DISCUSSION_MODEL, CASE_MODEL, CASE_FAST_MODEL
+} from './lib/ai.js';
+import { hasPg, migrate, q } from './lib/db.js';
+import { createMemoryRedis } from './lib/memoryRedis.js';
+import { makeCaseStore, ConflictError } from './lib/caseStore.js';
+import { learnerStore } from './lib/learnerStore.js';
+import { withLock } from './lib/mutex.js';
+import { HARDCODED_TOC } from './lib/toc.js';
+import {
+  initEngine, interact as engineInteract, placeOrders, advance as engineAdvance, publicOrders, pendingList,
+  dayLabel, ensureArray, sortLabCategories, ENGINE_VERSION
+} from './lib/caseEngine.js';
+import { generateCase, caseAiAdapter, concludeCase } from './lib/caseAi.js';
 
-const app = express();
-app.use(cors());
-app.options('*', cors()); // handle CORS preflight
-
-app.use(express.json());
-
-// Serve the frontends from the same Render Web Service as the API.
-// This avoids hard-coded backend URLs and CORS/fetch failures.
-app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get('/index.html', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get('/learner', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
-app.get('/learner.html', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
-app.get('/medlearner', (_req, res) => res.sendFile(path.join(__dirname, 'learner.html')));
-app.get('/casesim', (_req, res) => res.sendFile(path.join(__dirname, 'casesim.html')));
-app.get('/casesim.html', (_req, res) => res.sendFile(path.join(__dirname, 'casesim.html')));
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN
-});
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-key' });
-const PORT = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const PORT = process.env.PORT || 3000;
+const uuid = () => crypto.randomUUID();
 
-// --- Models ---
-// Keep these configurable in Render. The defaults use the newer GPT-5 family.
-// Recommended routing:
-// - Full case generation and final debriefs: GPT-5.5
-// - One-line pimp generation/grading and case interactions/advancement: GPT-5.4 mini
-// - Very small deterministic helper work, if you enable it later: GPT-5.4 nano
-const BASE_MODEL = process.env.OPENAI_BASE_MODEL || "gpt-5.4-mini";
-const STRICT_MODEL = process.env.OPENAI_STRICT_MODEL || "gpt-5.5";
-const PREMIUM_MODEL = process.env.OPENAI_PREMIUM_MODEL || process.env.OPENAI_CASE_MODEL || STRICT_MODEL;
-const FAST_MODEL = process.env.OPENAI_FAST_MODEL || process.env.OPENAI_PIMP_MODEL || "gpt-5.4-mini";
-const ULTRA_FAST_MODEL = process.env.OPENAI_ULTRA_FAST_MODEL || "gpt-5.4-nano";
-const PIMP_MODEL = process.env.OPENAI_PIMP_MODEL || FAST_MODEL;
-const PIMP_GRADER_MODEL = process.env.OPENAI_PIMP_GRADER_MODEL || FAST_MODEL;
-const PIMP_DISCUSSION_MODEL = process.env.OPENAI_PIMP_DISCUSSION_MODEL || FAST_MODEL;
-const CASE_GENERATOR_MODEL = process.env.OPENAI_CASE_MODEL || PREMIUM_MODEL;
-const CASE_FAST_MODEL_DEFAULT = process.env.OPENAI_CASE_FAST_MODEL || FAST_MODEL;
+////////////////////////////////////////////////////////////////////////////////
+// APP, STORAGE
+////////////////////////////////////////////////////////////////////////////////
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '256kb' }));
 
-function envInt(name, fallback) {
-  const raw = process.env[name];
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
+const page = (file) => (_req, res) => res.sendFile(path.join(__dirname, file));
+app.get(['/', '/index.html'], page('index.html'));
+app.get(['/learner', '/learner.html', '/medlearner'], page('learner.html'));
+app.get(['/casesim', '/casesim.html'], page('casesim.html'));
+app.use('/assets', express.static(path.join(__dirname, 'assets'), { maxAge: '1h' }));
 
-// Initial case JSON can be large. Keep this configurable from Render, but the
-// prompt below is also capped so the model should not actually need the full budget.
-const CASE_GEN_MAX_OUTPUT_TOKENS = envInt('OPENAI_CASE_GEN_MAX_OUTPUT_TOKENS', 18000);
-const CASE_GEN_RETRY_MAX_OUTPUT_TOKENS = envInt('OPENAI_CASE_GEN_RETRY_MAX_OUTPUT_TOKENS', 22000);
+const redis = (process.env.REDIS_MEMORY === '1' || !process.env.UPSTASH_REDIS_REST_URL)
+  ? createMemoryRedis()
+  : new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+if (process.env.REDIS_MEMORY === '1' || !process.env.UPSTASH_REDIS_REST_URL) console.warn('[storage] Using in-memory Redis (data is not persisted).');
+if (process.env.DISABLE_AUTH === '1') console.warn('[auth] DISABLE_AUTH=1: authentication is OFF. Never use this in production.');
 
-// helper: some models (gpt-5.x, o-series) don't accept temperature on Responses API
-function supportsTemperature(model = '') {
-  const m = String(model || '').toLowerCase();
-  if (m.startsWith('gpt-5')) return false;
-  if (/^o\d/.test(m)) return false;
-  return true;
-}
+const caseStore = makeCaseStore(redis);
 
-function supportsReasoningEffort(model = '') {
-  const m = String(model || '').toLowerCase();
-  return m.startsWith('gpt-5') || /^o\d/.test(m);
-}
+// AI usage persistence: Postgres table if available, else a capped Redis list.
+setUsageSink(async (rec) => {
+  if (hasPg()) {
+    await q(`INSERT INTO ai_usage (at, tag, model, ok, input_tokens, cached_tokens, output_tokens, reasoning_tokens, ms, cost_usd, session_id, user_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [rec.at, rec.tag, rec.model, rec.ok, rec.input_tokens || 0, rec.cached_tokens || 0, rec.output_tokens || 0, rec.reasoning_tokens || 0, rec.ms || 0, rec.cost_usd, rec.sessionId || null, rec.userId || null]);
+  } else {
+    await redis.rpush('ai:usage', JSON.stringify(rec));
+    await redis.ltrim('ai:usage', -5000, -1);
+  }
+});
 
-// wrapper: build the request and include only parameters supported by the selected model
-async function responsesCall({ model, messages, temperature, max_output_tokens, reasoning_effort, jsonMode = false }) {
-  const req = { model, input: messages };
-  if (temperature !== undefined && supportsTemperature(model)) req.temperature = temperature;
-  if (max_output_tokens !== undefined) req.max_output_tokens = max_output_tokens;
-  if (reasoning_effort && supportsReasoningEffort(model)) req.reasoning = { effort: reasoning_effort };
-
-  // Responses API JSON mode. This is safer than relying on prompt wording like
-  // "return JSON only", especially for long EMR case-generation payloads.
-  if (jsonMode) req.text = { format: { type: "json_object" } };
-
-  return await openai.responses.create(req);
-}
-
-// Standard, non-training-level difficulty ladder used by both apps.
-const DIFF = ["Easy", "Medium", "Hard", "Expert", "Brutal"];
+////////////////////////////////////////////////////////////////////////////////
+// DIFFICULTY + SCORING
+////////////////////////////////////////////////////////////////////////////////
+const DIFF = ['Easy', 'Medium', 'Hard', 'Expert', 'Brutal'];
 const LEGACY_DIFF_MAP = {
-  "MSI1":"Easy", "MSI2":"Medium", "MSI3":"Hard", "MSI4":"Hard",
-  "R1":"Hard", "R2":"Expert", "R3":"Expert", "R4":"Brutal", "R5":"Brutal", "Attending":"Brutal",
-  "MSI3-R1":"Hard", "MSI4-R2":"Expert", "R3-R5":"Brutal", "Attending-level brutal":"Brutal"
+  MSI1: 'Easy', MSI2: 'Medium', MSI3: 'Hard', MSI4: 'Hard', R1: 'Hard', R2: 'Expert', R3: 'Expert', R4: 'Brutal', R5: 'Brutal', Attending: 'Brutal',
+  'MSI3-R1': 'Hard', 'MSI4-R2': 'Expert', 'R3-R5': 'Brutal', 'Attending-level brutal': 'Brutal'
 };
 function normalizeDifficulty(label) {
-  const raw = String(label || "Hard").trim();
+  const raw = String(label || 'Hard').trim();
   if (DIFF.includes(raw)) return raw;
-  return LEGACY_DIFF_MAP[raw] || "Hard";
+  return LEGACY_DIFF_MAP[raw] || 'Hard';
 }
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const bumpDifficulty = (label, delta) => {
-  const normalized = normalizeDifficulty(label);
-  const i = DIFF.indexOf(normalized);
-  const next = i < 0 ? 2 : clamp(i + Number(delta || 0), 0, DIFF.length - 1);
-  return DIFF[next];
+  const i = DIFF.indexOf(normalizeDifficulty(label));
+  return DIFF[i < 0 ? 2 : clamp(i + Number(delta || 0), 0, DIFF.length - 1)];
 };
+function tierIndex(label) { const i = DIFF.indexOf(normalizeDifficulty(label)); return (i >= 0 ? i : 2) + 1; }
+function pointsFor(label) { const t = tierIndex(label); return { correct: 10 * t, wrong: 5 * t }; }
 
-// ------------------------------ SQLITE INIT ---------------------------------
-const medDb = new Database('medlearner.db');
-medDb.pragma('journal_mode = WAL');
-medDb.exec(`
-  PRAGMA foreign_keys = ON;
-
-  CREATE TABLE IF NOT EXISTS completed_topics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    topic   TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, topic)
-  );
-
-  CREATE TABLE IF NOT EXISTS pdf_docs (
-    id TEXT PRIMARY KEY,
-    label TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS pdf_chunks (
-    id TEXT PRIMARY KEY,
-    doc_id TEXT NOT NULL,
-    ord INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    FOREIGN KEY(doc_id) REFERENCES pdf_docs(id) ON DELETE CASCADE
-  );
-
-  -- Full-text search over PDF chunks
-  CREATE VIRTUAL TABLE IF NOT EXISTS pdf_chunks_fts
-  USING fts5(text, content='pdf_chunks', content_rowid='rowid');
-
-  CREATE TRIGGER IF NOT EXISTS pdf_chunks_ai AFTER INSERT ON pdf_chunks BEGIN
-    INSERT INTO pdf_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
-  END;
-
-  CREATE TRIGGER IF NOT EXISTS pdf_chunks_ad AFTER DELETE ON pdf_chunks BEGIN
-    INSERT INTO pdf_chunks_fts(pdf_chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
-  END;
-
-  CREATE TRIGGER IF NOT EXISTS pdf_chunks_au AFTER UPDATE ON pdf_chunks BEGIN
-    INSERT INTO pdf_chunks_fts(pdf_chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
-    INSERT INTO pdf_chunks_fts(rowid, text) VALUES (new.rowid, new.text);
-  END;
-
-  -- TOC cache (left for future use)
-  CREATE TABLE IF NOT EXISTS toc_cache (
-    label TEXT PRIMARY KEY,
-    json  TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  -- one-time safety: ensure labels are unique if set
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_pdf_label_unique
-  ON pdf_docs(label) WHERE label IS NOT NULL;
-`);
-
-// ------------------------------ PDF HELPERS ---------------------------------
-const upload = multer({ storage: multer.memoryStorage() });
-
-const CHUNK_SIZE = 1200;     // characters
-const CHUNK_OVERLAP = 150;   // characters
-
-function chunkText(raw) {
-  const text = (raw || '')
-    .replace(/\s+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  const chunks = [];
-  let i = 0;
-  while (i < text.length) {
-    let end = Math.min(i + CHUNK_SIZE, text.length);
-    let slice = text.slice(i, end);
-
-    const lastPara = slice.lastIndexOf('\n\n');
-    const lastSent = slice.lastIndexOf('. ');
-    const lastStop = Math.max(lastPara, lastSent);
-    if (lastStop > 400 && end < text.length) slice = slice.slice(0, lastStop + 1);
-
-    chunks.push(slice.trim());
-    i += Math.max(slice.length - CHUNK_OVERLAP, 1);
-  }
-  return chunks.filter(Boolean);
+function timeMultiplierForAnswer(elapsedMs, difficulty) {
+  const grace = { Easy: 20000, Medium: 30000, Hard: 45000, Expert: 60000, Brutal: 75000 }[normalizeDifficulty(difficulty)] || 45000;
+  const elapsed = Math.max(0, Number(elapsedMs || 0));
+  if (!elapsed || elapsed <= grace) return 1;
+  const overRatio = (elapsed - grace) / (grace * 3);
+  return Math.max(0.45, Math.round((1 - 0.55 * Math.min(1, overRatio)) * 100) / 100);
 }
 
-async function indexPdfBuffer(buffer, label) {
-  const data = await pdfParse(buffer);
-  const docId = uuidv4();
-
-  medDb.prepare(`INSERT INTO pdf_docs (id, label) VALUES (?, ?)`).run(docId, label || null);
-
-  const chunks = chunkText(data.text || '');
-  const insert = medDb.prepare(`INSERT INTO pdf_chunks (id, doc_id, ord, text) VALUES (?, ?, ?, ?)`);
-
-  const tx = medDb.transaction(() => {
-    chunks.forEach((c, idx) => insert.run(uuidv4(), docId, idx, c));
-  });
-  tx();
-
-  return { docId, nChunks: chunks.length };
-}
-
-// ----------------------- STANDARD PDF AUTO-INDEXER (left as-is) -------------
-const STANDARD_PDF_URL =
-  process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
-const STANDARD_PDF_LABEL =
-  process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
-
-function pdfExistsByLabel(label) {
-  const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
-  return !!row;
-}
-
-async function ensureStandardPdfIndexed() {
-  try {
-    if (!STANDARD_PDF_URL) return;
-    if (pdfExistsByLabel(STANDARD_PDF_LABEL)) return;
-    const resp = await fetch(STANDARD_PDF_URL);
-    if (!resp.ok) return;
-    const buf = Buffer.from(await resp.arrayBuffer());
-    const { docId, nChunks } = await indexPdfBuffer(buf, STANDARD_PDF_LABEL);
-    console.log(`[MedLearner] Indexed standard PDF "${STANDARD_PDF_LABEL}" as ${docId} (${nChunks} chunks).`);
-  } catch (err) {
-    console.error('[MedLearner] Error ensuring standard PDF:', err);
-  }
-}
-ensureStandardPdfIndexed();
-
-// ----------------------------- HARDCODED TOC -------------------------------
-// Derived from your TOC PDF. Expand freely — the API below reads from this tree.
-// Structure: { [discipline]: { [sub]: [topics...] } }
-
-const HARDCODED_TOC = {
-  "Cardiology": {
-    "Ischemia": [
-      "Approach To Acute Coronary Syndrome",
-      "Approach to ECG for suspected MI/ACS",
-      "Approach to Dyslipidemia Therapy",
-      "Non-acute Coronary Artery Disease",
-      "Acute Coronary Syndrome",
-      "Variant/Prinzmetal/Vasospastic Angina"
-    ],
-    "Arrhythmias": [
-      "ECG interpretation",
-      "Approach to Abnormal QT",
-      "Approach to Bundle Branch Blocks",
-      "Approach to AV Block",
-      "Approach to Tachycardia",
-      "Approach to Bradyarrhythmia",
-      "Supraventricular Premature Beats",
-      "Supraventricular Tachycardia",
-      "Atrial Fibrillation and Flutter",
-      "PVCs",
-      "Ventricular Tachycardia",
-      "Ventricular Fibrillation",
-      "Causes of Wide Complex Tachycardia in Children",
-      "Overview of Antiarrhythmic Drugs"
-    ],
-    "Valvular Heart Disease": [
-      "Approach to Murmur/Valvular Disease",
-      "Aortic Regurgitation",
-      "Aortic Stenosis",
-      "Mitral Regurgitation",
-      "Mitral Valve Prolapse",
-      "Mitral Stenosis"
-    ],
-    "Heart Failure": [
-      "Background Pathophysiology",
-      "Diagnostic approach to Acute Heart Failure",
-      "Chronic Heart Failure",
-      "Acute Heart Failure",
-      "Approach to Shock"
-    ],
-    "Misc": [
-      "Basic Cardiac Physiology and Anatomy",
-      "Infective Endocarditis",
-      "Hypertension",
-      "Aortic Dissection",
-      "Approach to Cardiac Tumours",
-      "Approach to Pericardial Disease",
-      "Sympathomimetics"
-    ],
-    "Myocardial": [
-      "Acute Rheumatic Fever",
-      "Takotsubo Cardiomyopathy",
-      "Dilated Cardiomyopathy",
-      "Hypertrophic Cardiomyopathy",
-      "Restrictive Cardiomyopathy"
-    ],
-    "Vascular": [
-      "Peripheral Arterial Disease",
-      "Nonthrombotic Embolism",
-      "Chronic Venous Disease",
-      "Carotid Artery Stenosis",
-      "Renal Artery Stenosis",
-      "Carotid/Vertebral Artery Dissection",
-      "Acute Limb Ischemia",
-      "Cholesterol Embolization Syndrome",
-      "Abdominal Aortic Aneurysm",
-      "Thoracic Outlet Syndrome"
-    ]
-  },
-
-  "Emergency Medicine": {
-    "Approaches": [
-      "Approach to Syncope"
-    ],
-    "Trauma": [
-      "Initial Management of Trauma",
-      "Blunt Abdominal Trauma",
-      "Blunt Pelvic Trauma",
-      "FAST and eFAST"
-    ]
-  },
-
-  "Endocrinology": {
-    "Glucose": [
-      "Physiology Relevant to Endocrine Pancreas",
-      "General Approach to Diabetes Mellitus",
-      "Diabetic Neuropathy",
-      "Diabetic Retinopathy",
-      "Hyperglycemic Crises",
-      "Insulin Therapy",
-      "Non-Insulin Oral Antidiabetics"
-    ],
-    "Adrenal": [
-      "Adrenal Physiology",
-      "Adrenal/Testicular Gland Biochemistry",
-      "Congenital Adrenal Hyperplasia",
-      "Adrenal Insufficiency",
-      "Hypercortisolism",
-      "Hyperaldosteronism",
-      "Adrenal Incidentaloma"
-    ],
-    "Gonadal": [
-      "Disorders of Sexual Development",
-      "Testosterone Replacement Therapy"
-    ],
-    "Thyroid": [
-      "Physiology relevant to Thyroid disease",
-      "Hypothyroidism",
-      "Hyperthyroidism",
-      "Thyroid Crises"
-    ],
-    "Parathyroid": [
-      "Parathyroid Physiology",
-      "Hyperparathyroidism",
-      "Hypoparathyroidism"
-    ],
-    "Pituitary": [
-      "Pituitary Physiology",
-      "Pituitary Adenoma",
-      "Hypopituitarism",
-      "Hyperprolactinemia",
-      "Acromegaly",
-      "Diabetes Insipidus",
-      "Syndrome of Inappropriate ADH"
-    ]
-  },
-
-  "Gastroenterology": {
-    "Intestinal and Stomach": [
-      "Bowel Obstruction (Adult)",
-      "Acute Mesenteric Ischemia",
-      "Perforated Peptic Ulcer",
-      "Management of Peptic Ulcers",
-      "Diverticular Disease",
-      "Abdominal Hernias",
-      "Volvulus / Malrotation",
-      "Paralytic Ileus",
-      "Irritable Bowel Syndrome",
-      "Inflammatory Bowel Disease",
-      "Osmotic Diarrhea",
-      "Secretory Diarrhea",
-      "Malabsorptive Diarrhea",
-      "Inflammatory Diarrhea",
-      "Gastritis and Dyspepsia",
-      "Appendicitis",
-      "Ischemic Colitis (non-acute)",
-      "Angiodysplasia",
-      "Constipation in Adults",
-      "Celiac Disease",
-      "Small Intestinal Bacterial Overgrowth"
-    ],
-    "General": [
-      "Diagnostic Approach to Non-traumatic Abdominal Pain",
-      "Approach to Upper GI Bleed",
-      "Approach to Lower GI Bleed"
-    ],
-    "Biliary and Hepatic": [
-      "Acute Pancreatitis",
-      "Chronic Pancreatitis",
-      "Acute (Fulminant) Liver Failure",
-      "Diagnostic Approach to Chronic Liver Disease",
-      "Spontaneous Bacterial Peritonitis",
-      "Gallstone Disease",
-      "Diagnostic Approach to Jaundice",
-      "PSC and PBC",
-      "Autoimmune Hepatitis",
-      "Wilson Disease",
-      "Hemochromatosis",
-      "Cirrhosis",
-      "Ascites",
-      "Alcoholic Liver Disease",
-      "Budd–Chiari Syndrome",
-      "Portal Hypertension",
-      "Hepatic Encephalopathy",
-      "MASLD (NAFLD)",
-      "Complications of Gallstones"
-    ],
-    "Esophageal": [
-      "Diagnostic Approach to Dysphagia",
-      "Esophageal Varices",
-      "GERD",
-      "Approach to Esophagitis",
-      "Hiatal Hernia",
-      "Esophageal Diverticula",
-      "Achalasia",
-      "Hypermotility Disorders",
-      "Esophageal Tears and Rupture"
-    ],
-    "Misc": [
-      "Acute Splenic Diseases and Injuries",
-      "Abdominal Compartment Syndrome",
-      "Hemorrhoids",
-      "Anal Fissures",
-      "Perirectal/Anorectal Abscess and Fistula",
-      "GI Perforation (Perforated Viscus)",
-      "Pilonidal Disease",
-      "Refeeding Syndrome"
-    ]
-  },
-
-  "Gynecology": {
-    "Menstrual and Structural": [
-      "Physiology of the Menstrual Cycle",
-      "Approach to Dysmenorrhea",
-      "Approach to Amenorrhea",
-      "Abnormal Uterine Bleeding",
-      "Menopause",
-      "Adenomyosis",
-      "Endometriosis",
-      "Ovarian Torsion",
-      "Tubo-Ovarian Abscess"
-    ],
-    "Sexual Health": [
-      "Approach to Dyspareunia in Women"
-    ],
-    "Fertility and Contraception": [
-      "Polycystic Ovarian Syndrome",
-      "Contraception",
-      "Approach to Infertility"
-    ]
-  },
-
-  "Hematology": {
-    "Heme": ["Porphyrias","Thalassemia","Sickle Cell Disease","Hemoglobin C Disease","Hemoglobin Zurich"],
-    "Anemia": [
-      "Bone Marrow Physiology","Approach to Hemolysis","Approach to Anemia","Macrocytic Anemia","Iron Deficiency",
-      "AIHA","PNH","G6PD Deficiency","Hereditary Spherocytosis","Hereditary Elliptocytosis",
-      "Southeast Asian Ovalocytosis","Aplastic Anemia","Pancytopenia","Transfusion Reactions",
-      "Pyruvate Kinase Deficiency","Anemia of Chronic Disease","Lead Poisoning","Sideroblastic Anemia"
-    ],
-    "Hemostasis": [
-      "Physiology of Hemostasis","Approach to Thrombocytopenia","VTE/DVT/PE","Thrombophilia/Hypercoagulability Workup",
-      "Approach to Bleeding Disorders","von Willebrand Disease","ITP","TTP","HUS","HIT Type II","Hemophilia","APS","DIC",
-      "Anticoagulation and Antiplatelet Pharmacology","Protamine Reactions"
-    ],
-    "WBC Disorders": [
-      "Systemic Amyloidosis","Eosinophilia","Approach to Lymphadenopathy","Erythrocytosis","Neutropenia"
-    ]
-  },
-
-  "Infectious Disease": {
-    "Sepsis and FUO": ["Sepsis","Fever of Unknown Origin","Neutropenic Fever"],
-    "Viral": [
-      "Overview of Virology","Viral Tree","Viral Hepatitis","Influenza","COVID-19","RSV","Herpes Viruses","Rabies",
-      "Polio","Japanese Encephalitis","Coxsackie Virus","Rotavirus","Norovirus","HPV","HIV","Australian Bat Lyssavirus",
-      "Monkeypox","Smallpox","Viral Hemorrhagic Fevers","Zika","Dengue"
-    ],
-    "Fungal": ["Overview of Fungi","Candidiasis","Aspergillosis"],
-    "Helminth": ["Helminth Infections"],
-    "Protozoa": [
-      "Overview of Protozoa","Malaria","Giardiasis","Toxoplasmosis","Leishmaniasis","Chagas Disease",
-      "African Trypanosomiasis","Amebiasis","Babesiosis"
-    ],
-    "Bacteria": [
-      "Gram Positive Tree","Gram Negative Tree","Antibiotics","Tuberculosis","Non-TB Mycobacteria","Staph aureus",
-      "CoNS","Streptococci","Clostridium","Corynebacterium diphtheriae","Listeria","Bacillus","Actinomyces","Nocardia",
-      "Klebsiella","E. coli","Enterobacter","Citrobacter/Serratia","Salmonella","Shigella","Proteus","Pseudomonas",
-      "Burkholderia cepacia","H. pylori","Legionella","Bacteroides","Moraxella catarrhalis","Neisseria","Chlamydia",
-      "Campylobacter","Vibrio spp","Haemophilus","Bordetella pertussis","Yersinia enterocolitica","Acinetobacter",
-      "Leptospirosis","Borrelia burgdorferi","Non-Lyme Borrelia","Treponema pallidum","Bartonella henselae","Brucella",
-      "Chlamydophila psittaci","Coxiella burnetii","Francisella tularensis","Pasteurella","Ehrlichia","Anaplasma",
-      "Rickettsia rickettsii","Other Rickettsia","Yersinia pestis"
-    ],
-    "Other": ["Lice","Scabies","Bedbugs"],
-    "Clinical – Pulmonary/URT": [
-      "URI","Pneumonia","Pulmonary Fungal Diseases","Common Cold","Sinusitis","Acute Bronchitis",
-      "Acute Tonsillitis/Pharyngitis","Bronchiolitis","Deep Neck Infections","Lung Abscess"
-    ],
-    "Clinical – Neuro": ["Meningitis","Encephalitis","Brain Abscess"],
-    "Clinical – Cardiovascular": ["Myocarditis","Infective Endocarditis"],
-    "STI – Female": ["Pelvic Inflammatory Disease"],
-    "STI – Male": ["Epididymitis","Prostatitis","Urethritis"],
-    "Wound/Soft tissue/Bone/Joint": [
-      "Skin and Soft Tissue Infections","Animal Bites","Toxic Shock Syndrome",
-      "Psoas Abscess","Septic Arthritis","Spinal Infections","Osteomyelitis","Diabetic Foot Infections",
-      "Otitis Externa","Otitis Media"
-    ],
-    "Misc, Rare, Nosocomial": [
-      "Device-related infections","Intravascular Catheter-related infections","Neglected Tropical Diseases"
-    ],
-    "GU": ["UTIs","Pyelonephritis","Perinephric Abscess"],
-    "GI": ["Infectious Gastroenteritis","Seafood Poisoning","Pyogenic Liver Abscess"]
-  },
-
-  "Nephrology": {
-    "Diseases of Nephron": [
-      "Approach to AKI","Approach to Nephrotic Syndrome","Approach to Nephritic Syndrome","Dialysis",
-      "Thin Basement Membrane Nephropathy","Post-streptococcal GN","IgA Nephropathy","Alport Syndrome",
-      "Acute TIN","Chronic TIN","Renal Papillary Necrosis","Renal Tubular Disorders","CKD"
-    ],
-    "Electrolytes": [
-      "Approach to Hyponatremia","Approach to Hypernatremia","Approach to Hypokalemia","Approach to Hyperkalemia",
-      "Approach to Hypocalcemia","Approach to Hypercalcemia","Approach to Hypermagnesemia","Approach to Hypomagnesemia",
-      "Approach to Acidosis","Approach to Metabolic Alkalosis","SIADH","Diabetes Insipidus"
-    ],
-    "Misc": [
-      "Nephrolithiasis","Cardio-Renal Syndrome","Hepatorenal Syndrome","Rhabdomyolysis/Crush Syndrome",
-      "Polycystic Kidney Disease","Renal Cysts","Fibromuscular Dysplasia"
-    ]
-  },
-
-  "Neurology": {
-    "Localization": [
-      "Cerebral Localization","Brainstem Localization","Cerebellar Localization","Cranial Nerve (Peripheral) Localization",
-      "Spinal Cord Localization","Basal Ganglia Localization","Peripheral Nerve Localization"
-    ],
-    "Headache": ["Headache","Trigeminal Neuralgia"],
-    "Seizure": ["Approach to Seizure in Adults","Approach to Seizure in Children","Seizure Pharmacology"],
-    "Vertigo": [
-      "Diagnostic Approach to Vertigo","BPPV","Menière Disease","Vestibular Neuritis and Labyrinthitis"
-    ],
-    "Consciousness": [
-      "Approach to Altered Mental Status and Coma","Delirium","Transient Global Amnesia",
-      "Persistent Vegetative State","Heat-related Illness"
-    ],
-    "Sleep": [
-      "Normal Sleep Cycle & Classification","Circadian Rhythm Disorders","Insomnia Disorder",
-      "Hypersomnolence Disorder","Parasomnias","Sleep Movement Disorders","Narcolepsy"
-    ],
-    "Neurocognitive": [
-      "Approach to Dementia","Alzheimer Disease","Vascular Dementia","Frontotemporal Dementia","CJD"
-    ],
-    "Vascular": [
-      "Ischemic Stroke","TIA","Intracerebral Hemorrhage","Subarachnoid Hemorrhage","Subdural Hematoma",
-      "Epidural Hematoma","Intraventricular Hemorrhage","Cerebral Venous Thrombosis","Subclavian Steal Syndrome"
-    ],
-    "Spinal Cord": ["Cervical Myelopathy","Syringomyelia","Degenerative Disk Disease","Spinal Stenosis"],
-    "Movement": ["Approach to Tremor","Parkinson Disease","Parkinson-Plus Syndromes","Huntington Disease","Dystonia"],
-    "Neuromuscular": [
-      "Multiple Sclerosis","NMOSD/ADEM/MOGAD/CLIPPERS","ALS","Spinal Muscular Atrophy","Myasthenia Gravis",
-      "Stiff Person Syndrome","Myotonic Syndromes"
-    ],
-    "Neuropathy": ["Approach to Polyneuropathy","Peripheral Nerve Injury","GBS/CIDP","Morton Neuroma"],
-    "Inherited & Rare": [
-      "Neurocutaneous Syndromes","Rare Neurological Syndromes","Friedreich Ataxia",
-      "Hereditary Motor Sensory Neuropathy","Refsum Disease","Spinocerebellar Ataxias"
-    ]
-  },
-
-  "Obstetrics": {
-    "Emergencies": ["Ectopic Pregnancy","Uterine Rupture","Postpartum Hemorrhage","Amniotic Fluid Embolism","Antepartum Hemorrhage"],
-    "Pregnancy & Prenatal Care": [
-      "Prenatal Care","Multiple Gestation","HDFN","Induced Abortion","Late-term & Post-term Pregnancy"
-    ],
-    "Pregnancy-associated Disorders": [
-      "Hypertensive Pregnancy Disorders","Gestational Diabetes","Pregnancy Loss","Hydatidiform Mole",
-      "Gestational Trophoblastic Neoplasia","Chorioamnionitis","Hyperemesis Gravidarum","Cervical Insufficiency",
-      "Other Pregnancy Complications","Pregnancy-associated Liver Disorders","TORCH & Congenital Infections",
-      "Polyhydramnios","Oligohydramnios","Peripartum Cardiomyopathy"
-    ],
-    "Labour & Delivery": [
-      "Labour and Delivery","Induced Delivery","Cesarean Delivery","Preterm Labour","Postpartum Period & Complications",
-      "Antepartum Fetal Surveillance"
-    ]
-  },
-
-  "Oncology": {
-    "Lung": ["Lung Cancer","Solitary Pulmonary Nodule","Mesothelioma"],
-    "GI": [
-      "Esophageal Cancer","Hepatocellular Carcinoma","Rarer Hepatic Malignancies","Benign Liver Tumours/Cysts",
-      "Gastric Cancer","Cholangiocarcinoma","Gallbladder Cancer","Rarer Biliary Malignancies",
-      "Pancreatic Cancer","Small Bowel Neoplasms","Colorectal Cancer","Anal Cancer"
-    ],
-    "Endocrine": ["Approach to Neuroendocrine Tumours","Approach to Thyroid Nodules","Thyroid Cancer"],
-    "Gynecological": [
-      "Cervical Cancer Screening","Cervical Cancer","Uterine Leiomyoma","Ovarian Tumours",
-      "Benign Tumours of Endometrium","Endometrial Cancer","Vulvar/Vaginal Cancer","Approach to Adnexal Mass"
-    ],
-    "Breast": [
-      "Approach to Palpable Breast Mass/Abnormal Mammogram","Nipple Discharge","Breast Hypertrophy",
-      "Breast Cancer","Benign Breast Conditions","Fibroadenoma","Phyllodes Tumour","Galactocele",
-      "Fibrocystic Changes","Mammary Duct Ectasia","Intraductal Papilloma","LCIS"
-    ],
-    "CNS": ["Approach to Brain Tumor in Adults","Approach to Neurocutaneous Syndromes"],
-    "Heme": [
-      "Summary of Hematologic Malignancies","AML","ALL","CLL","CML","Hairy Cell Leukemia",
-      "Hodgkin Lymphomas","Non-Hodgkin Lymphomas","Mastocytosis","Multiple Myeloma/MGUS/SMM",
-      "Waldenström Macroglobulinemia","Polycythemia Vera","Essential Thrombocytosis","Mycosis Fungoides / CTCL",
-      "Chronic Eosinophilic Leukemia","Chronic Neutrophilic Leukemia","MPN-Unclassifiable","Primary Myelofibrosis",
-      "Myelodysplastic Syndromes","CMML","JMML","Langerhans Cell Histiocytosis",
-      "Erdheim–Chester Disease","Rosai–Dorfman Disease","POEMS Syndrome","Heavy Chain Diseases"
-    ],
-    "Oncologic Emergencies": ["Tumor lysis, SVC syndrome, cord compression, hypercalcemia, neutropenic sepsis"],
-    "Misc": ["Chemotherapy & Oncologic Pharmacology","Paraneoplastic Syndromes"]
-  },
-
-  "Pediatrics": {
-    "Infectious Diseases": ["Approach to Pediatric Sepsis","Approach to Influenza in Pediatrics"],
-    "Neonatology": ["Approach to Neonatal Jaundice","Perinatal Asphyxia and HIE"],
-    "Development": ["Developmental Approach (placeholder)"]
-  },
-
-  "Respirology": {
-    "Obstructive": [
-      "COPD","Acute Exacerbation of COPD","Asthma","Acute Exacerbation of Asthma",
-      "Bronchiectasis","Cystic Fibrosis","Acute Exacerbation of Cystic Fibrosis"
-    ],
-    "Restrictive": [
-      "PIGE (Pulmonary Infiltrates with Eosinophilia) – Diagnostic Approach",
-      "Hypersensitivity Pneumonitis","Eosinophilic Pneumonias","Restrictive Lung Diseases",
-      "Idiopathic Interstitial Pneumonias"
-    ],
-    "Critical Resp": [
-      "Hemoptysis","ARDS","Approach to Hypoxemia","Mechanical Ventilation","ECMO","Approach to Respiratory Failure"
-    ],
-    "Misc": [
-      "Occupational & Environmental Lung Disease","Pulmonary Alveolar Proteinosis",
-      "Pulmonary Hypertension","Tobacco Addiction & Cessation"
-    ],
-    "Pleural Disease": ["Pleural Effusion","Pleuritis","Pneumothorax"]
-  },
-
-  "Rheumatology": {
-    "Misc": ["Antirheumatic/Immunosuppressants","IgG4-Related Disease"],
-    "Connective Tissue Diseases": [
-      "Approach to Arthralgia/CTDs","Raynaud Phenomenon","Relapsing Polychondritis",
-      "Sjögren Syndrome","SLE","Systemic Sclerosis","MCTD"
-    ],
-    "Joint Diseases": [
-      "Rheumatoid Arthritis","Gout/Hyperuricemia","CPPD","Basic Calcium Phosphate Deposition",
-      "Reactive Arthritis","Seronegative Spondyloarthropathies","Psoriatic Arthritis",
-      "Ankylosing Spondylitis","Sarcoidosis"
-    ],
-    "Myopathies & Pain": ["Idiopathic Inflammatory Myopathies","Adult-Onset Still Disease","Polymyalgia Rheumatica"],
-    "Vasculitis": [
-      "Approach to Vasculitides","Giant Cell Arteritis","GPA","EGPA","MPA","Polyarteritis Nodosa","IgA Vasculitis",
-      "Takayasu Arteritis","Cryoglobulinemic Vasculitis","Behçet Disease","Cutaneous Small-Vessel Vasculitis",
-      "Thromboangiitis Obliterans (Buerger Disease)"
-    ]
-  },
-
-  "Urology": {
-    "Emergencies": ["Approach to Testicular Torsion"],
-    "Infections": ["Approach to Urinary Tract Infections","Approach to Cystitis"]
-  }
-};
-
-// Utility: flatten tree to items[]
-function tocItemsFromTree(tree) {
-  const out = [];
-  for (const [disc, subs] of Object.entries(tree)) {
-    for (const [sub, topics] of Object.entries(subs)) {
-      for (const t of topics) {
-        out.push({ discipline: disc, sub, topic: t });
-      }
-    }
-  }
-  return out;
-}
-
-// Normalize topic names so "Approach To X" matches "X"
-function normalizeTopicName(s = "") {
-  return String(s)
-    .toLowerCase()
-    // strip common prefixes
-    .replace(/^(approach\s*to|evaluation\s*of|diagnosis\s*of|management\s*of|treatment\s*of|overview\s*of)\s+/i, "")
-    // collapse punctuation/whitespace
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-
-// === Add under HARDCODED_TOC ===
-
-// Internal Medicine disciplines (for "High-Yield (IM)")
-const INTERNAL_MED_DISC_SET = new Set([
-  "Cardiology","Endocrinology","Gastroenterology","Hematology",
-  "Infectious Disease","Nephrology","Neurology","Respirology","Rheumatology"
-]);
-
-function collectIMCandidates(excludeSet = new Set()) {
-  const out = [];
-  for (const [disc, subs] of Object.entries(HARDCODED_TOC)) {
-    if (!INTERNAL_MED_DISC_SET.has(disc)) continue;
-    for (const [sub, topics] of Object.entries(subs)) {
-      for (const topic of topics) {
-        if (excludeSet.has(topic)) continue;
-        out.push({ discipline: disc, sub, topic });
-      }
-    }
-  }
-  return out;
-}
-
-// High-Yield (IM) via AI
-// POST /med/high-yield-im { user_id, n? }
-app.post('/med/high-yield-im', async (req, res) => {
-  try {
-    const user_id = String(req.body?.user_id || "Gurnoor");
-    const n = Math.max(1, Math.min(10, Number(req.body?.n || 1)));
-
-    // Build eligible pool from the hard-coded TOC
-    const allTopics = Array.from(
-      new Set(tocItemsFromTree(HARDCODED_TOC).map(it => it.topic))
-    ).sort();
-
-    // --- INLINE fetch of completed topics for this user (replaces missing helper) ---
-    const completedRows = medDb
-      .prepare(`SELECT topic FROM completed_topics WHERE user_id = ?`)
-      .all(user_id);
-    const completed = completedRows.map(r => r.topic);
-    const completedNorm = new Set(completed.map(normalizeTopicName));
-
-    const eligible = allTopics.filter(
-      t => !completedNorm.has(normalizeTopicName(t))
-    );
-
-    if (!eligible.length) {
-      return res.json({
-        ok: true,
-        ranked: [],
-        pick: null,
-        reason: "No eligible topics (all completed)."
-      });
-    }
-
-    // Ask AI to rank **from the eligible list only**
-    const system = `
-You are a clerkship director selecting HIGH-YIELD Internal Medicine study topics.
-From the provided list ONLY, rank topics (most to least high-yield for IM).
-Return STRICT JSON:
-{"ranked":[{"topic":"","reason":""}]}.
-Do NOT invent topics not in the list.
-Prefer common inpatient issues, critical emergencies, and algorithm-heavy entities.
-`;
-    const user = { topics: eligible, max: Math.min(20, eligible.length) };
-
-    const resp = await responsesCall({
-      model: BASE_MODEL,
-      messages: [
-        { role: "system", content: system },
-        { role: "user",   content: JSON.stringify(user) }
-      ],
-      temperature: 0
-    });
-
-    let out = parseResponsesJSON(resp) || {};
-    let ranked = Array.isArray(out.ranked) ? out.ranked : [];
-
-    // Safety: filter again after AI (and drop any out-of-list items)
-    const eligibleSet = new Set(eligible);
-    ranked = ranked
-      .filter(x => x && x.topic && eligibleSet.has(x.topic))
-      .filter(x => !completedNorm.has(normalizeTopicName(x.topic)));
-
-    // Fallback if AI returns nothing usable
-    if (!ranked.length) {
-      const fallback = eligible[Math.floor(Math.random() * eligible.length)];
-      return res.json({
-        ok: true,
-        ranked: [{ topic: fallback, reason: "Random fallback from eligible (AI gave no usable output)." }],
-        pick: { topic: fallback, reason: "Random fallback." }
-      });
-    }
-
-    const pick = ranked[0];
-    res.json({ ok: true, ranked: ranked.slice(0, n), pick });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-
-
-// ====== AI Pimp Questions ======
-
-async function buildPimpQuestionsAI(topic, noteSnippets = [], n = 12) {
-  const system = `
-You are a senior Internal Medicine attending running a fast ward round.
-Create HARD, pimp-style questions. Tone: brisk, a bit mean, but professional.
-Difficulty should PROGRESS from hard to brutal. Keep stems short and clinical.
-Return STRICT JSON ONLY:
-{"questions":[{"q":"","answer":"","explain":""}]}
-- "q": the question stem
-- "answer": the expected concise answer
-- "explain": one-paragraph correction/explanation if the learner is wrong
-- Create ${n} total. No extra prose.
-`;
-
-  const user = {
-    topic,
-    note_snippets: noteSnippets.slice(0, 12), // optional grounding
-    constraints: {
-      progressive_difficulty: true,
-      number: n,
-      brevity_in_stems: true,
-      focus: "diagnosis, algorithms, must-not-miss complications, risk stratification, therapeutics, monitoring, contraindications"
-    }
-  };
-
-  const resp = await responsesCall({
-    model: process.env.OPENAI_FAST_MODEL || "gpt-4.1-mini",
-    temperature: 0,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: JSON.stringify(user) }
-    ]
-  });
-
-  const parsed = parseResponsesJSON(resp);
-  if (!parsed || !Array.isArray(parsed.questions)) return { questions: [] };
-  // Normalize and trim
-  const qs = parsed.questions.map(q => ({
-    q: String(q.q || "").trim(),
-    answer: String(q.answer || "").trim(),
-    explain: String(q.explain || "").trim()
-  })).filter(q => q.q && q.answer);
-  return { questions: qs.slice(0, n) };
-}
-
-// POST /med/test-questions  { topic, n? }
-app.post('/med/test-questions', async (req, res) => {
-  try {
-    const topic = String(req.body?.topic || "").trim();
-    const n = Math.max(4, Math.min(20, Number(req.body?.n || 12)));
-    if (!topic) return res.status(400).json({ error: "topic required" });
-
-    const snippets = searchNoteSnippets(topic, 12);
-    const out = await buildPimpQuestionsAI(topic, snippets, n);
-    if (!out.questions.length) return res.status(500).json({ error: "failed to generate questions" });
-    res.json({ ok: true, topic, count: out.questions.length, questions: out.questions });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// Handy GET wrapper for quick testing in a browser:
-//   /med/test-questions?topic=Acute%20Coronary%20Syndrome&n=10
-app.get('/med/test-questions', async (req, res) => {
-  try {
-    const topic = String(req.query?.topic || "").trim();
-    const n = Math.max(4, Math.min(20, Number(req.query?.n || 12)));
-    if (!topic) return res.status(400).json({ error: "topic required" });
-    const snippets = searchNoteSnippets(topic, 12);
-    const out = await buildPimpQuestionsAI(topic, snippets, n);
-    if (!out.questions.length) return res.status(500).json({ error: "failed to generate questions" });
-    res.json({ ok: true, topic, count: out.questions.length, questions: out.questions });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-
-// --- Learn-plan helpers (place under HARDCODED_TOC) ---
-
-// If you already added this earlier for high-yield, keep one copy only.
-/*
-const INTERNAL_MED_DISC_SET = new Set([
-  "Cardiology","Endocrinology","Gastroenterology","Hematology",
-  "Infectious Disease","Nephrology","Neurology","Respirology","Rheumatology"
-]);
-*/
-
-// Simple FTS search into your indexed notes (if any) to provide context to the AI.
-
-
-// Optional grounding from your indexed PDFs (works even if empty)
-function searchNoteSnippets(topic, k = 8) {
-  try {
-    const rows = medDb.prepare(`
-      SELECT pc.text AS text
-      FROM pdf_chunks_fts
-      JOIN pdf_chunks pc ON pc.rowid = pdf_chunks_fts.rowid
-      WHERE pdf_chunks_fts MATCH ?
-      ORDER BY bm25(pdf_chunks_fts)
-      LIMIT ?
-    `).all(topic, k);
-    return rows.map(r => r.text);
-  } catch {
-    return [];
-  }
-}
-
-// Build the plan (cheaper model) – guidelines, trials, objectives
-async function buildLearnPlanAI(topic, noteSnippets = []) {
-  const system = `
-You are an evidence-based Internal Medicine educator.
-Create a LEARNING PLAN for the topic with three arrays: "guidelines", "trials", "objectives".
-Return STRICT JSON only:
-
-{
-  "guidelines":[
-    {"region":"Canada|USA|International","org":"","year":2020,"title":"","why":"","link":""}
-  ],
-  "trials":[
-    {"name":"","year":1999,"question":"","design":"","n":"","result":"","impact":"","one_liner":"","link":""}
-  ],
-  "objectives":[
-    {"objective":"","rationale":"",
-     "resources":[
-       {"type":"guideline","ref":""},
-       {"type":"trial","ref":""},
-       {"type":"other","title":"","link":""}
-     ]}
-  ]
-}
-
-RULES
-- Prefer CANADIAN guidelines first (CCS/CTS/CMAJ/SOGC/IDSA Canada/etc), else USA (ACC/AHA/ACP/IDSA/etc), then International.
-- Trials MUST be landmark/seminal (include influential negative trials when relevant).
-- Objectives should be extensive: pathophysiology, dx, risk stratification, mgmt (ED/inpatient/outpatient), complications, follow-up.
-- Under each objective, list resources that match items in the "guidelines" or "trials" arrays (use their exact titles/names in "ref").
-- If you provide "link", it MUST be a stable landing page, DOI or PMID; if unsure, leave "link" empty. NO dead paths.
-`;
-
-  const userPayload = {
-    topic,
-    note_snippets: noteSnippets,
-    prefer_regions: ["Canada","USA","International"],
-    max_guidelines: 10,
-    max_trials: 12
-  };
-
-  const resp = await responsesCall({
-    model: PIMP_DISCUSSION_MODEL,
-    temperature: 0,
-    max_output_tokens: 800,
-    reasoning_effort: 'low',
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: JSON.stringify(userPayload) }
-    ]
-  });
-
-  const parsed = parseResponsesJSON(resp);
-  if (!parsed || !Array.isArray(parsed.guidelines) || !Array.isArray(parsed.trials) || !Array.isArray(parsed.objectives)) {
-    return { guidelines: [], trials: [], objectives: [] };
-  }
-  return parsed;
-}
-// Validate a URL (HEAD first, fallback GET), short timeout
-async function urlOk(url, timeoutMs = 7000) {
-  if (!url || typeof url !== "string") return false;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
-    // HEAD can be blocked; try GET if HEAD not ok
-    let r = await fetch(url, { method: "HEAD", redirect: "follow", signal: ctrl.signal });
-    if (!r.ok) {
-      r = await fetch(url, { method: "GET", redirect: "follow", signal: ctrl.signal });
-    }
-    clearTimeout(t);
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-// Ask a smarter model for canonical links (only for items missing/invalid URLs)
-async function aiSuggestCanonicalLinks(kind, items) {
-  // items: [{i, title/org/year} or {i, name/year}]
-  if (!items.length) return [];
-  const system = `
-You are a meticulous research assistant whose ONLY job is to provide canonical, non-404 links.
-For ${kind}, return stable landing pages (home guideline pages) or DOI/PMID links.
-Return STRICT JSON only: {"links":[{"i":0,"url":""}, ...]}  
-Rules:
-- Prefer society's canonical landing page for guidelines (not PDF deep-links if unstable).
-- Prefer DOI or PubMed for trials; Google-hosted PDFs are OK if official.
-- NEVER return obvious 404s or search result pages. If uncertain, leave the url empty.
-`;
-  const resp = await responsesCall({
-    model: STRICT_MODEL,              // set OPENAI_STRICT_MODEL=gpt-5.1 on Render
-    messages: [
-      { role: "system", content: system },
-      { role: "user",   content: JSON.stringify({ items }) }
-    ]
-    // no temperature for 5.x (wrapper omits it automatically)
-  });
-
-  const parsed = parseResponsesJSON(resp);
-  return Array.isArray(parsed?.links) ? parsed.links : [];
-}
-
-// Fix/verify links: if invalid -> ask AI for a canonical URL -> verify -> else fall back to search links
-async function improvePlanLinks(plan, topic) {
-  const order = { Canada: 0, USA: 1, International: 2 };
-  plan.guidelines.sort((a,b) => (order[a.region] ?? 99) - (order[b.region] ?? 99) || (b.year||0) - (a.year||0));
-
-  // Verify given links
-  const invalidGuides = [];
-  for (let i=0;i<plan.guidelines.length;i++){
-    const g = plan.guidelines[i];
-    if (g.link && await urlOk(g.link)) continue;
-    invalidGuides.push({ i, title: g.title || "", org: g.org || "", year: g.year || "", region: g.region || "" });
-    g.link = ""; // clear for now
-  }
-  const invalidTrials = [];
-  for (let i=0;i<plan.trials.length;i++){
-    const t = plan.trials[i];
-    if (t.link && await urlOk(t.link)) continue;
-    invalidTrials.push({ i, name: t.name || "", year: t.year || "" });
-    t.link = "";
-  }
-
-  // Ask smarter model only for the missing ones
-  if (invalidGuides.length){
-    const links = await aiSuggestCanonicalLinks("guidelines", invalidGuides);
-    for (const l of links) {
-      const g = plan.guidelines[l.i];
-      if (!g) continue;
-      if (l.url && await urlOk(l.url)) g.link = l.url;
-    }
-  }
-  if (invalidTrials.length){
-    const links = await aiSuggestCanonicalLinks("trials", invalidTrials);
-    for (const l of links) {
-      const t = plan.trials[l.i];
-      if (!t) continue;
-      if (l.url && await urlOk(l.url)) t.link = l.url;
-    }
-  }
-
-  // Final fallbacks: search links that won't 404 (search pages are intentional here)
-  const gSearch = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
-  const pmid = (q) => `https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(q)}`;
-  const scholar = (q) => `https://scholar.google.com/scholar?q=${encodeURIComponent(q)}`;
-
-  for (const g of plan.guidelines) {
-    if (!g.link) g.link = gSearch(`${g.title || topic} ${g.org || ""} guideline`);
-  }
-  for (const t of plan.trials) {
-    if (!t.link) t.link = pmid(`${t.name || topic}`);
-  }
-
-  return plan;
-}
-
-
-
-// ------------------------------ ADMIN NUKE (kept) ---------------------------
-app.delete('/admin/wipe', async (req, res) => {
-  try {
-    const secret = String(req.query.secret || "");
-    if (secret !== process.env.ADMIN_SECRET) {
-      return res.status(403).json({ error: "forbidden" });
-    }
-    const dry = String(req.query.dry || "0") === "1";
-
-    const patterns = ["user:*","username_index:*","auth:token:*","sess:*","sess:*:items","excl:*","history:*","leaderboard:*","casesim:session:*","casesim:excl:*"];
-    let deleted = 0;
-
-    async function delChunked(keys) {
-      const CHUNK = 100;
-      for (let i = 0; i < keys.length; i += CHUNK) {
-        const slice = keys.slice(i, i + CHUNK);
-        if (!dry && slice.length) await redis.del(...slice);
-        deleted += slice.length;
-      }
-    }
-
-    for (const pattern of patterns) {
-      const keys = await redis.keys(pattern);
-      if (keys?.length) await delChunked(keys);
-    }
-
-    if (!dry) await redis.del("leaderboard:global");
-    res.json({ ok: true, dry, deleted_keys_estimate: deleted });
-  } catch (e) {
-    res.status(500).json({ error: "wipe failed", detail: String(e) });
-  }
-});
-
-// --- AI username moderation (kept) ---
-const OPENAI_MOD_URL = "https://api.openai.com/v1/moderations";
-const ALLOW_ON_MOD_FAIL = true;
-
-async function isUsernameAllowedAI(username) {
-  try {
-    const resp = await fetch(OPENAI_MOD_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({ model: "omni-moderation-latest", input: username }),
-    });
-
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data?.error?.message || resp.statusText);
-
-    const r = Array.isArray(data.results) ? data.results[0] : data;
-    const c = r.categories || {};
-    const s = r.category_scores || r.scores || {};
-    const flagged = r.flagged === true;
-
-    const blockHardFlags =
-      c.hate === true || c.hate_threatening === true ||
-      c.harassment_threats === true ||
-      c.sexual_minors === true ||
-      c.violence_graphic === true;
-
-    const blockByScore =
-      (s.hate || 0) > 0.50 ||
-      (s.hate_threatening || 0) > 0.40 ||
-      (s.harassment_threats || 0) > 0.50 ||
-      (s.sexual_minors || 0) > 0.20 ||
-      (s.violence_graphic || 0) > 0.40;
-
-    return !(flagged || blockHardFlags || blockByScore);
-  } catch (e) {
-    console.error("Moderation check failed:", e);
-    return ALLOW_ON_MOD_FAIL;
-  }
-}
-
-// Redis keys
+////////////////////////////////////////////////////////////////////////////////
+// REDIS KEYS + USER HELPERS
+////////////////////////////////////////////////////////////////////////////////
 const usernameKey = (u) => String(u || '').trim();
 const usernameIndexKey = (u) => `username_index:${String(u || '').trim().toLowerCase()}`;
 const kUser = (u) => `user:${usernameKey(u)}`;
 const kExcl = (u) => `excl:${usernameKey(u)}`;
+const kConcepts = (u) => `concepts:${usernameKey(u)}`;
 const kSess = (s) => `sess:${s}`;
 const kSessItems = (s) => `sess:${s}:items`;
 const kHistory = (u) => `history:${usernameKey(u)}`;
-const kAuthToken = (tokenHash) => `auth:token:${tokenHash}`;
+const kAuthToken = (h) => `auth:token:${h}`;
 const kCaseExcl = (u) => `casesim:excl:${usernameKey(u)}`;
+const kCaseReq = (u, r) => `casesim:req:${usernameKey(u)}:${r}`;
+const kLB = () => 'leaderboard:global';
 
-// DEBUGGERS (kept)
-app.get("/admin/raw-items", async (req, res) => {
-  try {
-    const { sessionId } = req.query;
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-    const key = kSessItems(String(sessionId));
-    const raw = await redis.lrange(key, 0, -1);
-    res.json({
-      key,
-      length: raw.length,
-      items: raw.map((x, i) => ({ idx: i, typeof: typeof x, preview: String(x).slice(0, 120) }))
-    });
-  } catch (e) {
-    res.status(500).json({ error: "raw-items failed", detail: String(e) });
-  }
-});
-
-app.post("/admin/append-dummy", async (req, res) => {
-  try {
-    const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-    const key = kSessItems(String(sessionId));
-    const dummy = { question: "DUMMY?", final_difficulty: "MSI3", asked_at: Date.now() };
-    const newLen = await redis.rpush(key, JSON.stringify(dummy));
-    res.json({ ok: true, key, newLen });
-  } catch (e) {
-    res.status(500).json({ error: "append failed", detail: String(e) });
-  }
-});
-
-// Points helpers (kept)
-const kLB = () => `leaderboard:global`;
-function tierIndex(label) { const i = DIFF.indexOf(normalizeDifficulty(label)); return (i >= 0 ? i : 2) + 1; }
-function pointsFor(label) { const t = tierIndex(label); return { correct: 10 * t, wrong: 5 * t }; }
+function parseMaybeJSON(raw) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim();
+  if (t.startsWith('{') || t.startsWith('[')) { try { return JSON.parse(t); } catch { return null; } }
+  return null;
+}
 
 async function getUserScore(username) {
   const h = await redis.hgetall(kUser(username));
-  const score = Number(h?.score || 0);
-  const answered = Number(h?.answered || 0);
-  const correct = Number(h?.correct || 0);
+  const score = Number(h?.score || 0), answered = Number(h?.answered || 0), correct = Number(h?.correct || 0);
   return { score, answered, correct, accuracy: answered ? correct / answered : 0 };
 }
 
 async function applyScoreDelta(username, delta, wasCorrect) {
-  await redis.hincrby(kUser(username), "answered", 1);
-  if (wasCorrect) await redis.hincrby(kUser(username), "correct", 1);
-
-  let newScore = await redis.hincrby(kUser(username), "score", delta);
+  await redis.hincrby(kUser(username), 'answered', 1);
+  if (wasCorrect) await redis.hincrby(kUser(username), 'correct', 1);
+  let newScore = await redis.hincrby(kUser(username), 'score', delta);
   await redis.zincrby(kLB(), delta, username);
-
   if (newScore < 0) {
-    await redis.hincrby(kUser(username), "score", -newScore);
+    await redis.hincrby(kUser(username), 'score', -newScore);
     await redis.zincrby(kLB(), -newScore, username);
     newScore = 0;
   }
   return newScore;
 }
 
-// ------------------------------ HARD-CODED TOC ROUTES -----------------------
-
-// Full TOC (flattened)
-app.get('/med/toc', (req, res) => {
-  const items = tocItemsFromTree(HARDCODED_TOC);
-  const counts = {
-    disciplines: Object.keys(HARDCODED_TOC).length,
-    subs: Object.values(HARDCODED_TOC).reduce((a, s) => a + Object.keys(s).length, 0),
-    topics: items.length
-  };
-  res.json({ ok: true, label: 'HARDCODED_TOC_V1', items, counts });
-});
-
-// Lists for UI pickers
-app.get('/med/disciplines', (req, res) => {
-  res.json({ disciplines: Object.keys(HARDCODED_TOC) });
-});
-
-app.get('/med/subdisciplines', (req, res) => {
-  const d = String(req.query.discipline || '');
-  const subs = HARDCODED_TOC[d] ? Object.keys(HARDCODED_TOC[d]) : [];
-  res.json({ discipline: d, subs });
-});
-
-app.get('/med/topics-for-sub', (req, res) => {
-  const d = String(req.query.discipline || '');
-  const s = String(req.query.sub || '');
-  const topics = HARDCODED_TOC[d]?.[s] || [];
-  res.json({ discipline: d, sub: s, topics });
-});
-
-// ---------- Response parsing helpers (kept) ----------
-function parseResponsesJSON(resp) {
-  try {
-    const t1 = typeof resp?.output_text === "string" ? resp.output_text.trim() : "";
-    if (t1 && (t1.startsWith("{") || t1.startsWith("["))) return JSON.parse(t1);
-
-    const part = resp?.output?.[0]?.content?.[0];
-    if (!part) return null;
-
-    const t2 = typeof part?.text === "string" ? part.text.trim() : "";
-    if (t2 && (t2.startsWith("{") || t2.startsWith("["))) return JSON.parse(t2);
-
-    if (part && typeof part.json === "object" && part.json !== null) return part.json;
-    if (part && typeof part === "object" && !Array.isArray(part)) return part;
-
-    return null;
-  } catch { return null; }
-}
-
-function debugResp(tag, resp) {
-  try {
-    console.log(`[${tag}] typeof output_text=`, typeof resp?.output_text);
-    if (typeof resp?.output_text === "string") {
-      console.log(`[${tag}] output_text (first 200):`, resp.output_text.slice(0, 200));
-    }
-    const part = resp?.output?.[0]?.content?.[0];
-    console.log(`[${tag}] part keys:`, part ? Object.keys(part) : null);
-    if (typeof part?.text === "string") {
-      console.log(`[${tag}] part.text (first 200):`, part.text.slice(0, 200));
-    }
-  } catch {}
-}
-
-// Peek at a session's stored items (kept)
-app.get("/admin/peek-session", async (req, res) => {
-  try {
-    const { sessionId } = req.query;
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-
-    const meta = await getSessionMeta(String(sessionId));
-    const items = await getSessionItems(String(sessionId));
-    res.json({ meta, items_count: items.length, last_item: items[items.length - 1] || null });
-  } catch (e) {
-    res.status(500).json({ error: "peek failed", detail: String(e) });
-  }
-});
-
-// User/auth/session helpers
-function normalizeUsernameInput(username) {
-  return String(username || '').trim();
-}
-
+////////////////////////////////////////////////////////////////////////////////
+// AUTH
+////////////////////////////////////////////////////////////////////////////////
+const normalizeUsernameInput = (u) => String(u || '').trim();
 function validateUsername(username) {
   const u = normalizeUsernameInput(username);
   if (!u) return 'username required';
@@ -1320,488 +159,132 @@ function validateUsername(username) {
   if (!/^[A-Za-z0-9._-]+$/.test(u)) return 'username can only contain letters, numbers, dot, underscore, and hyphen';
   return '';
 }
-
 function validatePassword(password) {
   const p = String(password || '');
   if (p.length < 8) return 'password must be at least 8 characters';
   if (p.length > 256) return 'password is too long';
   return '';
 }
-
-function hashToken(token) {
-  return crypto.createHash('sha256').update(String(token)).digest('hex');
-}
-
-function makeSalt() {
-  return crypto.randomBytes(16).toString('hex');
-}
-
-function hashPassword(password, salt) {
-  return crypto.scryptSync(String(password), salt, 64).toString('hex');
-}
-
+const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+const makeSalt = () => crypto.randomBytes(16).toString('hex');
+const hashPassword = (p, salt) => crypto.scryptSync(String(p), salt, 64).toString('hex');
 function verifyPassword(password, salt, expectedHash) {
   if (!salt || !expectedHash) return false;
-  const actual = Buffer.from(hashPassword(password, salt), 'hex');
-  const expected = Buffer.from(String(expectedHash), 'hex');
-  if (actual.length !== expected.length) return false;
-  return crypto.timingSafeEqual(actual, expected);
+  const a = Buffer.from(hashPassword(password, salt), 'hex');
+  const b = Buffer.from(String(expectedHash), 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a || '')), y = Buffer.from(String(b || ''));
+  return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
 }
 
 async function userExists(username) { return Boolean(await redis.exists(kUser(username))); }
 
-async function createUser(username, password = '') {
+async function createUser(username, password) {
   const u = normalizeUsernameInput(username);
-  const now = Date.now();
-  const data = { username: u, created_at: now, score: 0, answered: 0, correct: 0 };
-  if (password) {
-    const salt = makeSalt();
-    data.password_salt = salt;
-    data.password_hash = hashPassword(password, salt);
-    data.auth_version = 1;
-  } else {
-    data.legacy_no_password = 1;
-  }
-  await redis.hset(kUser(u), data);
+  const salt = makeSalt();
+  await redis.hset(kUser(u), { username: u, created_at: Date.now(), score: 0, answered: 0, correct: 0, password_salt: salt, password_hash: hashPassword(password, salt), auth_version: 1 });
   await redis.set(usernameIndexKey(u), u);
   await redis.zadd(kLB(), { score: 0, member: u });
-  await redis.zadd('leaderboard:global', { score: 0, member: u });
 }
 
 async function createAuthToken(username) {
   const token = crypto.randomBytes(32).toString('base64url');
-  const tokenHash = hashToken(token);
-  const ttlSeconds = Number(process.env.AUTH_SESSION_TTL_SECONDS || 60 * 60 * 24 * 30);
-  await redis.set(kAuthToken(tokenHash), JSON.stringify({ username, created_at: Date.now() }), { ex: ttlSeconds });
+  const ttl = Number(process.env.AUTH_SESSION_TTL_SECONDS || 60 * 60 * 24 * 30);
+  await redis.set(kAuthToken(hashToken(token)), JSON.stringify({ username, created_at: Date.now() }), { ex: ttl });
   return token;
 }
 
 async function readAuthFromReq(req) {
-  const auth = String(req.headers?.authorization || '');
-  const m = auth.match(/^Bearer\s+(.+)$/i);
+  const m = String(req.headers?.authorization || '').match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
   const token = m[1].trim();
   if (!token) return null;
-  const raw = await redis.get(kAuthToken(hashToken(token)));
-  const parsed = parseMaybeJSON(raw);
+  const parsed = parseMaybeJSON(await redis.get(kAuthToken(hashToken(token))));
   if (!parsed?.username) return null;
   const user = await redis.hgetall(kUser(parsed.username));
-  if (!user || Object.keys(user).length === 0) return null;
+  if (!user || !Object.keys(user).length) return null;
   return { username: parsed.username, token, user };
 }
 
+const PUBLIC_ROUTES = [
+  ['GET', /^\/api\/leaderboard/],
+  ['GET', /^\/med\/(toc|disciplines|subdisciplines|topics-for-sub)\b/]
+];
 async function requireAuth(req, res, next) {
   try {
-    const publicApi =
-      (req.method === 'POST' && req.originalUrl.startsWith('/api/users')) ||
-      (req.method === 'GET' && req.originalUrl.startsWith('/api/leaderboard'));
-    if (publicApi || process.env.DISABLE_AUTH === '1') return next();
+    if (PUBLIC_ROUTES.some(([m, re]) => req.method === m && re.test(req.originalUrl))) return next();
+    if (process.env.DISABLE_AUTH === '1') { req.auth = { username: 'dev' }; return next(); }
     const auth = await readAuthFromReq(req);
     if (!auth) return res.status(401).json({ error: 'Login required' });
     req.auth = auth;
     next();
   } catch (e) {
-    res.status(401).json({ error: 'Login required', detail: String(e) });
+    res.status(401).json({ error: 'Login required' });
   }
 }
 
-function requestedUsernameOrAuth(req, rawUsername) {
-  const authUser = req.auth?.username;
-  const requested = normalizeUsernameInput(rawUsername || authUser);
-  if (!authUser) return requested;
-  if (!requested) return authUser;
-  if (requested !== authUser) {
-    const err = new Error('Cannot access another user account');
-    err.statusCode = 403;
-    throw err;
+async function requireAdmin(req, res, next) {
+  const secret = process.env.ADMIN_SECRET;
+  if (secret && safeEqual(req.headers['x-admin-secret'], secret)) return next();
+  const admins = String(process.env.ADMIN_USERS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (admins.length) {
+    const auth = await readAuthFromReq(req).catch(() => null);
+    if (auth && admins.includes(auth.username)) { req.auth = auth; return next(); }
   }
-  return authUser;
+  res.status(403).json({ error: 'forbidden' });
 }
 
-async function exclusionsCount(username) { return await redis.llen(kExcl(username)); }
-async function getExclusions(username) { return await redis.lrange(kExcl(username), 0, -1); }
-async function pushExclusions(username, questions) { if (!questions?.length) return 0; return await redis.rpush(kExcl(username), ...questions); }
-
-async function createSession({ username, topic, startingDifficulty, mode = 'pimp' }) {
-  const id = uuid();
-  await redis.hset(kSess(id), {
-    username,
-    topic: topic || 'random',
-    start_diff: normalizeDifficulty(startingDifficulty || 'Hard'),
-    mode: mode === 'mccqe' ? 'mccqe' : 'pimp',
-    created_at: Date.now()
-  });
-  return id;
+// Login throttling: 10 failed attempts per username+IP per 15 minutes.
+const loginFailures = new Map();
+function tooManyFailures(key) {
+  const rec = loginFailures.get(key);
+  if (!rec) return false;
+  if (Date.now() - rec.first > 15 * 60 * 1000) { loginFailures.delete(key); return false; }
+  return rec.count >= 10;
+}
+function noteFailure(key) {
+  const rec = loginFailures.get(key);
+  if (!rec || Date.now() - rec.first > 15 * 60 * 1000) loginFailures.set(key, { count: 1, first: Date.now() });
+  else rec.count += 1;
 }
 
-async function getSessionMeta(sessionId) {
-  const data = await redis.hgetall(kSess(sessionId));
-  if (!data || Object.keys(data).length === 0) return null;
-  if (data.start_diff) data.start_diff = normalizeDifficulty(data.start_diff);
-  return data;
-}
-
-async function getSessionItems(sessionId) {
-  const raw = await redis.lrange(kSessItems(sessionId), 0, -1);
-  const items = [];
-  for (const r of raw) {
-    if (typeof r === "string") {
-      const t = r.trim();
-      if (t.startsWith("{") || t.startsWith("[")) { try { items.push(JSON.parse(t)); } catch {} }
-    } else if (r && typeof r === "object" && !Array.isArray(r)) {
-      items.push(r);
-    }
-  }
-  return items;
-}
-
-function parseMaybeJSON(raw) {
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
-  if (typeof raw !== "string") return null;
-  const t = raw.trim();
-  if (!t) return null;
-  if (t.startsWith("{") || t.startsWith("[")) {
-    try { return JSON.parse(t); } catch { return null; }
-  }
-  return null;
-}
-
-async function pushSessionItem(sessionId, item) {
-  await redis.rpush(kSessItems(sessionId), JSON.stringify(item));
-}
-
-async function updateLastSessionItem(sessionId, patch) {
-  const len = await redis.llen(kSessItems(sessionId));
-  if (len === 0) return;
-
-  const raw = await redis.lindex(kSessItems(sessionId), len - 1);
-  const last = parseMaybeJSON(raw);
-  if (!last) return;
-
-  const updated = { ...last, ...patch };
-  await redis.lset(kSessItems(sessionId), len - 1, JSON.stringify(updated));
-}
-
-async function pushHistory(username, item) {
-  await redis.lpush(kHistory(username), JSON.stringify(item));
-  await redis.ltrim(kHistory(username), 0, 999);
-}
-
-async function getCaseExclusions(username) { return await redis.lrange(kCaseExcl(username), 0, -1); }
-async function caseExclusionsCount(username) { return await redis.llen(kCaseExcl(username)); }
-async function pushUniqueCaseExclusion(username, entry) {
-  const e = String(entry || '').trim();
-  if (!e) return 0;
-  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  const existing = await getCaseExclusions(username);
-  if (new Set(existing.map(norm)).has(norm(e))) return 0;
-  await redis.rpush(kCaseExcl(username), e);
-  return 1;
-}
-
-// Delete a PDF by label (kept from your version)
-app.delete('/med/pdfs/by-label', (req, res) => {
+// --- Username moderation -------------------------------------------------------
+async function isUsernameAllowedAI(username) {
+  if (process.env.MOCK_AI === '1' || !process.env.OPENAI_API_KEY) return true;
   try {
-    const label = String(req.query.label || '');
-    if (!label) return res.status(400).json({ error: 'label required' });
-
-    const row = medDb.prepare('SELECT id FROM pdf_docs WHERE label = ?').get(label);
-    if (!row) return res.json({ ok: true, deleted: false, reason: 'not found' });
-
-    medDb.prepare('DELETE FROM pdf_docs WHERE id = ?').run(row.id);
-    medDb.prepare('DELETE FROM toc_cache WHERE label = ?').run(label);
-
-    res.json({ ok: true, deleted: true, label });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-////////////////////////////////////////////////////////////////////////////////
-// OPENAI HELPERS (question/grade/summarize) — kept as in your file
-////////////////////////////////////////////////////////////////////////////////
-
-function parseChoiceLetter(value) {
-  const s = String(value || '').trim().toUpperCase();
-  const m = s.match(/^[A-E]/);
-  return m ? m[0] : '';
-}
-
-function publicQuestionPayload(item) {
-  return {
-    q_number: item.q_number,
-    question: item.question,
-    stem: item.question,
-    difficulty: item.final_difficulty || item.starting_difficulty,
-    type: item.type || 'short_answer',
-    mode: item.mode || 'pimp',
-    options: Array.isArray(item.options) ? item.options : [],
-    topic: item.topic || 'random'
-  };
-}
-
-function normalizeGeneratedQuestion(parsed, mode = 'pimp') {
-  const p = parsed && typeof parsed === 'object' ? parsed : {};
-  const type = mode === 'mccqe' ? 'mcq' : String(p.type || 'short_answer').toLowerCase();
-  const question = String(p.question || p.stem || '').trim();
-  if (!question) throw new Error('Bad question JSON: missing question');
-  const options = Array.isArray(p.options) ? p.options.map(x => String(x).trim()).filter(Boolean) : [];
-  const answerKey = parseChoiceLetter(p.answerKey || p.correctChoice || p.correct_option || p.correctAnswerLetter);
-  return {
-    type: type === 'mcq' ? 'mcq' : 'short_answer',
-    question,
-    expectedAnswer: String(p.expectedAnswer || p.answer || p.correctAnswer || '').trim(),
-    answerKey,
-    options,
-    explanation: String(p.explanation || '').trim(),
-    skill: String(p.skill || p.questionStyle || '').trim(),
-    sourceHint: String(p.sourceHint || '').trim()
-  };
-}
-
-async function aiGenerateQuestion({ topic, difficulty, avoidList, mode = 'pimp', askedCount = 0 }) {
-  if (process.env.MOCK_AI === '1') {
-    if (mode === 'mccqe') {
-      return {
-        type: 'mcq',
-        question: 'A 67-year-old with crushing chest pain has ST elevations in II, III, and aVF. BP is 84/52 and JVP is elevated. What is the best immediate medication to avoid?',
-        options: ['A. Aspirin', 'B. Nitroglycerin', 'C. Heparin', 'D. Ticagrelor', 'E. Atorvastatin'],
-        answerKey: 'B',
-        expectedAnswer: 'Nitroglycerin',
-        explanation: 'Inferior STEMI with hypotension and elevated JVP suggests RV infarct; nitrates can precipitate severe preload collapse.',
-        skill: 'ECG and hemodynamic interpretation'
-      };
-    }
-    return {
-      type: 'short_answer',
-      question: 'A patient with pH 7.25, PaCO2 25 mmHg, HCO3 11 mmol/L, Na 140, Cl 100 has what acid-base disorder?',
-      expectedAnswer: 'High anion gap metabolic acidosis with appropriate respiratory compensation',
-      explanation: 'AG is 29 and Winter expected PaCO2 is about 24.5 ± 2.',
-      skill: 'lab interpretation'
-    };
-  }
-
-  const avoid = Array.isArray(avoidList) ? avoidList.slice(-220) : [];
-  const normalizedDifficulty = normalizeDifficulty(difficulty);
-  const styleCycle = ['clinical_reasoning', 'labs_interpretation', 'next_test', 'management_decision', 'fact_microdose'];
-  const preferredStyle = styleCycle[Math.max(0, Number(askedCount || 0)) % styleCycle.length];
-
-  const system = mode === 'mccqe'
-    ? `You are the question engine for an MCCQE Part I practice mode.
-Return ONLY valid JSON:
-{"type":"mcq","question":"single-best-answer clinical vignette","options":["A. ...","B. ...","C. ...","D. ...","E. ..."],"answerKey":"A|B|C|D|E","expectedAnswer":"short answer","explanation":"high-yield explanation","skill":"tested skill"}
-Rules:
-- Generate questions from the hardest 10% of MCCQE-style clinical reasoning.
-- Use Canadian clinical framing where relevant.
-- Single best answer only. Five plausible options. Avoid trivia-only stems.
-- Prioritize diagnosis, next best test, initial management, risk stratification, ethics/communication, emergency stabilization, and interpretation of labs/ECG/imaging descriptions.
-- You may include text descriptions of ECGs, imaging, pathology, or lab panels. Do not require a real image.
-- Keep the explanation concise but educational.
-- Avoid duplicates of provided examples.`
-    : `You are the question engine for One Line Pimp Simulator.
-Return ONLY valid JSON:
-{"type":"short_answer","question":"...","expectedAnswer":"...","explanation":"...","skill":"..."}
-Rules:
-- The answer should be one word, one phrase, or one short sentence.
-- Do NOT overuse isolated fact-recall gene/syndrome questions. Those are allowed occasionally only.
-- Most questions should feel clinical: short vignettes, lab interpretation, acid-base, ECG/imaging descriptions, next test, next management step, or mechanism applied to a case.
-- Preferred style for this request: ${preferredStyle}.
-- Make questions jump across specialties and feel engaging.
-- Difficulty must match Easy, Medium, Hard, Expert, or Brutal. Brutal should still be fair and medically coherent.
-- Quality control is mandatory. No physiologically contradictory or internally inconsistent stems.
-- If using labs, use Canadian/SI units when possible.
-- Avoid duplicates of provided examples.`;
-
-  const userPayload = {
-    topic: topic || 'random',
-    difficulty: normalizedDifficulty,
-    mode,
-    preferredStyle,
-    avoid_examples: avoid
-  };
-
-  const resp = await responsesCall({
-    model: PIMP_MODEL,
-    temperature: mode === 'mccqe' ? 0.45 : 0.7,
-    max_output_tokens: mode === 'mccqe' ? 900 : 650,
-    reasoning_effort: 'low',
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: JSON.stringify(userPayload) }
-    ]
-  });
-
-  const parsed = parseResponsesJSON(resp) || parseLooseJSON(extractOutputText(resp)) || {};
-  const item = normalizeGeneratedQuestion(parsed, mode);
-  if (mode === 'mccqe' && (!item.answerKey || item.options.length < 4)) {
-    throw new Error('Bad MCCQE question JSON');
-  }
-  return item;
-}
-
-async function aiGradeAnswer({ question, userAnswer, difficulty, expectedAnswer = '', explanation = '' }) {
-  if (process.env.MOCK_AI === "1") {
-    const ans = String(userAnswer || '').toLowerCase();
-    const gold = String(expectedAnswer || '').toLowerCase();
-    const credit = gold && (gold.includes(ans) || ans.includes(gold.split(' ')[0])) ? 1 : 0;
-    const verdict = credit >= 0.85 ? 'correct' : 'incorrect';
-    return { verdict, credit, is_correct: credit >= 0.85, explanation: explanation || `Expected: ${expectedAnswer}.`, difficulty_delta: credit >= 0.85 ? 1 : -1, invalid_question: false };
-  }
-
-  const system = `You are a strict but fair medical answer grader for a one-line clinical simulator.
-Return ONLY valid JSON with this exact shape:
-{
-  "verdict": "correct" | "partial" | "incorrect" | "invalid",
-  "credit": 0.0,
-  "explanation": "1-3 concise sentences",
-  "difficulty_delta": -1 | 0 | 1,
-  "invalid_question": false
-}
-
-Core grading rules:
-- Award continuous partial credit from 0 to 1.
-- Use the expected answer as the main answer key, but accept equivalent clinical wording.
-- credit=1 means the core answer is correct, even if wording is imperfect.
-- credit 0.60-0.85 means very close but missing an important qualifier.
-- credit 0.30-0.59 means partially correct but materially incomplete.
-- credit 0.05-0.29 means only a small relevant fragment.
-- credit=0 means wrong, unrelated, or unsafe.
-- Use verdict="partial" for any defensible partial answer where 0 < credit < 0.85.
-- If the learner validly challenges a flawed stem, mark correct or partial depending on quality.
-- If the stem itself is ambiguous, impossible, internally inconsistent, or based on a false physiologic premise, set verdict="invalid", invalid_question=true, credit=0, difficulty_delta=0, and explain the corrected concept.
-- Keep explanations precise and high-yield.`;
-
-  const userPayload = { question, expectedAnswer, storedExplanation: explanation, userAnswer, difficulty: normalizeDifficulty(difficulty) };
-
-  let parsed = null;
-  try {
-    const resp = await responsesCall({
-      model: PIMP_GRADER_MODEL,
-      temperature: 0,
-      max_output_tokens: 450,
-      reasoning_effort: 'low',
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: JSON.stringify(userPayload) }
-      ]
+    const resp = await fetch('https://api.openai.com/v1/moderations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({ model: 'omni-moderation-latest', input: username })
     });
-    parsed = parseResponsesJSON(resp) || parseLooseJSON(extractOutputText(resp));
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data?.error?.message || resp.statusText);
+    const r = Array.isArray(data.results) ? data.results[0] : data;
+    const c = r.categories || {}, s = r.category_scores || {};
+    const blocked = r.flagged === true || c.hate === true || c['hate/threatening'] === true || c['sexual/minors'] === true ||
+      (s.hate || 0) > 0.5 || (s['sexual/minors'] || 0) > 0.2;
+    return !blocked;
   } catch (e) {
-    return { verdict: "incorrect", credit: 0, is_correct: false, explanation: "Grader unavailable; keeping same difficulty.", difficulty_delta: 0, invalid_question: false };
+    console.error('Moderation check failed:', e?.message || e);
+    return true;
   }
-
-  if (!parsed || typeof parsed !== "object") {
-    return { verdict: "incorrect", credit: 0, is_correct: false, explanation: "Grader returned unexpected format.", difficulty_delta: 0, invalid_question: false };
-  }
-
-  const invalid_question = !!parsed.invalid_question || parsed.verdict === "invalid";
-  let credit = Number(parsed.credit);
-  if (!Number.isFinite(credit)) credit = invalid_question ? 0 : (parsed.is_correct === true ? 1 : 0);
-  credit = Math.max(0, Math.min(1, credit));
-
-  let verdict = String(parsed.verdict || "").toLowerCase();
-  if (invalid_question) verdict = "invalid";
-  else if (credit >= 0.85) verdict = "correct";
-  else if (credit > 0) verdict = "partial";
-  else verdict = "incorrect";
-
-  const is_correct = verdict === "correct";
-  const safeExplanation = typeof parsed.explanation === "string" && parsed.explanation.trim()
-    ? parsed.explanation.trim()
-    : (explanation || (expectedAnswer ? `Expected: ${expectedAnswer}.` : 'Reviewed.'));
-  let delta = Number(parsed.difficulty_delta);
-  if (![ -1, 0, 1 ].includes(delta)) delta = invalid_question ? 0 : (credit >= 0.85 ? 1 : (credit >= 0.35 ? 0 : -1));
-
-  return { verdict, credit, is_correct, explanation: safeExplanation, difficulty_delta: delta, invalid_question };
-}
-
-async function aiDiscussAnswer({ question, userAnswer, grading, dialogue, message }) {
-  if (process.env.MOCK_AI === "1") {
-    return "That is a fair challenge. If the stem is internally inconsistent, treat it as a flawed question rather than a true miss.";
-  }
-
-  const system = `You are a rigorous but helpful clinical educator inside a pimp-question simulator.
-The learner may challenge the explanation, ask why partial credit was assigned, or request a mechanism.
-Respond directly and honestly.
-If the original grading, credit fraction, or explanation appears wrong, admit it plainly and explain the corrected physiology.
-Do not protect the previous answer if it is incorrect.
-When discussing partial credit, explain what the learner got right, what was missing, and what would make it full credit.
-Keep the reply concise, high-yield, and mechanistic when useful.`;
-
-  const payload = {
-    question,
-    userAnswer,
-    grading,
-    priorDialogue: Array.isArray(dialogue) ? dialogue.slice(-8) : [],
-    learnerMessage: message
-  };
-
-  const resp = await responsesCall({
-    model: PIMP_DISCUSSION_MODEL,
-    temperature: 0,
-    max_output_tokens: 550,
-    reasoning_effort: 'low',
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: JSON.stringify(payload) }
-    ]
-  });
-
-  return (resp.output_text || resp.output?.[0]?.content?.[0]?.text || "").trim() || "I could not generate a clarification.";
-}
-
-async function aiSummarizeSession({ transcript, startDifficulty }) {
-  const system = `You will summarize the session in detail, explain strengths and weaknesses with examples, and give a final rating.
-Return JSON ONLY:
-{"feedback": "short feedback", "rating": "Easy|Medium|Hard|Expert|Brutal"}`;
-
-  const userPayload = {
-    startDifficulty: normalizeDifficulty(startDifficulty || "Hard"),
-    items: transcript.map(t => ({
-      question: t.question,
-      userAnswer: t.user_answer ?? "",
-      correct: !!t.is_correct,
-      verdict: t.verdict || (t.is_correct ? "correct" : "incorrect"),
-      credit: Number(t.credit || 0),
-      explanation: t.explanation ?? ""
-    }))
-  };
-
-  const resp = await responsesCall({
-    model: PIMP_DISCUSSION_MODEL,
-    temperature: 0,
-    max_output_tokens: 800,
-    reasoning_effort: 'low',
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: JSON.stringify(userPayload) }
-    ]
-  });
-
-  const txt = resp.output_text?.trim() || resp.output?.[0]?.content?.[0]?.text || "{}";
-  let parsed;
-  try { parsed = JSON.parse(txt); } catch { parsed = {}; }
-
-  const feedback = typeof parsed.feedback === "string" ? parsed.feedback : "Good effort.";
-  const rating = DIFF.includes(parsed.rating) ? parsed.rating : normalizeDifficulty(parsed.rating || "Hard");
-  return { feedback, rating };
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// ROUTES (your existing routes below are kept unchanged)
+// HEALTH + AUTH ROUTES
 ////////////////////////////////////////////////////////////////////////////////
-
-// Health check
 app.get('/health', async (_req, res) => {
   try {
     await redis.ping();
-    res.json({ ok: true });
+    if (hasPg()) await q('SELECT 1');
+    res.json({ ok: true, storage: hasPg() ? 'postgres+redis' : 'redis+sqlite', engine: ENGINE_VERSION });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-// Auth routes
 app.post('/auth/signup', async (req, res) => {
   try {
     const { username, password, repeatPassword } = req.body || {};
@@ -1810,26 +293,24 @@ app.post('/auth/signup', async (req, res) => {
     if (userErr) return res.status(400).json({ error: userErr });
     const passErr = validatePassword(password);
     if (passErr) return res.status(400).json({ error: passErr });
-    if (String(password) !== String(repeatPassword || '')) {
-      return res.status(400).json({ error: 'passwords do not match' });
-    }
-    const ok = await isUsernameAllowedAI(u);
-    if (!ok) return res.status(400).json({ error: 'That username is not allowed. Please choose something else.' });
+    if (String(password) !== String(repeatPassword || '')) return res.status(400).json({ error: 'passwords do not match' });
+    if (!(await isUsernameAllowedAI(u))) return res.status(400).json({ error: 'That username is not allowed. Please choose something else.' });
     const indexed = await redis.get(usernameIndexKey(u));
     const existing = await redis.hgetall(kUser(u));
-    if (indexed && indexed !== u) return res.status(409).json({ error: 'Username taken' });
-    if (existing && Object.keys(existing).length > 0) {
-      if (existing.password_hash) return res.status(409).json({ error: 'Username taken' });
+    if (indexed && String(indexed) !== u) return res.status(409).json({ error: 'Username taken' });
+    if (existing && Object.keys(existing).length) {
+      // Old accounts created before passwords existed can only be claimed when
+      // explicitly allowed; otherwise anyone could take over their progress.
+      if (existing.password_hash || process.env.ALLOW_LEGACY_CLAIM !== '1') return res.status(409).json({ error: 'Username taken' });
       const salt = makeSalt();
-      await redis.hset(kUser(u), { username: u, password_salt: salt, password_hash: hashPassword(String(password), salt), auth_version: 1, legacy_no_password: 0 });
+      await redis.hset(kUser(u), { username: u, password_salt: salt, password_hash: hashPassword(password, salt), auth_version: 1, legacy_no_password: 0 });
       await redis.set(usernameIndexKey(u), u);
     } else {
       await createUser(u, String(password));
     }
-    const token = await createAuthToken(u);
-    res.json({ ok: true, token, username: u });
+    res.json({ ok: true, token: await createAuthToken(u), username: u });
   } catch (e) {
-    res.status(500).json({ error: 'Signup failed', detail: String(e) });
+    res.status(500).json({ error: 'Signup failed' });
   }
 });
 
@@ -1838,1512 +319,984 @@ app.post('/auth/login', async (req, res) => {
     const { username, password } = req.body || {};
     const u = normalizeUsernameInput(username);
     if (!u || !password) return res.status(400).json({ error: 'username and password required' });
-    const indexed = await redis.get(usernameIndexKey(u));
-    const actualUsername = indexed || u;
-    const user = await redis.hgetall(kUser(actualUsername));
-    if (!user || Object.keys(user).length === 0) return res.status(401).json({ error: 'Invalid username or password' });
-    if (!verifyPassword(String(password), user.password_salt, user.password_hash)) {
+    const throttleKey = `${req.ip}|${u.toLowerCase()}`;
+    if (tooManyFailures(throttleKey)) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+    const actual = String((await redis.get(usernameIndexKey(u))) || u);
+    const user = await redis.hgetall(kUser(actual));
+    if (!user || !Object.keys(user).length || !verifyPassword(String(password), user.password_salt, user.password_hash)) {
+      noteFailure(throttleKey);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
-    const token = await createAuthToken(actualUsername);
-    res.json({ ok: true, token, username: actualUsername });
+    loginFailures.delete(throttleKey);
+    res.json({ ok: true, token: await createAuthToken(actual), username: actual });
   } catch (e) {
-    res.status(500).json({ error: 'Login failed', detail: String(e) });
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 
 app.get('/auth/me', async (req, res) => {
-  try {
-    const auth = await readAuthFromReq(req);
-    if (!auth) return res.status(401).json({ error: 'Login required' });
-    const stats = await getUserScore(auth.username);
-    res.json({ ok: true, username: auth.username, stats });
-  } catch (e) {
-    res.status(401).json({ error: 'Login required', detail: String(e) });
-  }
+  const auth = await readAuthFromReq(req).catch(() => null);
+  if (!auth) return res.status(401).json({ error: 'Login required' });
+  res.json({ ok: true, username: auth.username, stats: await getUserScore(auth.username) });
 });
 
 app.post('/auth/logout', async (req, res) => {
-  try {
-    const auth = await readAuthFromReq(req);
-    if (auth?.token) await redis.del(kAuthToken(hashToken(auth.token)));
-    res.json({ ok: true });
-  } catch {
-    res.json({ ok: true });
-  }
+  try { const auth = await readAuthFromReq(req); if (auth?.token) await redis.del(kAuthToken(hashToken(auth.token))); } catch {}
+  res.json({ ok: true });
 });
 
 app.get('/auth/check-username', async (req, res) => {
-  try {
-    const u = normalizeUsernameInput(req.query.username);
-    const userErr = validateUsername(u);
-    if (userErr) return res.json({ available: false, reason: userErr });
-    const indexed = await redis.get(usernameIndexKey(u));
-    const exists = Boolean(indexed) || await userExists(u);
-    res.json({ available: !exists, reason: exists ? 'Username taken' : '' });
-  } catch (e) {
-    res.status(500).json({ error: 'Username check failed', detail: String(e) });
-  }
+  const u = normalizeUsernameInput(req.query.username);
+  const err = validateUsername(u);
+  if (err) return res.json({ available: false, reason: err });
+  const exists = Boolean(await redis.get(usernameIndexKey(u))) || await userExists(u);
+  res.json({ available: !exists, reason: exists ? 'Username taken' : '' });
 });
 
-// Require login for simulator endpoints. /api/users remains public only for older clients.
-app.use(['/api', '/case'], requireAuth);
+app.use(['/api', '/case', '/med'], requireAuth);
 
-// Create user
-app.post('/api/users', async (req, res) => {
-  try {
-    const { username, password, repeatPassword } = req.body || {};
-    const u = normalizeUsernameInput(username);
-    const userErr = validateUsername(u);
-    if (userErr) return res.status(400).json({ error: userErr });
-    if (!password && process.env.ALLOW_LEGACY_USER_CREATE !== '1') {
-      return res.status(400).json({ error: 'password required. Use /auth/signup for new accounts.' });
-    }
-    if (password) {
-      const passErr = validatePassword(password);
-      if (passErr) return res.status(400).json({ error: passErr });
-      if (String(password) !== String(repeatPassword || '')) return res.status(400).json({ error: 'passwords do not match' });
-    }
-    const ok = await isUsernameAllowedAI(u);
-    if (!ok) return res.status(400).json({ error: 'That username is not allowed. Please choose something else.' });
-    const indexed = await redis.get(usernameIndexKey(u));
-    if (indexed || await userExists(u)) return res.status(409).json({ error: 'Username taken' });
-    await createUser(u, String(password || ''));
-    const token = password ? await createAuthToken(u) : '';
-    res.json({ ok: true, token, username: u });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to create user", detail: String(e) });
+////////////////////////////////////////////////////////////////////////////////
+// ONE LINE PIMP + MCCQE
+////////////////////////////////////////////////////////////////////////////////
+const MOCK = () => process.env.MOCK_AI === '1';
+const normQ = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+const wordSet = (s) => new Set((String(s || '').toLowerCase().match(/[a-z0-9]{3,}/g) || []));
+function similarity(a, b) {
+  const A = wordSet(a), B = wordSet(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0; for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+const parseChoiceLetter = (v) => (String(v || '').trim().toUpperCase().match(/^[A-E]/) || [''])[0];
+
+function publicQuestionPayload(item) {
+  return {
+    q_number: item.q_number, question: item.question, stem: item.question,
+    difficulty: item.final_difficulty || item.starting_difficulty,
+    type: item.type || 'short_answer', mode: item.mode || 'pimp',
+    options: Array.isArray(item.options) ? item.options : [], topic: item.topic || 'random',
+    asked_at: item.asked_at
+  };
+}
+
+function normalizeGeneratedQuestion(p, mode) {
+  p = p && typeof p === 'object' ? p : {};
+  const question = String(p.question || p.stem || '').trim();
+  if (!question) throw new Error('Bad question JSON: missing question');
+  const options = Array.isArray(p.options) ? p.options.map(x => String(x).trim()).filter(Boolean) : [];
+  return {
+    type: mode === 'mccqe' ? 'mcq' : 'short_answer',
+    question,
+    expectedAnswer: String(p.expectedAnswer || p.answer || '').trim(),
+    answerKey: parseChoiceLetter(p.answerKey || p.correctChoice),
+    options,
+    explanation: String(p.explanation || '').trim(),
+    skill: String(p.skill || '').trim(),
+    concept: String(p.concept || '').trim().slice(0, 140)
+  };
+}
+
+function validateMcq(item) {
+  if (item.options.length !== 5) return `expected 5 options, got ${item.options.length}`;
+  if (!item.answerKey) return 'missing answer key';
+  const letters = item.options.map((o, i) => parseChoiceLetter(o) || 'ABCDE'[i]);
+  if (new Set(letters).size !== 5 || !letters.includes(item.answerKey)) return 'answer key does not match options';
+  const bodies = item.options.map(o => normQ(o.replace(/^[A-E]\s*[.):-]\s*/i, '')));
+  if (new Set(bodies).size !== 5) return 'duplicate options';
+  return '';
+}
+
+async function aiGenerateQuestion({ topic, difficulty, avoidQuestions, avoidConcepts, mode, askedCount, userId }) {
+  if (MOCK()) {
+    const n = askedCount + Math.floor(Math.random() * 1e6);
+    if (mode === 'mccqe') return { type: 'mcq', question: `(${n}) A 67-year-old with inferior STEMI, BP 84/52 and elevated JVP. Which medication should be avoided?`, options: ['A. Aspirin', 'B. Nitroglycerin', 'C. Heparin', 'D. Ticagrelor', 'E. Atorvastatin'], answerKey: 'B', expectedAnswer: 'Nitroglycerin', explanation: 'RV infarct is preload dependent.', skill: 'hemodynamics', concept: `rv infarct nitrates ${n}` };
+    return { type: 'short_answer', question: `(${n}) pH 7.25, PaCO2 25 mmHg, HCO3 11 mmol/L, Na 140, Cl 100. Acid-base disorder?`, expectedAnswer: 'High anion gap metabolic acidosis with appropriate respiratory compensation', explanation: 'AG 29; Winter expected PaCO2 ~24.5.', skill: 'labs', concept: `hagma winter ${n}` };
   }
-});
+  const styleCycle = ['clinical_reasoning', 'labs_interpretation', 'next_test', 'management_decision', 'clinical_reasoning', 'labs_interpretation', 'management_decision', 'fact_microdose'];
+  const preferredStyle = styleCycle[Math.max(0, Number(askedCount || 0)) % styleCycle.length];
+  const conceptRule = `Include "concept": a short canonical label for the single learning point tested (e.g. "DKA: anion gap closure before stopping insulin"). It must not match any avoid_concepts entry, even reworded.`;
+  const system = mode === 'mccqe'
+    ? `You are the question engine for an MCCQE Part I practice mode.
+Return JSON: {"type":"mcq","question":"single-best-answer clinical vignette","options":["A. ...","B. ...","C. ...","D. ...","E. ..."],"answerKey":"A-E","expectedAnswer":"short answer","explanation":"high-yield explanation","skill":"tested skill","concept":""}
+Rules:
+- Hardest 10% of MCCQE-style clinical reasoning; Canadian framing and SI units.
+- Exactly five plausible options; exactly one defensible best answer.
+- Prioritize diagnosis, next best test, initial management, risk stratification, ethics/communication, stabilization, and interpretation of labs/ECG/imaging descriptions. Avoid trivia-only stems.
+- ${conceptRule}`
+    : `You are the question engine for One Line Pimp Simulator.
+Return JSON: {"type":"short_answer","question":"...","expectedAnswer":"...","explanation":"...","skill":"...","concept":""}
+Rules:
+- The answer is one word, one phrase, or one short sentence.
+- Most questions must be clinical application: short vignettes, lab or acid-base interpretation, ECG/imaging descriptions, next test, next management step, or mechanism applied to a case. Isolated gene/eponym recall only occasionally.
+- Preferred style for this request: ${preferredStyle}.
+- Difficulty must match ${normalizeDifficulty(difficulty)} (Easy..Brutal). Brutal must still be fair and coherent.
+- No physiologically contradictory or internally inconsistent stems. Canadian/SI units.
+- ${conceptRule}`;
+  const payload = { topic: topic || 'random', difficulty: normalizeDifficulty(difficulty), avoid_questions: avoidQuestions.slice(-120), avoid_concepts: avoidConcepts.slice(-200) };
+  const parsed = await aiJSON({ tag: mode === 'mccqe' ? 'pimp.generate.mcq' : 'pimp.generate', meta: { userId }, system, payload, model: PIMP_MODEL, temperature: mode === 'mccqe' ? 0.45 : 0.7, max_output_tokens: mode === 'mccqe' ? 1100 : 700, reasoning_effort: 'low' });
+  return parsed;
+}
 
-// Exclusions count
+async function aiGradeAnswer({ question, userAnswer, difficulty, expectedAnswer = '', explanation = '', userId }) {
+  if (MOCK()) {
+    const ans = String(userAnswer || '').toLowerCase(), gold = String(expectedAnswer || '').toLowerCase();
+    const credit = gold && ans && (gold.includes(ans) || ans.includes(gold.split(' ')[0])) ? 1 : 0;
+    return { verdict: credit ? 'correct' : 'incorrect', credit, is_correct: !!credit, explanation: explanation || `Expected: ${expectedAnswer}.`, difficulty_delta: credit ? 1 : -1, invalid_question: false };
+  }
+  const system = `You are a strict but fair medical answer grader for a one-line clinical simulator.
+Return JSON: {"verdict":"correct|partial|incorrect|invalid","credit":0.0,"explanation":"1-3 concise sentences","difficulty_delta":-1|0|1,"invalid_question":false}
+- Continuous credit 0-1. Use the expected answer as the key but accept clinically equivalent wording.
+- 1 = core answer correct; 0.60-0.85 very close but missing an important qualifier; 0.30-0.59 materially incomplete; 0.05-0.29 small relevant fragment; 0 wrong, unrelated or unsafe.
+- If the learner validly challenges a flawed stem, mark correct or partial by quality.
+- If the stem is ambiguous, impossible, internally inconsistent, or built on a false premise: verdict "invalid", invalid_question true, credit 0, difficulty_delta 0, and explain the corrected concept.`;
+  try {
+    const parsed = await aiJSON({ tag: 'pimp.grade', meta: { userId }, system, payload: { question, expectedAnswer, storedExplanation: explanation, userAnswer, difficulty: normalizeDifficulty(difficulty) }, model: PIMP_GRADER_MODEL, max_output_tokens: 500, reasoning_effort: 'low' });
+    const invalid_question = !!parsed.invalid_question || parsed.verdict === 'invalid';
+    let credit = Number(parsed.credit);
+    if (!Number.isFinite(credit)) credit = invalid_question ? 0 : 0;
+    credit = clamp(credit, 0, 1);
+    const verdict = invalid_question ? 'invalid' : credit >= 0.85 ? 'correct' : credit > 0 ? 'partial' : 'incorrect';
+    let delta = Number(parsed.difficulty_delta);
+    if (![-1, 0, 1].includes(delta)) delta = invalid_question ? 0 : credit >= 0.85 ? 1 : credit >= 0.35 ? 0 : -1;
+    return { verdict, credit, is_correct: verdict === 'correct', explanation: String(parsed.explanation || explanation || `Expected: ${expectedAnswer}.`).trim(), difficulty_delta: delta, invalid_question };
+  } catch (e) {
+    // Grader failure must not penalise the learner.
+    return { verdict: 'ungraded', credit: 0, is_correct: false, explanation: 'The grader was unavailable, so this answer was not scored. Try again or move on.', difficulty_delta: 0, invalid_question: false, grader_error: true };
+  }
+}
+
+async function aiDiscussAnswer({ question, userAnswer, grading, dialogue, message, userId }) {
+  if (MOCK()) return 'That is a fair challenge. If the stem is internally inconsistent, it should be treated as a flawed question.';
+  const system = `You are a rigorous but helpful clinical educator inside a pimp-question simulator.
+The learner may challenge the explanation, ask why partial credit was assigned, or request a mechanism. Respond directly and honestly.
+If the original grading, credit, or explanation was wrong, say so plainly and give the corrected reasoning. When discussing partial credit, say what was right, what was missing, and what would earn full credit. Be concise and high-yield. Canadian context and SI units.`;
+  const resp = await responsesCall({ tag: 'pimp.discuss', meta: { userId }, model: PIMP_DISCUSSION_MODEL, max_output_tokens: 700, reasoning_effort: 'low', messages: [
+    { role: 'system', content: system },
+    { role: 'user', content: JSON.stringify({ question, userAnswer, grading, priorDialogue: ensureArray(dialogue).slice(-8), learnerMessage: message }) }
+  ] });
+  return extractOutputText(resp) || 'I could not generate a clarification.';
+}
+
+async function aiSummarizeSession({ transcript, startDifficulty, userId }) {
+  if (MOCK()) return { feedback: 'Mock session feedback.', rating: normalizeDifficulty(startDifficulty) };
+  const system = `Summarize this practice session: strengths and weaknesses with specific examples, then a rating of the level the learner performed at.
+Return JSON: {"feedback":"","rating":"Easy|Medium|Hard|Expert|Brutal"}`;
+  try {
+    const parsed = await aiJSON({ tag: 'pimp.summary', meta: { userId }, system, payload: {
+      startDifficulty: normalizeDifficulty(startDifficulty),
+      items: transcript.map(t => ({ question: t.question, userAnswer: t.user_answer ?? '', verdict: t.verdict, credit: Number(t.credit || 0), explanation: t.explanation ?? '' }))
+    }, model: PIMP_DISCUSSION_MODEL, max_output_tokens: 1000, reasoning_effort: 'low' });
+    return { feedback: String(parsed.feedback || 'Session saved.'), rating: normalizeDifficulty(parsed.rating) };
+  } catch {
+    return { feedback: 'Session saved. Feedback could not be generated this time.', rating: normalizeDifficulty(startDifficulty) };
+  }
+}
+
+// Session storage helpers
+async function getSessionMeta(id) {
+  const d = await redis.hgetall(kSess(id));
+  if (!d || !Object.keys(d).length) return null;
+  if (d.start_diff) d.start_diff = normalizeDifficulty(d.start_diff);
+  return d;
+}
+async function getSessionItems(id) {
+  const raw = await redis.lrange(kSessItems(id), 0, -1);
+  return (raw || []).map(parseMaybeJSON).filter(Boolean);
+}
+async function updateLastSessionItem(id, patch) {
+  const len = await redis.llen(kSessItems(id));
+  if (!len) return;
+  const last = parseMaybeJSON(await redis.lindex(kSessItems(id), len - 1));
+  if (!last) return;
+  await redis.lset(kSessItems(id), len - 1, JSON.stringify({ ...last, ...patch }));
+}
+async function loadOwnedPimpSession(req, res, sessionId) {
+  if (!sessionId) { res.status(400).json({ error: 'sessionId required' }); return null; }
+  const meta = await getSessionMeta(String(sessionId));
+  if (!meta) { res.status(404).json({ error: 'Session not found' }); return null; }
+  if (meta.username !== req.auth.username) { res.status(403).json({ error: 'Cannot access another user session' }); return null; }
+  return meta;
+}
+const requestedUser = (req) => req.auth.username;
+
+app.post('/api/users', (_req, res) => res.status(410).json({ error: 'Use /auth/signup to create accounts.' }));
+
 app.get('/api/exclusions/count', async (req, res) => {
-  try {
-    const username = requestedUsernameOrAuth(req, req.query.username);
-    if (!(await userExists(username))) return res.status(404).json({ error: "User not found" });
-    const count = await exclusionsCount(username);
-    res.json({ count });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to get count", detail: String(e) });
-  }
+  res.json({ count: await redis.llen(kExcl(requestedUser(req))) });
 });
-
-// Full exclusions list
 app.get('/api/exclusions', async (req, res) => {
-  try {
-    const username = requestedUsernameOrAuth(req, req.query.username);
-    const list = await getExclusions(username);
-    res.json({ questions: list });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to get exclusions", detail: String(e) });
-  }
+  res.json({ questions: await redis.lrange(kExcl(requestedUser(req)), 0, -1) });
 });
 
-// Start session
 app.post('/api/sessions', async (req, res) => {
   try {
     const { topic, startingDifficulty, mode } = req.body || {};
-    const username = req.auth.username;
-    if (!(await userExists(username))) return res.status(404).json({ error: "User not found" });
+    const id = uuid();
     const cleanMode = mode === 'mccqe' ? 'mccqe' : 'pimp';
     const cleanDifficulty = normalizeDifficulty(startingDifficulty || 'Hard');
-    const id = await createSession({ username, topic, startingDifficulty: cleanDifficulty, mode: cleanMode });
+    await redis.hset(kSess(id), { username: req.auth.username, topic: String(topic || 'random').slice(0, 120), start_diff: cleanDifficulty, mode: cleanMode, created_at: Date.now() });
     res.json({ sessionId: id, topic: topic || 'random', difficulty: cleanDifficulty, mode: cleanMode });
   } catch (e) {
-    res.status(500).json({ error: "Failed to create session", detail: String(e) });
+    res.status(500).json({ error: 'Failed to create session' });
   }
 });
 
-// Next question
+// Resume support: returns the current state of a session, including an
+// unanswered question if there is one.
+app.get('/api/sessions/:id', async (req, res) => {
+  const meta = await loadOwnedPimpSession(req, res, req.params.id);
+  if (!meta) return;
+  const items = await getSessionItems(req.params.id);
+  const last = items[items.length - 1];
+  const pending = last && !Object.prototype.hasOwnProperty.call(last, 'user_answer') ? publicQuestionPayload(last) : null;
+  res.json({ sessionId: req.params.id, mode: meta.mode, topic: meta.topic, difficulty: last?.final_difficulty || meta.start_diff, concluded: !!meta.concluded_at, answered: items.filter(i => 'user_answer' in i).length, pending });
+});
+
 app.post('/api/next', async (req, res) => {
-  try {
-    const { sessionId, topic: overrideTopic, difficulty: overrideDiff } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+  const { sessionId } = req.body || {};
+  const meta = await loadOwnedPimpSession(req, res, sessionId);
+  if (!meta) return;
+  if (meta.concluded_at) return res.status(400).json({ error: 'Session already concluded' });
+  await withLock(`pimp:${sessionId}`, async () => {
+    try {
+      const username = meta.username;
+      const items = await getSessionItems(sessionId);
+      const last = items[items.length - 1];
+      // An unanswered question is returned again instead of being skipped.
+      if (last && !Object.prototype.hasOwnProperty.call(last, 'user_answer')) return res.json({ ...publicQuestionPayload(last), resumed: true });
 
-    const meta = await getSessionMeta(sessionId);
-    if (!meta) return res.status(404).json({ error: "Session not found" });
-    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
+      const topic = meta.topic || 'random';
+      const mode = meta.mode === 'mccqe' ? 'mccqe' : 'pimp';
+      const difficulty = items.length ? normalizeDifficulty(last.final_difficulty) : normalizeDifficulty(meta.start_diff);
+      const excl = await redis.lrange(kExcl(username), -400, -1);
+      const concepts = (await redis.lrange(kConcepts(username), -300, -1)).map(String);
+      const avoidQuestions = [...excl.map(String), ...items.map(i => i.question)].filter(Boolean);
+      const avoidConcepts = [...concepts, ...items.map(i => i.concept)].filter(Boolean);
+      const qSet = new Set(avoidQuestions.map(normQ));
+      const cSet = new Set(avoidConcepts.map(normQ));
+      const recentForSim = avoidQuestions.slice(-300);
 
-    const username = meta.username;
-    const topic = overrideTopic || meta.topic || 'random';
-    const mode = meta.mode === 'mccqe' ? 'mccqe' : 'pimp';
+      let item = null, lastProblem = '';
+      for (let attempt = 0; attempt < 3 && !item; attempt++) {
+        let candidate;
+        try { candidate = normalizeGeneratedQuestion(await aiGenerateQuestion({ topic, difficulty, avoidQuestions, avoidConcepts, mode, askedCount: items.length + attempt, userId: username }), mode); }
+        catch (e) { lastProblem = String(e?.message || e); continue; }
+        if (mode === 'mccqe') { const p = validateMcq(candidate); if (p) { lastProblem = p; continue; } }
+        if (qSet.has(normQ(candidate.question))) { lastProblem = 'exact duplicate'; continue; }
+        if (candidate.concept && cSet.has(normQ(candidate.concept))) { lastProblem = 'repeated concept'; avoidConcepts.push(candidate.concept); continue; }
+        if (recentForSim.some(prev => similarity(prev, candidate.question) > 0.72)) { lastProblem = 'near-duplicate wording'; avoidQuestions.push(candidate.question); continue; }
+        item = candidate;
+      }
+      if (!item) return res.status(503).json({ error: 'Could not generate a new, non-repeated question. Please try again.', detail: lastProblem });
 
-    const items = await getSessionItems(sessionId);
-    const lastDiff = items.length
-      ? normalizeDifficulty(items[items.length - 1].final_difficulty)
-      : normalizeDifficulty(overrideDiff || meta.start_diff || "Hard");
-    const difficulty = lastDiff;
-
-    const exclList = await getExclusions(username);
-    const sessionQs = items.map(it => it.question).filter(Boolean);
-
-    const norm = s => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
-    const avoidSet = new Set([...exclList, ...sessionQs].map(norm));
-
-    let generated;
-    let tries = 0;
-    do {
-      generated = await aiGenerateQuestion({ topic, difficulty, avoidList: [...avoidSet], mode, askedCount: items.length });
-      tries++;
-    } while (avoidSet.has(norm(generated.question)) && tries < 3);
-
-    if (avoidSet.has(norm(generated.question))) {
-      generated.question = `${topic !== 'random' ? topic + ': ' : ''}${generated.question}`;
+      const baseCount = await redis.llen(kExcl(username));
+      const record = { ...item, mode, topic, starting_difficulty: difficulty, final_difficulty: difficulty, asked_index_in_session: items.length + 1, q_number: baseCount + items.length + 1, asked_at: Date.now() };
+      await redis.rpush(kSessItems(sessionId), JSON.stringify(record));
+      res.json(publicQuestionPayload(record));
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to get next question', detail: String(e?.message || e) });
     }
-
-    const asked_index_in_session = items.length + 1;
-    const baseCount = await exclusionsCount(username);
-    const q_number = baseCount + asked_index_in_session;
-    const now = Date.now();
-
-    const item = {
-      ...generated,
-      mode,
-      q_number,
-      topic,
-      starting_difficulty: difficulty,
-      final_difficulty: difficulty,
-      asked_index_in_session,
-      asked_at: now
-    };
-
-    await pushSessionItem(sessionId, item);
-    res.json(publicQuestionPayload(item));
-  } catch (e) {
-    res.status(500).json({ error: "Failed to get next question", detail: String(e) });
-  }
+  });
 });
 
-function timeMultiplierForAnswer(elapsedMs, difficulty) {
-  const d = normalizeDifficulty(difficulty);
-  const grace = { Easy: 20000, Medium: 30000, Hard: 45000, Expert: 60000, Brutal: 75000 }[d] || 45000;
-  const elapsed = Math.max(0, Number(elapsedMs || 0));
-  if (!elapsed || elapsed <= grace) return 1;
-  // Smooth decay. At ~4x grace, multiplier approaches about 0.45.
-  const overRatio = (elapsed - grace) / (grace * 3);
-  return Math.max(0.45, Math.round((1 - 0.55 * Math.min(1, overRatio)) * 100) / 100);
-}
-
-// Grade answer
 app.post('/api/answer', async (req, res) => {
-  try {
-    const { sessionId, answer, elapsed_ms } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-    if (typeof answer !== "string") return res.status(400).json({ error: "answer required" });
+  const { sessionId, answer } = req.body || {};
+  if (typeof answer !== 'string' || !answer.trim()) return res.status(400).json({ error: 'answer required' });
+  const meta = await loadOwnedPimpSession(req, res, sessionId);
+  if (!meta) return;
+  await withLock(`pimp:${sessionId}`, async () => {
+    try {
+      const username = meta.username;
+      const items = await getSessionItems(sessionId);
+      const last = items[items.length - 1];
+      if (!last) return res.status(400).json({ error: 'No question to grade' });
+      // Repeated submission: return the stored grade instead of scoring twice.
+      if (Object.prototype.hasOwnProperty.call(last, 'user_answer')) return res.json({ ...(last.result || {}), duplicate: true });
 
-    const meta = await getSessionMeta(sessionId);
-    if (!meta) return res.status(404).json({ error: "Session not found" });
-    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
-    const username = meta.username;
+      // Server-authoritative timing; small allowance for network/render latency.
+      const elapsedMs = Math.max(0, Date.now() - Number(last.asked_at || Date.now()) - 1500);
+      let graded;
+      if (last.type === 'mcq') {
+        const chosen = parseChoiceLetter(answer), key = parseChoiceLetter(last.answerKey);
+        const ok = !!chosen && chosen === key;
+        graded = { verdict: ok ? 'correct' : 'incorrect', credit: ok ? 1 : 0, is_correct: ok, explanation: last.explanation || `Correct answer: ${key}.`, difficulty_delta: ok ? 1 : -1, invalid_question: false, correctChoice: key, expectedAnswer: last.expectedAnswer || '' };
+      } else {
+        graded = await aiGradeAnswer({ question: last.question, expectedAnswer: last.expectedAnswer || '', explanation: last.explanation || '', userAnswer: answer, difficulty: last.final_difficulty, userId: username });
+      }
+      if (graded.grader_error) return res.status(503).json({ error: graded.explanation });
 
-    const items = await getSessionItems(sessionId);
-    if (items.length === 0) return res.status(400).json({ error: "No question to grade" });
-    const last = items[items.length - 1];
-    const elapsedServerMs = last.asked_at ? Date.now() - Number(last.asked_at) : 0;
-    const elapsedMs = Number(elapsed_ms || 0) > 0 ? Number(elapsed_ms) : elapsedServerMs;
+      const { verdict, credit, is_correct, explanation, difficulty_delta, invalid_question } = graded;
+      const nextDiff = bumpDifficulty(last.final_difficulty, difficulty_delta);
+      const { correct: max_points, wrong: penalty_points } = pointsFor(last.final_difficulty);
+      const time_multiplier = timeMultiplierForAnswer(elapsedMs, last.final_difficulty);
+      let points_delta = 0;
+      if (invalid_question) points_delta = 0;
+      else if (verdict === 'correct') points_delta = Math.round(max_points * time_multiplier);
+      else if (verdict === 'partial') points_delta = Math.round(max_points * credit * time_multiplier);
+      else points_delta = -penalty_points;
 
-    let graded;
-    if ((last.type || '') === 'mcq') {
-      const chosen = parseChoiceLetter(answer);
-      const correctLetter = parseChoiceLetter(last.answerKey);
-      const ok = chosen && correctLetter && chosen === correctLetter;
-      graded = {
-        verdict: ok ? 'correct' : 'incorrect',
-        credit: ok ? 1 : 0,
-        is_correct: ok,
-        explanation: last.explanation || (correctLetter ? `Correct answer: ${correctLetter}. ${last.expectedAnswer || ''}`.trim() : 'Reviewed.'),
-        difficulty_delta: ok ? 1 : -1,
-        invalid_question: false,
-        correctChoice: correctLetter,
-        expectedAnswer: last.expectedAnswer || ''
+      const score_after = await applyScoreDelta(username, points_delta, is_correct);
+      const result = {
+        correct: is_correct, verdict, credit, explanation, invalid_question, nextDifficulty: nextDiff, points_delta, max_points, penalty_points,
+        time_multiplier, elapsed_ms: Math.round(elapsedMs), elapsed_seconds: Math.round(elapsedMs / 1000), score: score_after,
+        correctChoice: graded.correctChoice || undefined, expectedAnswer: graded.expectedAnswer || last.expectedAnswer || undefined
       };
-    } else {
-      graded = await aiGradeAnswer({
-        question: last.question,
-        expectedAnswer: last.expectedAnswer || '',
-        explanation: last.explanation || '',
-        userAnswer: answer,
-        difficulty: last.final_difficulty
-      });
+      await updateLastSessionItem(sessionId, { user_answer: answer, is_correct, verdict, credit, explanation, invalid_question, final_difficulty: nextDiff, points_delta, time_multiplier, elapsed_ms: Math.round(elapsedMs), score_after, answered_at: Date.now(), dialogue: [], result });
+      await redis.lpush(kHistory(username), JSON.stringify({
+        question: last.question, type: last.type || 'short_answer', options: last.type === 'mcq' ? last.options : undefined, correct_choice: graded.correctChoice,
+        difficulty: normalizeDifficulty(last.final_difficulty), user_answer: answer, expected_answer: last.expectedAnswer || '', is_correct, verdict, credit, explanation,
+        invalid_question, points_delta, max_points, penalty_points, time_multiplier, elapsed_ms: Math.round(elapsedMs), score_after, asked_at: last.asked_at, answered_at: Date.now(), concept: last.concept || ''
+      }));
+      await redis.ltrim(kHistory(username), 0, 999);
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to grade answer', detail: String(e?.message || e) });
     }
-
-    const { verdict, credit, is_correct, explanation, difficulty_delta, invalid_question } = graded;
-    const nextDiff = bumpDifficulty(last.final_difficulty, difficulty_delta);
-
-    const { correct, wrong } = pointsFor(last.final_difficulty);
-    const max_points = correct;
-    const penalty_points = wrong;
-    const time_multiplier = timeMultiplierForAnswer(elapsedMs, last.final_difficulty);
-
-    let points_delta = 0;
-    if (invalid_question || verdict === "invalid") {
-      points_delta = 0;
-    } else if (verdict === "correct") {
-      points_delta = Math.round(max_points * time_multiplier);
-    } else if (verdict === "partial" || (credit > 0 && credit < 0.85)) {
-      points_delta = Math.round(max_points * Math.max(0, Math.min(1, credit)) * time_multiplier);
-    } else {
-      points_delta = -penalty_points;
-    }
-
-    const score_after = await applyScoreDelta(username, points_delta, is_correct);
-    const answeredAt = Date.now();
-
-    await pushHistory(username, {
-      question: last.question,
-      type: last.type || 'short_answer',
-      options: last.type === 'mcq' ? last.options : undefined,
-      correct_choice: graded.correctChoice || undefined,
-      difficulty: normalizeDifficulty(last.final_difficulty),
-      user_answer: answer,
-      expected_answer: last.expectedAnswer || graded.expectedAnswer || '',
-      is_correct,
-      verdict,
-      credit,
-      explanation,
-      invalid_question,
-      points_delta,
-      max_points,
-      penalty_points,
-      time_multiplier,
-      elapsed_ms: Math.round(elapsedMs),
-      score_after,
-      asked_at: last.asked_at,
-      answered_at: answeredAt,
-    });
-
-    await updateLastSessionItem(sessionId, {
-      user_answer: answer,
-      is_correct,
-      verdict,
-      credit,
-      explanation,
-      invalid_question,
-      final_difficulty: nextDiff,
-      points_delta,
-      max_points,
-      penalty_points,
-      time_multiplier,
-      elapsed_ms: Math.round(elapsedMs),
-      score_after,
-      answered_at: answeredAt,
-      dialogue: []
-    });
-
-    res.json({
-      correct: is_correct,
-      verdict,
-      credit,
-      explanation,
-      invalid_question,
-      nextDifficulty: nextDiff,
-      points_delta,
-      max_points,
-      penalty_points,
-      time_multiplier,
-      elapsed_ms: Math.round(elapsedMs),
-      elapsed_seconds: Math.round(elapsedMs / 1000),
-      score: score_after,
-      correctChoice: graded.correctChoice || undefined,
-      expectedAnswer: graded.expectedAnswer || last.expectedAnswer || undefined
-    });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to grade answer", detail: String(e) });
-  }
+  });
 });
 
-// Optional follow-up dialogue after an answer has been graded.
 app.post('/api/discuss', async (req, res) => {
+  const { sessionId, message } = req.body || {};
+  if (!message || typeof message !== 'string') return res.status(400).json({ error: 'message required' });
+  const meta = await loadOwnedPimpSession(req, res, sessionId);
+  if (!meta) return;
   try {
-    const { sessionId, message } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-    if (!message || typeof message !== "string") return res.status(400).json({ error: "message required" });
-
-    const meta = await getSessionMeta(String(sessionId));
-    if (!meta) return res.status(404).json({ error: "Session not found" });
-    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
-
-    const items = await getSessionItems(String(sessionId));
-    if (!items.length) return res.status(400).json({ error: "No active question" });
+    const items = await getSessionItems(sessionId);
     const last = items[items.length - 1];
-    if (!Object.prototype.hasOwnProperty.call(last, 'user_answer')) {
-      return res.status(400).json({ error: "Answer the question before starting discussion" });
-    }
-
-    const dialogue = Array.isArray(last.dialogue) ? last.dialogue : [];
-    const grading = {
-      is_correct: !!last.is_correct,
-      verdict: last.verdict || (last.is_correct ? "correct" : "incorrect"),
-      credit: Number(last.credit || 0),
-      explanation: last.explanation || "",
-      invalid_question: !!last.invalid_question,
-      points_delta: Number(last.points_delta || 0),
-      max_points: Number(last.max_points || 0),
-      penalty_points: Number(last.penalty_points || 0)
-    };
-
-    const reply = await aiDiscussAnswer({
-      question: last.question,
-      userAnswer: last.user_answer || "",
-      grading,
-      dialogue,
-      message: String(message)
-    });
-
-    const updatedDialogue = [...dialogue, { role: "user", content: String(message), at: Date.now() }, { role: "assistant", content: reply, at: Date.now() }];
-    await updateLastSessionItem(String(sessionId), { dialogue: updatedDialogue });
-
+    if (!last || !Object.prototype.hasOwnProperty.call(last, 'user_answer')) return res.status(400).json({ error: 'Answer the question before starting discussion' });
+    const dialogue = ensureArray(last.dialogue);
+    const grading = { verdict: last.verdict, credit: Number(last.credit || 0), explanation: last.explanation || '', invalid_question: !!last.invalid_question, expectedAnswer: last.expectedAnswer, points_delta: Number(last.points_delta || 0) };
+    const reply = await aiDiscussAnswer({ question: last.question, userAnswer: last.user_answer || '', grading, dialogue, message: message.slice(0, 2000), userId: meta.username });
+    await updateLastSessionItem(sessionId, { dialogue: [...dialogue, { role: 'user', content: message, at: Date.now() }, { role: 'assistant', content: reply, at: Date.now() }] });
     res.json({ ok: true, reply });
   } catch (e) {
-    res.status(500).json({ error: "Discussion failed", detail: String(e) });
+    res.status(500).json({ error: 'Discussion failed' });
   }
 });
 
-
-// Save the session questions into the user's exclusion list and generate feedback
 app.post('/api/conclude', async (req, res) => {
-  try {
-    const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: "sessionId required" });
-
-    const meta = await getSessionMeta(String(sessionId));
-    if (!meta) return res.status(404).json({ error: "Session not found" });
-    if (meta.username !== req.auth.username) return res.status(403).json({ error: 'Cannot access another user session' });
-
-    const username = meta.username;
-    const items = await getSessionItems(String(sessionId));
-    const asked = items.filter(it => it && it.question).map(it => String(it.question));
-    const answered = items.filter(it => it && it.question && Object.prototype.hasOwnProperty.call(it, 'user_answer'));
-
-    // Add only genuinely new questions to exclusions so repeated clicks do not inflate numbering.
-    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-    const existing = await getExclusions(username);
-    const existingNorm = new Set((existing || []).map(norm));
-    const toAdd = [];
-    for (const q of asked) {
-      const nq = norm(q);
-      if (nq && !existingNorm.has(nq)) {
-        existingNorm.add(nq);
-        toAdd.push(q);
-      }
+  const { sessionId } = req.body || {};
+  const meta = await loadOwnedPimpSession(req, res, sessionId);
+  if (!meta) return;
+  await withLock(`pimp:${sessionId}`, async () => {
+    try {
+      const username = meta.username;
+      const fresh = await getSessionMeta(sessionId);
+      if (fresh?.concluded_at && fresh.summary) return res.json({ ...parseMaybeJSON(fresh.summary), duplicate: true });
+      const items = await getSessionItems(sessionId);
+      const answered = items.filter(it => it?.question && Object.prototype.hasOwnProperty.call(it, 'user_answer'));
+      const existing = new Set((await redis.lrange(kExcl(username), 0, -1)).map(normQ));
+      // Only answered questions become exclusions; an unanswered one can be seen again.
+      const toAdd = [];
+      for (const it of answered) { const n = normQ(it.question); if (n && !existing.has(n)) { existing.add(n); toAdd.push(it.question); } }
+      if (toAdd.length) await redis.rpush(kExcl(username), ...toAdd);
+      const concepts = answered.map(i => i.concept).filter(Boolean);
+      if (concepts.length) { await redis.rpush(kConcepts(username), ...concepts); await redis.ltrim(kConcepts(username), -2000, -1); }
+      const session_points = answered.reduce((s, it) => s + Number(it.points_delta || 0), 0);
+      let feedback = 'No answered questions yet.', rating = meta.start_diff || 'Hard';
+      if (answered.length) ({ feedback, rating } = await aiSummarizeSession({ transcript: answered, startDifficulty: meta.start_diff, userId: username }));
+      const new_count = await redis.llen(kExcl(username));
+      const summary = { ok: true, added: toAdd.length, new_count, next_number: new_count + 1, session_points, answered: answered.length, feedback, rating };
+      await redis.hset(kSess(sessionId), { concluded_at: Date.now(), rating, summary: JSON.stringify(summary) });
+      res.json(summary);
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to conclude session' });
     }
-    if (toAdd.length) await pushExclusions(username, toAdd);
-
-    const session_points = answered.reduce((sum, it) => sum + Number(it.points_delta || 0), 0);
-    let feedback = "No answered questions yet.";
-    let rating = meta.start_diff || "MSI3";
-    if (answered.length) {
-      const summary = await aiSummarizeSession({ transcript: answered, startDifficulty: meta.start_diff });
-      feedback = summary.feedback;
-      rating = summary.rating;
-    }
-
-    await redis.hset(kSess(String(sessionId)), { concluded_at: Date.now(), rating });
-    const new_count = await exclusionsCount(username);
-    res.json({
-      ok: true,
-      added: toAdd.length,
-      new_count,
-      next_number: new_count + 1,
-      session_points,
-      feedback,
-      rating
-    });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to conclude session", detail: String(e) });
-  }
+  });
 });
 
-// Get a user's score + stats
-app.get('/api/score', async (req, res) => {
-  try {
-    const username = requestedUsernameOrAuth(req, req.query.username);
-    if (!(await userExists(username))) return res.status(404).json({ error: "User not found" });
+app.get('/api/score', async (req, res) => res.json(await getUserScore(requestedUser(req))));
 
-    const stats = await getUserScore(username);
-    res.json(stats);
-  } catch (e) {
-    res.status(500).json({ error: "Failed to get score", detail: String(e) });
-  }
-});
-
-// Leaderboard (global)
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 10)));
-    const key = 'leaderboard:global';
-
-    const raw = await redis.zrange(key, 0, limit - 1, { rev: true, withScores: true });
-
-    let pairs = [];
-    if (Array.isArray(raw) && raw.length > 0) {
-      if (typeof raw[0] === 'object' && raw[0] !== null && ('member' in raw[0] || 'score' in raw[0])) {
-        pairs = raw.map(r => [String(r.member ?? ''), Number(r.score ?? 0)]);
-      } else if (typeof raw[0] === 'string' || typeof raw[0] === 'number') {
-        for (let i = 0; i < raw.length; i += 2) {
-          const m = String(raw[i] ?? '');
-          const s = Number(raw[i + 1] ?? 0);
-          pairs.push([m, s]);
-        }
-      }
+    const limit = clamp(Number(req.query.limit || 10), 1, 100);
+    const raw = await redis.zrange(kLB(), 0, limit - 1, { rev: true, withScores: true });
+    const pairs = [];
+    if (Array.isArray(raw) && raw.length) {
+      if (typeof raw[0] === 'object' && raw[0] !== null) raw.forEach(r => pairs.push([String(r.member ?? ''), Number(r.score ?? 0)]));
+      else for (let i = 0; i < raw.length; i += 2) pairs.push([String(raw[i] ?? ''), Number(raw[i + 1] ?? 0)]);
     }
-
-    const board = pairs
-      .filter(([m]) => m && m.trim().length > 0)
-      .map(([m, s], i) => ({ rank: i + 1, username: m, score: Number.isFinite(s) ? s : 0 }));
-
-    res.json({ leaderboard: board });
+    const board = [];
+    for (const [m, s] of pairs.filter(([m]) => m.trim())) {
+      const h = await redis.hgetall(kUser(m));
+      board.push({ rank: board.length + 1, username: m, score: Number.isFinite(s) ? s : 0, answered: Number(h?.answered || 0) });
+    }
+    res.json({ leaderboard: board, rows: board });
   } catch (e) {
-    res.status(500).json({ error: 'Failed to get leaderboard', detail: String(e) });
+    res.status(500).json({ error: 'Failed to get leaderboard' });
   }
 });
 
-// GET /api/history
 app.get('/api/history', async (req, res) => {
+  const limit = clamp(Number(req.query.limit || 200), 1, 1000);
+  const rows = await redis.lrange(kHistory(requestedUser(req)), 0, limit - 1);
+  res.json({ items: (rows || []).map(r => parseMaybeJSON(r) || { raw: r }) });
+});
+
+////////////////////////////////////////////////////////////////////////////////
+// MED LEARNER
+////////////////////////////////////////////////////////////////////////////////
+function tocItemsFromTree(tree) {
+  const out = [];
+  for (const [discipline, subs] of Object.entries(tree)) for (const [sub, topics] of Object.entries(subs)) for (const topic of topics) out.push({ discipline, sub, topic });
+  return out;
+}
+const normalizeTopicName = (s = '') => String(s).toLowerCase()
+  .replace(/^(approach\s*to|evaluation\s*of|diagnosis\s*of|management\s*of|treatment\s*of|overview\s*of)\s+/i, '')
+  .replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+
+app.get('/med/toc', (_req, res) => {
+  const items = tocItemsFromTree(HARDCODED_TOC);
+  res.json({ ok: true, label: 'HARDCODED_TOC_V1', items, counts: { disciplines: Object.keys(HARDCODED_TOC).length, topics: items.length } });
+});
+app.get('/med/disciplines', (_req, res) => res.json({ disciplines: Object.keys(HARDCODED_TOC) }));
+app.get('/med/subdisciplines', (req, res) => { const d = String(req.query.discipline || ''); res.json({ discipline: d, subs: HARDCODED_TOC[d] ? Object.keys(HARDCODED_TOC[d]) : [] }); });
+app.get('/med/topics-for-sub', (req, res) => { const d = String(req.query.discipline || ''), s = String(req.query.sub || ''); res.json({ discipline: d, sub: s, topics: HARDCODED_TOC[d]?.[s] || [] }); });
+
+app.get('/med/topics', async (req, res) => {
+  try { res.json({ topics: await learnerStore.completedTopics(req.auth.username) }); }
+  catch (e) { res.status(500).json({ error: 'Failed to load topics' }); }
+});
+app.post('/med/topics', async (req, res) => {
+  const topic = String(req.body?.topic || '').trim().slice(0, 200);
+  if (!topic) return res.status(400).json({ error: 'topic required' });
+  try { await learnerStore.markCompleted(req.auth.username, topic); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: 'Failed to save topic' }); }
+});
+app.delete('/med/topics', async (req, res) => {
+  const topic = String(req.body?.topic || req.query.topic || '').trim();
+  if (!topic) return res.status(400).json({ error: 'topic required' });
+  try { await learnerStore.unmarkCompleted(req.auth.username, topic); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: 'Failed to update topic' }); }
+});
+
+app.post('/med/high-yield-im', async (req, res) => {
   try {
-    const username = requestedUsernameOrAuth(req, req.query.username);
-    const limit = Math.max(1, Math.min(1000, Number(req.query.limit || 200)));
-    const rows = await redis.lrange(kHistory(username), 0, limit - 1);
-
-    const items = (rows || []).map((s) => {
-      try { return JSON.parse(s); } catch { return { raw: s }; }
-    });
-
-    res.json({ items });
+    const n = clamp(Number(req.body?.n || 1), 1, 10);
+    const IM = new Set(['Cardiology', 'Endocrinology', 'Gastroenterology', 'Hematology', 'Infectious Disease', 'Nephrology', 'Neurology', 'Respirology', 'Rheumatology']);
+    const completedNorm = new Set((await learnerStore.completedTopics(req.auth.username)).map(normalizeTopicName));
+    const eligible = [...new Set(tocItemsFromTree(HARDCODED_TOC).filter(i => IM.has(i.discipline)).map(i => i.topic))].filter(t => !completedNorm.has(normalizeTopicName(t)));
+    if (!eligible.length) return res.json({ ok: true, ranked: [], pick: null, reason: 'All topics completed.' });
+    let ranked = [];
+    if (!MOCK()) {
+      try {
+        const out = await aiJSON({ tag: 'learner.highYield', meta: { userId: req.auth.username }, system: `You are a clerkship director selecting HIGH-YIELD Internal Medicine study topics for a Canadian clerk. From the provided list ONLY, rank the most high-yield topics. Prefer common inpatient problems, emergencies, and algorithm-heavy entities. Return {"ranked":[{"topic":"","reason":""}]}.`, payload: { topics: eligible, max: Math.min(20, eligible.length) }, model: BASE_MODEL, max_output_tokens: 1500 });
+        const ok = new Set(eligible);
+        ranked = ensureArray(out.ranked).filter(x => x?.topic && ok.has(x.topic));
+      } catch {}
+    }
+    if (!ranked.length) ranked = [{ topic: eligible[Math.floor(Math.random() * eligible.length)], reason: 'Random pick from remaining topics.' }];
+    res.json({ ok: true, ranked: ranked.slice(0, n), pick: ranked[0] });
   } catch (e) {
-    res.status(e.statusCode || 500).json({ error: "history failed", detail: String(e) });
+    res.status(500).json({ error: 'Failed to pick topic' });
   }
 });
 
-// ==================== MED LEARNER ROUTES (existing) ====================
+async function buildPimpQuestionsAI(topic, noteSnippets, n, userId) {
+  if (MOCK()) return Array.from({ length: n }, (_, i) => ({ q: `${topic}: mock question ${i + 1}?`, answer: 'Mock answer', explain: 'Mock explanation.' }));
+  const out = await aiJSON({ tag: 'learner.testQuestions', meta: { userId }, system: `You are a senior Internal Medicine attending running ward rounds for a Canadian clerk. Write ${n} short, clinically applied questions on the topic, progressing from hard to brutal. Emphasize diagnosis, next test, management, risk stratification, complications, monitoring and contraindications. Canadian guidelines and SI units.
+Return {"questions":[{"q":"","answer":"concise expected answer","explain":"one-paragraph explanation"}]}`, payload: { topic, note_snippets: noteSnippets.slice(0, 12) }, model: PIMP_MODEL, max_output_tokens: 3500 });
+  return ensureArray(out.questions).map(x => ({ q: String(x.q || '').trim(), answer: String(x.answer || '').trim(), explain: String(x.explain || '').trim() })).filter(x => x.q && x.answer).slice(0, n);
+}
 
-// --- Learn Plan API ---
-// POST /med/learn-plan { topic, user_id? } -> guidelines, trials, objectives
+async function searchNoteSnippets(topic, k = 8) {
+  try { return (await learnerStore.search(topic, k)).map(r => r.text); } catch { return []; }
+}
 
-// POST /med/learn-plan { topic, user_id? }
-app.post('/med/learn-plan', async (req, res) => {
+async function testQuestionsHandler(req, res) {
   try {
-    const topic = String(req.body?.topic || "").trim();
-    if (!topic) return res.status(400).json({ error: "topic required" });
+    const topic = String(req.body?.topic || req.query?.topic || '').trim();
+    const n = clamp(Number(req.body?.n || req.query?.n || 10), 4, 20);
+    if (!topic) return res.status(400).json({ error: 'topic required' });
+    const questions = await buildPimpQuestionsAI(topic, await searchNoteSnippets(topic, 12), n, req.auth.username);
+    if (!questions.length) return res.status(502).json({ error: 'failed to generate questions' });
+    res.json({ ok: true, topic, count: questions.length, questions });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to generate questions' });
+  }
+}
+app.post('/med/test-questions', testQuestionsHandler);
+app.get('/med/test-questions', testQuestionsHandler);
 
-    const snippets = searchNoteSnippets(topic, 8);
-    let plan = await buildLearnPlanAI(topic, snippets);
-    plan = await improvePlanLinks(plan, topic);
+async function urlOk(url, timeoutMs = 7000) {
+  if (!url || typeof url !== 'string' || !/^https:\/\//i.test(url)) return false;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    let r = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: ctrl.signal });
+    if (!r.ok) r = await fetch(url, { method: 'GET', redirect: 'follow', signal: ctrl.signal });
+    clearTimeout(t);
+    return r.ok;
+  } catch { return false; }
+}
 
+async function buildLearnPlanAI(topic, noteSnippets, userId) {
+  if (MOCK()) return { guidelines: [{ region: 'Canada', org: 'Mock', year: 2024, title: `${topic} guideline`, why: 'Mock', link: '' }], trials: [], objectives: [{ objective: `Recognise ${topic}`, rationale: 'Mock', resources: [] }] };
+  const system = `You are an evidence-based Internal Medicine educator. Create a learning plan with "guidelines", "trials", "objectives".
+Return {"guidelines":[{"region":"Canada|USA|International","org":"","year":2020,"title":"","why":"","link":""}],
+"trials":[{"name":"","year":1999,"question":"","design":"","n":"","result":"","impact":"","one_liner":"","link":""}],
+"objectives":[{"objective":"","rationale":"","resources":[{"type":"guideline|trial|other","ref":"","title":"","link":""}]}]}
+- Prefer Canadian guidelines first, then USA, then international. Up to 8 guidelines.
+- Trials must be landmark/seminal (include influential negative trials). Up to 10.
+- 8-14 objectives covering pathophysiology, diagnosis, risk stratification, ED/inpatient/outpatient management, complications and follow-up; cite matching guideline/trial names in "ref".
+- Links must be stable landing pages, DOI or PubMed URLs; leave empty if unsure.`;
+  try {
+    return await aiJSON({ tag: 'learner.plan', meta: { userId }, system, payload: { topic, note_snippets: noteSnippets }, model: PIMP_DISCUSSION_MODEL, max_output_tokens: 6000, reasoning_effort: 'low',
+      validate: (p) => (Array.isArray(p.guidelines) && Array.isArray(p.trials) && Array.isArray(p.objectives) ? '' : 'missing arrays') });
+  } catch {
+    return { guidelines: [], trials: [], objectives: [] };
+  }
+}
+
+async function improvePlanLinks(plan, topic) {
+  const order = { Canada: 0, USA: 1, International: 2 };
+  plan.guidelines.sort((a, b) => (order[a.region] ?? 99) - (order[b.region] ?? 99) || (b.year || 0) - (a.year || 0));
+  const checks = [...plan.guidelines, ...plan.trials].map(async (x) => { if (x.link && !(await urlOk(x.link))) x.link = ''; });
+  await Promise.all(checks);
+  for (const g of plan.guidelines) if (!g.link) g.link = `https://www.google.com/search?q=${encodeURIComponent(`${g.title || topic} ${g.org || ''} guideline`)}`;
+  for (const t of plan.trials) if (!t.link) t.link = `https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(t.name || topic)}`;
+  return plan;
+}
+
+async function learnPlanHandler(req, res) {
+  try {
+    const topic = String(req.body?.topic || req.query?.topic || '').trim();
+    if (!topic) return res.status(400).json({ error: 'topic required' });
+    const snippets = await searchNoteSnippets(topic, 8);
+    const plan = await improvePlanLinks(await buildLearnPlanAI(topic, snippets, req.auth.username), topic);
     res.json({ ok: true, topic, ...plan, snippets_count: snippets.length });
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    res.status(500).json({ error: 'Failed to build learning plan' });
   }
-});
+}
+app.post('/med/learn-plan', learnPlanHandler);
+app.get('/med/learn-plan', learnPlanHandler);
 
-// GET /med/learn-plan?topic=...
-app.get('/med/learn-plan', async (req, res) => {
-  try {
-    const topic = String(req.query?.topic || "").trim();
-    if (!topic) return res.status(400).json({ error: "topic required" });
+// --- PDFs ---------------------------------------------------------------------
+const MAX_PDF_BYTES = 25 * 1024 * 1024;
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_PDF_BYTES } });
 
-    const snippets = searchNoteSnippets(topic, 8);
-    let plan = await buildLearnPlanAI(topic, snippets);
-    plan = await improvePlanLinks(plan, topic);
-
-    res.json({ ok: true, topic, ...plan, snippets_count: snippets.length });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
+function chunkText(raw) {
+  const text = (raw || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  const chunks = [];
+  let i = 0;
+  while (i < text.length) {
+    let slice = text.slice(i, Math.min(i + 1200, text.length));
+    const stop = Math.max(slice.lastIndexOf('\n\n'), slice.lastIndexOf('. '));
+    if (stop > 400 && i + 1200 < text.length) slice = slice.slice(0, stop + 1);
+    chunks.push(slice.trim());
+    i += Math.max(slice.length - 150, 1);
   }
-});
+  return chunks.filter(Boolean);
+}
 
+async function indexPdfBuffer(buffer, label) {
+  const data = await pdfParse(buffer);
+  const chunks = chunkText(data.text || '');
+  const docId = await learnerStore.insertPdf(label, chunks);
+  return { docId, nChunks: chunks.length };
+}
 
-// Get completed topics for a user
-app.get('/med/topics', (req, res) => {
-  const user_id = req.query.user_id;
-  if (!user_id) return res.status(400).json({ error: 'user_id required' });
-  const rows = medDb
-    .prepare(`SELECT topic FROM completed_topics WHERE user_id = ? ORDER BY created_at DESC`)
-    .all(user_id);
-  res.json({ topics: rows.map(r => r.topic) });
-});
+function isPrivateHost(host) {
+  const h = String(host || '').toLowerCase();
+  if (!h || h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  if (/^(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)) return true;
+  if (h.startsWith('[') || h.includes(':')) return true;
+  return false;
+}
 
-// Add a completed topic
-app.post('/med/topics', (req, res) => {
-  const { user_id, topic } = req.body || {};
-  if (!user_id || !topic) return res.status(400).json({ error: 'user_id and topic required' });
-  try {
-    medDb.prepare(`INSERT OR IGNORE INTO completed_topics (user_id, topic) VALUES (?, ?)`).run(user_id, topic);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+async function fetchPdf(url) {
+  const u = new URL(url);
+  if (u.protocol !== 'https:' || isPrivateHost(u.hostname)) throw new Error('Only public https URLs are allowed');
+  const r = await fetch(u, { redirect: 'follow' });
+  if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
+  if (Number(r.headers.get('content-length') || 0) > MAX_PDF_BYTES) throw new Error('PDF too large');
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > MAX_PDF_BYTES) throw new Error('PDF too large');
+  return buf;
+}
 
-// Upload & index a PDF (multipart/form-data) — left intact
 app.post('/med/pdfs', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'file required' });
-    const label = req.body?.label || req.file.originalname;
+    const label = String(req.body?.label || req.file.originalname).slice(0, 200);
     const { docId, nChunks } = await indexPdfBuffer(req.file.buffer, label);
     res.json({ ok: true, doc_id: docId, chunks: nChunks, label });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
-// Fetch & index a PDF by URL — left intact
 app.post('/med/pdfs/by-url', async (req, res) => {
   try {
     const { url, label } = req.body || {};
     if (!url) return res.status(400).json({ error: 'url required' });
-
-    const r = await fetch(url);
-    if (!r.ok) return res.status(400).json({ error: `fetch failed: ${r.status}` });
-
-    const buf = Buffer.from(await r.arrayBuffer());
-    const { docId, nChunks } = await indexPdfBuffer(buf, label || url);
+    const buf = await fetchPdf(String(url));
+    const { docId, nChunks } = await indexPdfBuffer(buf, String(label || url).slice(0, 200));
     res.json({ ok: true, doc_id: docId, chunks: nChunks, label: label || url });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(400).json({ error: String(e?.message || e) });
   }
 });
 
-// Search indexed PDFs (FTS5; BM25 ranking) — left intact
-app.get('/med/pdfs/search', (req, res) => {
-  const q = req.query.q;
-  const k = Number(req.query.k || 8);
-  if (!q) return res.status(400).json({ error: 'q required' });
-
-  try {
-    const rows = medDb.prepare(`
-      SELECT pc.rowid as rowid,
-             pc.id     as chunk_id,
-             pc.doc_id as doc_id,
-             pd.label  as label,
-             pc.text   as text,
-             bm25(pdf_chunks_fts) as score
-      FROM pdf_chunks_fts
-      JOIN pdf_chunks pc ON pc.rowid = pdf_chunks_fts.rowid
-      JOIN pdf_docs   pd ON pd.id = pc.doc_id
-      WHERE pdf_chunks_fts MATCH ?
-      ORDER BY score
-      LIMIT ?
-    `).all(q, k);
-
-    res.json({
-      hits: rows.map(r => ({
-        doc_id: r.doc_id,
-        label : r.label,
-        chunk_id: r.chunk_id,
-        text  : r.text,
-        score : r.score
-      }))
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.get('/med/pdfs/search', async (req, res) => {
+  const qtext = String(req.query.q || '').trim();
+  if (!qtext) return res.status(400).json({ error: 'q required' });
+  try { res.json({ hits: await learnerStore.search(qtext, Number(req.query.k || 8)) }); }
+  catch (e) { res.status(500).json({ error: 'Search failed' }); }
 });
 
-
-
-// ==================== MEDICAL CASE SIMULATOR ROUTES ====================
-// EMR-style diagnostic and management simulator. Stores the locked diagnosis server-side.
-
-const CASE_MODEL = CASE_GENERATOR_MODEL;
-const CASE_FAST_MODEL = CASE_FAST_MODEL_DEFAULT;
-const CASE_SESSION_TTL_SECONDS = Number(process.env.CASE_SESSION_TTL_SECONDS || 60 * 60 * 24 * 30);
-
-const kCase = (id) => `casesim:session:${id}`;
-
-function extractOutputText(resp) {
-  const parts = [];
-
-  if (typeof resp?.output_text === "string" && resp.output_text.trim()) {
-    parts.push(resp.output_text.trim());
-  }
-
-  // The Responses API output array may contain reasoning items, tool calls,
-  // messages, or refusals. Do not assume output[0].content[0].text exists.
-  const output = Array.isArray(resp?.output) ? resp.output : [];
-  for (const item of output) {
-    if (!item) continue;
-    if (typeof item.text === "string" && item.text.trim()) parts.push(item.text.trim());
-    if (typeof item.output_text === "string" && item.output_text.trim()) parts.push(item.output_text.trim());
-
-    const content = Array.isArray(item.content) ? item.content : [];
-    for (const c of content) {
-      if (!c) continue;
-      if (typeof c.text === "string" && c.text.trim()) parts.push(c.text.trim());
-      if (typeof c.output_text === "string" && c.output_text.trim()) parts.push(c.output_text.trim());
-      if (typeof c.refusal === "string" && c.refusal.trim()) parts.push(c.refusal.trim());
-    }
-  }
-
-  return parts.join("\n").trim();
-}
-
-function parseLooseJSON(text) {
-  if (text && typeof text === "object" && !Array.isArray(text)) return text;
-  if (typeof text !== "string") return null;
-  let t = text.trim();
-  t = t.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
-  try { return JSON.parse(t); } catch {}
-  const firstObj = t.indexOf('{');
-  const lastObj = t.lastIndexOf('}');
-  if (firstObj >= 0 && lastObj > firstObj) {
-    try { return JSON.parse(t.slice(firstObj, lastObj + 1)); } catch {}
-  }
-  const firstArr = t.indexOf('[');
-  const lastArr = t.lastIndexOf(']');
-  if (firstArr >= 0 && lastArr > firstArr) {
-    try { return JSON.parse(t.slice(firstArr, lastArr + 1)); } catch {}
-  }
-  return null;
-}
-
-async function caseAiJSON({ system, payload, model = CASE_MODEL, temperature = 0, max_output_tokens = 5000, reasoning_effort = 'low' }) {
-  const messages = [
-    { role: "system", content: `${system}
-
-You must respond with one complete valid JSON object. Do not include markdown, prose, comments, or code fences.` },
-    { role: "user", content: JSON.stringify(payload) }
-  ];
-
-  let resp;
+const STANDARD_PDF_URL = process.env.STANDARD_PDF_URL || 'https://raw.githubusercontent.com/gurnoorsidhu602-alt/file/7c1f0d025f19f12e2494694197bd38da92f09f49/toc.pdf';
+const STANDARD_PDF_LABEL = process.env.STANDARD_PDF_LABEL || 'STANDARD_TOC_V1';
+async function ensureStandardPdfIndexed() {
   try {
-    resp = await responsesCall({
-      model,
-      temperature,
-      max_output_tokens,
-      reasoning_effort,
-      jsonMode: true,
-      messages
-    });
+    if (!STANDARD_PDF_URL || process.env.SKIP_STANDARD_PDF === '1') return;
+    if (await learnerStore.pdfExistsByLabel(STANDARD_PDF_LABEL)) return;
+    const { docId, nChunks } = await indexPdfBuffer(await fetchPdf(STANDARD_PDF_URL), STANDARD_PDF_LABEL);
+    console.log(`[MedLearner] Indexed standard PDF ${STANDARD_PDF_LABEL} as ${docId} (${nChunks} chunks).`);
   } catch (err) {
-    // Some account/model combinations can reject JSON mode. If so, fall back to
-    // prompt-only JSON, but keep the better parser below. Other OpenAI errors
-    // should surface normally.
-    const msg = String(err?.message || err || "").toLowerCase();
-    if (!msg.includes("json") && !msg.includes("text.format") && !msg.includes("response_format")) throw err;
-    console.warn("[caseAiJSON] JSON mode rejected; retrying without JSON mode:", err?.message || err);
-    resp = await responsesCall({ model, temperature, max_output_tokens, reasoning_effort, messages });
+    console.error('[MedLearner] Standard PDF not indexed:', err?.message || err);
   }
-
-  if (resp?.status === "incomplete" && resp?.incomplete_details?.reason === "max_output_tokens") {
-    throw new Error(`AI returned incomplete JSON for case simulator because max_output_tokens=${max_output_tokens} was reached`);
-  }
-
-  const rawText = extractOutputText(resp);
-  const parsed = parseResponsesJSON(resp) || parseLooseJSON(rawText);
-  if (!parsed || typeof parsed !== "object") {
-    console.warn("[caseAiJSON] Could not parse model response. status=", resp?.status, "first_text=", rawText.slice(0, 500));
-    throw new Error("AI returned non-JSON output for case simulator");
-  }
-  return parsed;
 }
 
-function nowIso() { return new Date().toISOString(); }
-function normalizeSimple(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
-function ensureArray(x) { return Array.isArray(x) ? x : []; }
-
-function parseSimDateTime(value) {
-  if (!value) return null;
-  const s = String(value).trim();
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0, 0);
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
+////////////////////////////////////////////////////////////////////////////////
+// MEDICAL CASE SIMULATOR
+////////////////////////////////////////////////////////////////////////////////
+const getCaseExclusions = async (u) => (await redis.lrange(kCaseExcl(u), 0, -1)).map(String);
+async function pushUniqueCaseExclusion(u, entry) {
+  const e = String(entry || '').trim();
+  if (!e) return 0;
+  const n = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (new Set((await getCaseExclusions(u)).map(n)).has(n(e))) return 0;
+  await redis.rpush(kCaseExcl(u), e);
+  return 1;
 }
 
-function formatSimDateTime(date) {
-  const d = date instanceof Date ? date : parseSimDateTime(date);
-  if (!d || Number.isNaN(d.getTime())) return "";
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function isPendingConsultSetting(specialty = '') {
+  const s = String(specialty).toLowerCase();
+  return /\b(ctu|clinical teaching unit|internal medicine|medicine|gim)\b/.test(s) && /\b(consult|referral|ed|emerg)/.test(s);
 }
 
-function addSimMinutes(value, minutes) {
-  const d = parseSimDateTime(value) || new Date();
-  return formatSimDateTime(new Date(d.getTime() + Number(minutes || 0) * 60000));
+function normalizeNote(n = {}) {
+  const noteType = String(n.noteType || n.type || 'Note');
+  const providerName = String(n.providerName || n.provider || n.author || '');
+  return { id: String(n.id || uuid()), datetime: String(n.datetime || ''), service: String(n.service || n.department || ''), providerName, noteType, type: noteType, author: providerName, title: String(n.title || noteType), text: String(n.text || '') };
 }
 
-function simDayLabel(value) {
-  const d = parseSimDateTime(value);
-  if (!d || Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function collectPatientDateTimes(patient) {
-  const out = [];
-  const push = (x) => { const d = parseSimDateTime(x); if (d) out.push(d); };
-  const p = patient || {};
-  ensureArray(p.vitals).forEach(x => push(x.datetime));
-  ensureArray(p.labCategories).forEach(c => ensureArray(c.rows).forEach(r => ensureArray(r.values).forEach(v => push(v.datetime))));
-  ensureArray(p.investigations).forEach(x => push(x.datetime));
-  ensureArray(p.nursingNotes).forEach(x => push(x.datetime));
-  ensureArray(p.medications).forEach(x => { push(x.start); push(x.stop); });
-  ensureArray(p.notes).forEach(x => push(x.datetime));
-  ensureArray(p.orders).forEach(x => push(x.datetime || x.at));
-  return out;
-}
-
-function latestPatientDateTime(patient) {
-  const times = collectPatientDateTimes(patient);
-  if (!times.length) return "";
-  return formatSimDateTime(new Date(Math.max(...times.map(d => d.getTime()))));
-}
-
-function isPendingConsultSetting(specialty = "") {
-  const s = normalizeSimple(specialty);
-  return /\b(ctu|clinical teaching unit|internal medicine|medicine|gim|general internal medicine)\b/.test(s) && /\b(consult|referral|ed|emergency)\b/.test(s);
-}
-
-function inferNoteService(...parts) {
-  const s = normalizeSimple(parts.filter(Boolean).join(' '));
-  if (/\b(ed|emergency|emerg)\b/.test(s)) return "Emergency Medicine";
-  if (/\b(internal medicine|medicine|gim|ctu|clinical teaching unit)\b/.test(s)) return "Internal Medicine";
-  if (/\bnurs|rn\b/.test(s)) return "Nursing";
-  if (/\bsurg/.test(s)) return "General Surgery";
-  if (/\bcardio/.test(s)) return "Cardiology";
-  if (/\bnephro/.test(s)) return "Nephrology";
-  if (/\brespi|pulm/.test(s)) return "Respirology";
-  return "";
-}
-
-function normalizeNoteObject(note = {}) {
-  const n = note && typeof note === "object" ? note : {};
-  const noteType = String(n.noteType || n.type || "Note");
-  const providerName = String(n.providerName || n.provider || n.author || "");
-  const service = String(n.service || n.department || n.specialty || inferNoteService(noteType, providerName, n.title, n.text));
-  return {
-    ...n,
-    id: String(n.id || uuid()),
-    datetime: String(n.datetime || ""),
-    service,
-    providerName,
-    noteType,
-    type: noteType,
-    author: providerName || String(n.author || ""),
-    title: String(n.title || noteType),
-    text: String(n.text || "")
-  };
-}
-
-function removeCompletedConsultNotesIfPending(patient, specialty) {
-  if (!isPendingConsultSetting(specialty)) return patient;
-  const p = patient || {};
-  p.notes = ensureArray(p.notes).filter(note => {
-    const provider = normalizeSimple(note.providerName || note.author || "");
-    // Preserve learner-created documentation. The pending-consult guard is only
-    // meant to prevent the initial AI-generated chart from already containing
-    // a completed Medicine/CTU consult note.
-    if (/\b(learner|student|user|clerk)\b/.test(provider)) return true;
-    const service = normalizeSimple(note.service || note.department || note.specialty || note.author || note.providerName || "");
-    const type = normalizeSimple(note.noteType || note.type || note.title || "");
-    const text = normalizeSimple(note.text || "");
-    const combined = `${service} ${type} ${text}`;
-    const isIM = /\b(internal medicine|medicine|gim|ctu|clinical teaching unit)\b/.test(combined);
-    const isCompletedConsultOrAdmission = /\b(consult note|admission note|admission|progress note|assessment and plan|recommendations)\b/.test(combined);
-    const isRequest = /\b(consult request|request|referral|ed note|triage)\b/.test(combined) || /\b(emergency medicine|ed|emerg)\b/.test(service);
-    if (isRequest) return true;
-    if (isIM && isCompletedConsultOrAdmission) return false;
-    return true;
+// Applied once, to the generated opening chart only (never to learner notes).
+function removePrematureConsultNotes(patient, specialty) {
+  if (!isPendingConsultSetting(specialty)) return;
+  patient.notes = patient.notes.filter(note => {
+    const service = String(note.service || '').toLowerCase();
+    const type = String(`${note.noteType} ${note.title}`).toLowerCase();
+    const isIM = /internal medicine|\bmedicine\b|gim|ctu/.test(`${service} ${type}`);
+    const isRequest = /request|referral|triage|\bed\b|emergency/.test(`${type} ${service}`);
+    const isCompleted = /consult note|admission|progress|assessment|plan|recommendation/.test(`${type} ${String(note.text).toLowerCase().slice(0, 400)}`);
+    return isRequest || !(isIM && isCompleted);
   });
-  return p;
 }
 
-function postProcessCasePatient(patient, specialty = "", priorPatient = null) {
-  const p = priorPatient ? mergePatientState(priorPatient, patient) : sanitizePatient(patient);
-  p.notes = ensureArray(p.notes).map(normalizeNoteObject);
-  removeCompletedConsultNotesIfPending(p, specialty);
-  return p;
-}
-
-function administrativeOrderResult(order) {
-  const o = String(order || '').trim();
-  const low = o.toLowerCase();
-  let status = "entered";
-  let comment = "Order entered.";
-  if (/\b(cbc|lytes|electrolytes|creatinine|urea|lft|inr|ptt|troponin|crp|esr|blood gas|vbg|abg|culture|urine|urinalysis|xray|x-ray|ct|mri|ultrasound|ecg|ekg)\b/.test(low)) {
-    status = "pending";
-    comment = "Order entered; result pending.";
-  }
-  if (/\b(d\/c|dc|discontinue|stop|hold)\b/.test(low)) {
-    status = "entered";
-    comment = "Medication/order change entered.";
-  }
-  return { order: o, status, comment };
-}
-
-function maybeAddMedicationFromOrder(patient, order, simTime) {
-  const o = String(order || '').trim();
-  if (!/\b(start|give|administer|continue|ceftriaxone|azithromycin|vancomycin|piperacillin|tazobactam|heparin|enoxaparin|insulin|salbutamol|furosemide|lasix|normal saline|ringer|d5w|morphine|hydromorphone|acetaminophen|ondansetron)\b/i.test(o)) return;
-  if (/\b(cbc|ct|xray|x-ray|mri|ultrasound|ecg|ekg|culture|bloodwork|lab)\b/i.test(o)) return;
-  patient.medications = ensureArray(patient.medications);
-  patient.medications.push({ id: uuid(), name: o, dose: "", route: "", frequency: "", status: "active", start: simTime, stop: "", comments: "Entered order" });
-}
-
-function sanitizePatient(p) {
-  p = p && typeof p === "object" ? p : {};
-  delete p.lock;
-  delete p.diagnosis;
-  delete p.primary_diagnosis;
-  delete p.answer;
+function sanitizeGeneratedPatient(p) {
+  p = p && typeof p === 'object' ? p : {};
+  const withIds = (arr) => ensureArray(arr).map(x => ({ id: String(x?.id || uuid()), ...x }));
   return {
-    id: String(p.id || uuid()).slice(0, 64),
-    displayName: String(p.displayName || p.name || "Doe, Alex"),
+    id: uuid(),
+    displayName: String(p.displayName || p.name || 'Doe, Alex'),
     age: Number.isFinite(Number(p.age)) ? Number(p.age) : 50,
-    sex: String(p.sex || "U"),
-    location: String(p.location || "Emergency Department"),
+    sex: String(p.sex || 'U'),
+    location: String(p.location || 'Emergency Department'),
     allergies: ensureArray(p.allergies).map(String),
-    codeStatus: String(p.codeStatus || "Full Code"),
-    presentingComplaint: String(p.presentingComplaint || "Undifferentiated presentation"),
-    banner: String(p.banner || "Select tabs to review the available chart."),
-    vitals: ensureArray(p.vitals),
-    labCategories: ensureArray(p.labCategories),
-    investigations: ensureArray(p.investigations),
-    nursingNotes: ensureArray(p.nursingNotes),
-    medications: ensureArray(p.medications),
-    notes: ensureArray(p.notes),
-    orders: ensureArray(p.orders)
+    codeStatus: String(p.codeStatus || 'Full Code'),
+    presentingComplaint: String(p.presentingComplaint || 'Undifferentiated presentation'),
+    banner: String(p.banner || ''),
+    vitals: [],
+    labCategories: [],
+    investigations: withIds(p.investigations),
+    nursingNotes: withIds(p.nursingNotes),
+    medications: withIds(p.medications),
+    notes: ensureArray(p.notes).map(normalizeNote)
   };
-}
-
-function hasOwn(obj, key) {
-  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
-}
-
-function stableValue(x) {
-  if (x === null || x === undefined) return "";
-  if (typeof x !== "object") return String(x);
-  try {
-    if (Array.isArray(x)) return `[${x.map(stableValue).join('|')}]`;
-    return Object.keys(x).sort().map(k => `${k}:${stableValue(x[k])}`).join('|');
-  } catch {
-    return String(x);
-  }
-}
-
-function genericItemKey(item, preferredKeys = []) {
-  const it = item && typeof item === "object" ? item : { value: item };
-  if (it.id) return `id:${String(it.id)}`;
-  const values = preferredKeys.map(k => String(it[k] || '').trim()).filter(Boolean);
-  if (values.length) return normalizeSimple(values.join(' | '));
-  return normalizeSimple(stableValue(it)).slice(0, 500);
-}
-
-function mergeRecordArray(priorArr, nextArr, preferredKeys = []) {
-  const out = [];
-  const index = new Map();
-  const addOrUpdate = (item, allowUpdate = true) => {
-    if (item === null || item === undefined) return;
-    const key = genericItemKey(item, preferredKeys);
-    if (!key) return;
-    const existingIndex = index.get(key);
-    if (existingIndex === undefined) {
-      index.set(key, out.length);
-      out.push(item);
-      return;
-    }
-    if (allowUpdate && typeof out[existingIndex] === "object" && typeof item === "object") {
-      out[existingIndex] = { ...out[existingIndex], ...item };
-    }
-  };
-  ensureArray(priorArr).forEach(x => addOrUpdate(x, false));
-  ensureArray(nextArr).forEach(x => addOrUpdate(x, true));
-  return out;
-}
-
-function mergeLabCategories(priorCats, nextCats) {
-  const out = [];
-  const catMap = new Map();
-  const getCatKey = (c) => normalizeSimple(c?.name || c?.category || "Labs");
-  const addCat = (cat, isPatch) => {
-    if (!cat || typeof cat !== "object") return;
-    const key = getCatKey(cat);
-    if (!catMap.has(key)) {
-      const base = { ...cat, name: String(cat.name || cat.category || "Labs"), rows: [] };
-      catMap.set(key, base);
-      out.push(base);
-    }
-    const target = catMap.get(key);
-    const rowMap = new Map();
-    ensureArray(target.rows).forEach(r => {
-      const rk = normalizeSimple([r?.test, r?.unit, r?.referenceRange].filter(Boolean).join(' | '));
-      rowMap.set(rk, r);
-    });
-    ensureArray(cat.rows).forEach(row => {
-      if (!row || typeof row !== "object") return;
-      const rk = normalizeSimple([row.test, row.unit, row.referenceRange].filter(Boolean).join(' | '));
-      if (!rowMap.has(rk)) {
-        const newRow = { ...row, values: ensureArray(row.values) };
-        rowMap.set(rk, newRow);
-        target.rows.push(newRow);
-        return;
-      }
-      const existing = rowMap.get(rk);
-      const valueMap = new Map();
-      ensureArray(existing.values).forEach(v => {
-        const vk = normalizeSimple(v?.datetime || stableValue(v));
-        valueMap.set(vk, v);
-      });
-      ensureArray(row.values).forEach(v => {
-        if (!v || typeof v !== "object") return;
-        const vk = normalizeSimple(v.datetime || stableValue(v));
-        if (valueMap.has(vk)) Object.assign(valueMap.get(vk), v);
-        else existing.values.push(v);
-      });
-      for (const k of ["test", "unit", "referenceRange"]) {
-        if (row[k] && !existing[k]) existing[k] = row[k];
-      }
-    });
-  };
-  ensureArray(priorCats).forEach(c => addCat(c, false));
-  ensureArray(nextCats).forEach(c => addCat(c, true));
-  return out;
-}
-
-function mergePatientState(priorPatient, candidatePatient) {
-  const prior = sanitizePatient(priorPatient);
-  const raw = candidatePatient && typeof candidatePatient === "object" ? { ...candidatePatient } : {};
-  delete raw.lock;
-  delete raw.diagnosis;
-  delete raw.primary_diagnosis;
-  delete raw.answer;
-
-  const merged = { ...prior };
-  for (const key of ["id", "displayName", "name", "age", "sex", "location", "codeStatus", "presentingComplaint", "banner"]) {
-    if (hasOwn(raw, key) && raw[key] !== null && raw[key] !== undefined && String(raw[key]).trim() !== "") {
-      if (key === "name" && !hasOwn(raw, "displayName")) merged.displayName = String(raw[key]);
-      else if (key !== "name") merged[key] = raw[key];
-    }
-  }
-  if (hasOwn(raw, "allergies") && ensureArray(raw.allergies).length) merged.allergies = ensureArray(raw.allergies).map(String);
-
-  // Important state-preservation rule:
-  // Fast model calls may return partial patient objects. Missing or empty arrays
-  // must never wipe the existing EMR. Only merge arrays when the model actually
-  // supplies one or more records. This prevents random loss of notes/MAR after
-  // page/advance events while still allowing new findings to be appended.
-  if (hasOwn(raw, "vitals") && ensureArray(raw.vitals).length) {
-    merged.vitals = mergeRecordArray(prior.vitals, raw.vitals, ["datetime", "hr", "bp", "rr", "spo2", "temperature_C"]);
-  }
-  if (hasOwn(raw, "labCategories") && ensureArray(raw.labCategories).length) {
-    merged.labCategories = mergeLabCategories(prior.labCategories, raw.labCategories);
-  }
-  if (hasOwn(raw, "investigations") && ensureArray(raw.investigations).length) {
-    merged.investigations = mergeRecordArray(prior.investigations, raw.investigations, ["datetime", "group", "title", "status"]);
-  }
-  if (hasOwn(raw, "nursingNotes") && ensureArray(raw.nursingNotes).length) {
-    merged.nursingNotes = mergeRecordArray(prior.nursingNotes, raw.nursingNotes, ["datetime", "author", "text"]);
-  }
-  if (hasOwn(raw, "medications") && ensureArray(raw.medications).length) {
-    merged.medications = mergeRecordArray(prior.medications, raw.medications, ["name", "dose", "route", "frequency", "start"]);
-  }
-  if (hasOwn(raw, "notes") && ensureArray(raw.notes).length) {
-    merged.notes = mergeRecordArray(prior.notes, raw.notes.map(normalizeNoteObject), ["datetime", "service", "noteType", "title", "text"]);
-  }
-  if (hasOwn(raw, "orders") && ensureArray(raw.orders).length) {
-    merged.orders = mergeRecordArray(prior.orders, raw.orders, ["datetime", "at", "order", "status"]);
-  }
-  return sanitizePatient(merged);
 }
 
 function publicCasePayload(session) {
-  const patient = postProcessCasePatient(session.patient, session.specialty);
-  const currentTime = session.currentTime || latestPatientDateTime(patient) || "";
+  const isLegacy = session.engineVersion !== ENGINE_VERSION;
+  const p = session.patient || {};
+  const currentTime = session.sim?.now || session.currentTime || '';
   return {
     ok: true,
     sessionId: session.id,
-    mode: session.mode,
-    specialty: session.specialty,
-    difficulty: session.difficulty,
-    createdAt: session.createdAt,
-    currentTime,
-    currentDayLabel: simDayLabel(currentTime),
-    patient,
-    activity: ensureArray(session.activity).slice(-40),
+    version: session.version,
+    legacy: isLegacy,
+    mode: session.mode, specialty: session.specialty, difficulty: session.difficulty, createdAt: session.createdAt,
+    caseTitle: session.caseTitle || 'Medical case',
+    currentTime, currentDayLabel: dayLabel(currentTime),
+    patient: {
+      id: p.id, displayName: p.displayName, age: p.age, sex: p.sex, location: p.location, allergies: ensureArray(p.allergies),
+      codeStatus: p.codeStatus, presentingComplaint: p.presentingComplaint, banner: p.banner,
+      vitals: ensureArray(p.vitals), labCategories: sortLabCategories(ensureArray(p.labCategories)), investigations: ensureArray(p.investigations),
+      nursingNotes: ensureArray(p.nursingNotes), medications: ensureArray(p.medications), notes: ensureArray(p.notes),
+      orders: isLegacy ? ensureArray(p.orders) : publicOrders(session)
+    },
+    pending: isLegacy ? [] : pendingList(session),
+    transcript: ensureArray(session.transcript).slice(-150).map(t => ({ at: t.at, q: t.q, a: t.a })),
+    activity: ensureArray(session.activity).slice(-80),
     orderHistory: ensureArray(session.orderHistory),
-    concluded: !!session.concluded
+    concluded: !!session.concluded,
+    conclusion: session.concluded ? session.conclusion || null : null
   };
 }
 
-async function saveCaseSession(session) {
-  await redis.set(kCase(session.id), JSON.stringify(session), { ex: CASE_SESSION_TTL_SECONDS });
+const sendErr = (res, e, fallback) => {
+  const code = e?.statusCode || 500;
+  res.status(code).json({ error: code === 500 ? fallback : String(e.message || fallback), detail: code === 500 ? String(e?.message || e).slice(0, 300) : undefined });
+};
+
+// Load-modify-save wrapper: per-session lock, ownership, idempotent retries
+// (same requestId returns the stored result), and a version-checked save.
+async function withCase(req, res, { allowConcluded = false, allowLegacy = false } = {}, fn) {
+  const id = String(req.params.id || '');
+  await withLock(`case:${id}`, async () => {
+    try {
+      const session = await caseStore.load(id);
+      if (!session) return res.status(404).json({ error: 'Case session not found' });
+      if (session.userId && session.userId !== req.auth.username) return res.status(403).json({ error: "Cannot access another user's case session" });
+      const requestId = String(req.body?.requestId || '').slice(0, 80);
+      if (requestId && session.processed?.[requestId]) return res.json({ ...publicCasePayload(session), ...session.processed[requestId], duplicate: true });
+      if (session.concluded && !allowConcluded) return res.status(400).json({ error: 'Case already concluded' });
+      if (session.engineVersion !== ENGINE_VERSION && !allowLegacy) return res.status(409).json({ error: 'This case was created before the simulator upgrade. You can review it and conclude it for a debrief; start a new case to keep playing.' });
+      const extra = (await fn(session)) || {};
+      if (requestId) {
+        session.processed = session.processed || {};
+        session.processed[requestId] = extra;
+        const keys = Object.keys(session.processed);
+        if (keys.length > 30) delete session.processed[keys[0]];
+      }
+      await caseStore.save(session);
+      res.json({ ...publicCasePayload(session), ...extra });
+    } catch (e) {
+      if (e instanceof ConflictError) return res.status(409).json({ error: e.message });
+      sendErr(res, e, 'Case action failed');
+    }
+  });
 }
 
-async function loadCaseSession(id) {
-  const raw = await redis.get(kCase(id));
-  if (!raw) return null;
-  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
-  const parsed = parseLooseJSON(raw);
-  return parsed && typeof parsed === "object" ? parsed : null;
-}
-async function loadOwnedCaseSession(req, res) {
-  const session = await loadCaseSession(req.params.id);
-  if (!session) {
-    res.status(404).json({ error: "Case session not found" });
-    return null;
-  }
-  if (session.userId && req.auth?.username && session.userId !== req.auth.username) {
-    res.status(403).json({ error: "Cannot access another user's case session" });
-    return null;
-  }
-  return session;
-}
+app.get('/case/exclusions/count', async (req, res) => res.json({ count: await redis.llen(kCaseExcl(req.auth.username)) }));
+app.get('/case/exclusions', async (req, res) => res.json({ entries: await getCaseExclusions(req.auth.username) }));
 
-const CASE_SCHEMA_TEXT = `
-Return strict JSON only with this exact top-level shape:
-{
-  "caseTitle": "short non-diagnostic title",
-  "lock": {
-    "primaryDiagnosis": "hidden locked diagnosis",
-    "secondaryDiagnoses": ["hidden relevant comorbid/complication diagnoses"],
-    "caseFingerprint": "brief hidden fingerprint for duplicate avoidance",
-    "expectedKeyActions": ["diagnostic/management actions expected"],
-    "dangerousActions": ["actions that could worsen the case"],
-    "exclusionEntry": "one-line case exclusion text"
-  },
-  "patient": {
-    "id": "stable patient id",
-    "displayName": "Last, First",
-    "age": 55,
-    "sex": "F",
-    "location": "ED | ward | clinic referral",
-    "allergies": ["..."],
-    "codeStatus": "Full Code",
-    "presentingComplaint": "non-diagnostic presenting complaint",
-    "banner": "one-line chart banner without revealing diagnosis",
-    "vitals": [{"datetime":"YYYY-MM-DD HH:mm","temperature_C":"37.1","hr":"92","bp":"128/76","rr":"18","spo2":"96%","oxygen":"room air","pain":"0/10","notes":""}],
-    "labCategories": [{"name":"Hematology","rows":[{"test":"Hemoglobin","unit":"g/L","referenceRange":"120-160 F, 135-175 M","values":[{"datetime":"YYYY-MM-DD HH:mm","value":"132","flag":"normal"}]}]}],
-    "investigations": [{"id":"unique-id","datetime":"YYYY-MM-DD HH:mm","group":"Imaging | ECG | Microbiology | Pathology | Other","title":"CXR","status":"Final","report":"objective report text"}],
-    "nursingNotes": [{"datetime":"YYYY-MM-DD HH:mm","author":"RN","text":"objective note"}],
-    "medications": [{"id":"unique-id","name":"Medication","dose":"","route":"","frequency":"","status":"active | discontinued","start":"YYYY-MM-DD HH:mm","stop":"","comments":""}],
-    "notes": [{"id":"unique-id","datetime":"YYYY-MM-DD HH:mm","service":"Emergency Medicine | Internal Medicine | Surgery | etc","providerName":"Dr. Lastname or role","noteType":"Triage | ED note | Consult request | Progress note | Discharge summary | Procedure note","type":"same as noteType","author":"same as providerName","title":"","text":"objective chart text with realistic headings"}],
-    "orders": []
-  }
-}
-Initial chart size caps, mandatory:
-- Total response should be compact and comfortably below 9000 visible tokens.
-- vitals: 1 to 3 rows.
-- labCategories: 2 to 4 categories total. Each category has 3 to 8 rows. Each row has 1 to 2 values only.
-- investigations: 1 to 4 items.
-- nursingNotes: 2 to 5 items, each text <= 280 characters.
-- medications: 0 to 6 items.
-- notes: 1 to 4 notes total. Each note text <= 700 characters. Use terse EMR language, not long prose.
-- orders: always [] at initial generation.
-- Do not include repeated timestamps, massive panels, long consult notes, teaching explanations, or verbose narratives.
-Rules for lab values: use Canadian/SI units only. Every lab value must include flag normal, high, low, or critical. Public text must not reveal the hidden diagnosis unless it would genuinely be written in the chart as a pre-existing known diagnosis.
-`;
-
-async function aiGenerateCaseSession({ mode, specialty, difficulty, exclusionText, userId }) {
-  const cleanDifficulty = normalizeDifficulty(difficulty || "Hard");
-  if (process.env.MOCK_AI === "1") {
-    const id = uuid();
-    return {
-      id,
-      userId,
-      mode,
-      specialty,
-      difficulty: cleanDifficulty,
-      createdAt: nowIso(),
-      currentTime: "2026-05-17 19:10",
-      simStartTime: "2026-05-17 19:10",
-      lock: {
-        primaryDiagnosis: "Acute intermittent porphyria",
-        secondaryDiagnoses: ["Hyponatremia"],
-        caseFingerprint: "young woman abdominal pain neuropsychiatric symptoms hyponatremia porphyria",
-        expectedKeyActions: ["urine porphobilinogen", "stop triggers", "hemin if severe"],
-        dangerousActions: ["porphyrogenic medications"],
-        exclusionEntry: "Acute intermittent porphyria presenting with abdominal pain, neuropathic symptoms, and hyponatremia."
-      },
-      patient: sanitizePatient({
-        id: uuid(), displayName: "Dhaliwal, Harleen", age: 29, sex: "F", location: "Emergency Department", allergies: ["NKDA"], codeStatus: "Full Code", presentingComplaint: "Abdominal pain and vomiting", banner: "ED consult requested for persistent abdominal pain with electrolyte abnormality.",
-        vitals: [{ datetime: "2026-05-17 18:20", temperature_C: "36.9", hr: "112", bp: "148/92", rr: "18", spo2: "99%", oxygen: "room air", pain: "8/10", notes: "Appears uncomfortable" }],
-        labCategories: [
-          { name: "Hematology", rows: [{ test:"WBC", unit:"10^9/L", referenceRange:"4.0-11.0", values:[{datetime:"2026-05-17 18:35", value:"9.8", flag:"normal"}] }, { test:"Hemoglobin", unit:"g/L", referenceRange:"120-160 F", values:[{datetime:"2026-05-17 18:35", value:"129", flag:"normal"}] }, { test:"Platelets", unit:"10^9/L", referenceRange:"150-400", values:[{datetime:"2026-05-17 18:35", value:"286", flag:"normal"}] }]},
-          { name: "Chemistry", rows: [{ test:"Sodium", unit:"mmol/L", referenceRange:"135-145", values:[{datetime:"2026-05-17 18:35", value:"126", flag:"low"}] }, { test:"Potassium", unit:"mmol/L", referenceRange:"3.5-5.0", values:[{datetime:"2026-05-17 18:35", value:"3.8", flag:"normal"}] }, { test:"Creatinine", unit:"µmol/L", referenceRange:"45-90 F", values:[{datetime:"2026-05-17 18:35", value:"64", flag:"normal"}] }, { test:"Glucose", unit:"mmol/L", referenceRange:"3.9-7.8 random", values:[{datetime:"2026-05-17 18:35", value:"5.6", flag:"normal"}] }]}],
-        investigations: [{ id: uuid(), datetime:"2026-05-17 19:10", group:"Imaging", title:"CT abdomen/pelvis with contrast", status:"Final", report:"No bowel obstruction. No appendicitis. No free air. Small physiologic pelvic free fluid. Solid organs unremarkable." }],
-        nursingNotes: [{ datetime:"2026-05-17 18:25", author:"RN", text:"Patient reports diffuse abdominal pain with nausea. Vomited twice in ED. Ambulating independently." }],
-        medications: [{ id: uuid(), name:"Ondansetron", dose:"4 mg", route:"IV", frequency:"once", status:"active", start:"2026-05-17 18:30", stop:"", comments:"administered" }],
-        notes: [{ id: uuid(), datetime:"2026-05-17 18:15", type:"Consult request", author:"Emergency physician", title:"Internal Medicine consult request", text:"29F with severe diffuse abdominal pain and vomiting. CT abdomen negative. Sodium 126. Please assess for admission and ongoing workup." }],
-        orders: []
-      }),
-      activity: [{ at: nowIso(), type: "system", text: "Case generated. Locked diagnosis stored server-side." }],
-      orderHistory: [],
-      concluded: false
-    };
-  }
-
-  const system = `You are the hidden backend engine for an advanced browser-based Medical Case Simulator for Canadian medical trainees.
-You must generate a single realistic patient chart for an EMR-style simulator.
-Hard rules:
-- Choose and lock one primary diagnosis at generation time. It goes ONLY in lock.primaryDiagnosis.
-- The public patient chart must contain no hints, teaching, interpretation, suggested next steps, or diagnosis disclosure beyond realistic chart facts.
-- Use Canadian/SI units only. Never use mg/dL for chemistry. Use mmol/L, µmol/L, g/L, 10^9/L, pmol/L, IU/L, kPa/mmHg only where locally realistic.
-- Regular mode should reflect real-world clinical probabilities and common presentations.
-- Zebra mode should be rare, atypical, confusing, and extremely challenging while still medically coherent.
-- Cross-reference the exclusion list. Do not repeat or closely mimic prior cases, disease categories, fingerprints, or obvious variants.
-- EMR content should feel like Meditech/Cerner: terse, objective, chronological, and incomplete in realistic ways.
-- Include enough initial data to start a case, but not enough to make it obvious.
-- Keep the initial chart compact. The simulator can add more data later through orders and time advancement. Do not try to pre-populate a full hospital course.
-- If the requested setting says CTU consult, GIM consult, Internal Medicine consult, Medicine consult, or ED consult to Medicine, the medicine consult is still pending. Do NOT include an Internal Medicine/CTU consult note, admission note, progress note, assessment/plan, or recommendations in the initial chart. You may include ED triage, ED physician notes, referral/consult request, nursing notes, vitals, labs, and investigations.
-- Do not include educational rationale in public chart fields.
-${CASE_SCHEMA_TEXT}`;
-
-  const payload = {
-    requestedMode: mode,
-    requestedSpecialtyOrSetting: specialty || "undifferentiated adult inpatient/ED medicine",
-    requestedDifficulty: cleanDifficulty,
-    userId,
-    exclusionListText: String(exclusionText || '').slice(0, 60000),
-    generationTime: new Date().toISOString(),
-    outputBudgetInstruction: 'Generate a compact initial EMR snapshot only. Do not pre-populate the full admission. Respect the size caps in the schema.'
-  };
-
-  let generated;
-  try {
-    generated = await caseAiJSON({
-      system,
-      payload,
-      model: CASE_MODEL,
-      temperature: mode === "zebra" ? 0.8 : 0.35,
-      max_output_tokens: CASE_GEN_MAX_OUTPUT_TOKENS,
-      // High reasoning can consume a large part of max_output_tokens before any JSON is emitted.
-      // Use the full case model, but medium reasoning is enough for generating a compact chart.
-      reasoning_effort: "medium"
-    });
-  } catch (err) {
-    const msg = String(err?.message || err || "");
-    if (!msg.includes('max_output_tokens')) throw err;
-    console.warn('[case generation] token budget reached; retrying with stricter compact prompt and larger output cap');
-    const retrySystem = `${system}
-
-RETRY AFTER TOKEN-LIMIT FAILURE:
-Your previous response was too long and was cut off. Regenerate the case from scratch as a much smaller JSON object. Strict caps: 1-2 vitals, 2-3 lab categories, 3-6 lab rows per category, 1-2 investigations, 2 nursing notes, 0-3 medications, 1-2 notes, each note under 450 characters. No extra narrative.`;
-    generated = await caseAiJSON({
-      system: retrySystem,
-      payload: { ...payload, retryReason: 'previous case JSON exceeded max_output_tokens; generate compact JSON only' },
-      model: CASE_MODEL,
-      temperature: 0.2,
-      max_output_tokens: CASE_GEN_RETRY_MAX_OUTPUT_TOKENS,
-      reasoning_effort: "low"
-    });
-  }
-  if (!generated.lock?.primaryDiagnosis || !generated.patient) {
-    throw new Error("Case generator returned incomplete case JSON");
-  }
-  const id = uuid();
-  const publicPatient = postProcessCasePatient(generated.patient, specialty);
-  const initialTime = latestPatientDateTime(publicPatient) || formatSimDateTime(new Date());
-  return {
-    id,
-    userId,
-    mode,
-    specialty,
-    difficulty: cleanDifficulty,
-    createdAt: nowIso(),
-    currentTime: initialTime,
-    simStartTime: initialTime,
-    lock: generated.lock,
-    caseTitle: generated.caseTitle || "Medical case",
-    patient: publicPatient,
-    activity: [{ at: initialTime, type: "system", text: "Case generated. Locked diagnosis stored server-side." }],
-    orderHistory: [],
-    concluded: false
-  };
-}
-
-async function aiInteractWithCase({ session, request }) {
-  const system = `You are the backend engine for an EMR medical case simulator.
-The hidden locked diagnosis is provided, but you must NEVER reveal it before conclusion.
-Respond to the learner's request as the simulated chart/patient/exam environment.
-Rules:
-- No hints, no interpretation, no teaching, no suggested next steps.
-- Provide only the specific information requested.
-- For physical exam, return objective findings only. If the request is too broad, provide a terse focused exam only or state what cannot be assessed.
-- For history questions, simulate realistic patient answers, including uncertainty if appropriate.
-- For chart review, provide realistic chart text/labs only if likely available.
-- If you update the EMR, return a patientPatch with only new/changed fields. Do NOT echo the full patient object.
-- If nothing changed in a section, omit that section entirely rather than returning an empty array.
-- Canadian/SI units only.
-Return strict JSON: {"response":"text shown to user", "patientPatch": <optional partial patient object containing ONLY changed/new public EMR fields, or null>, "activityText":"short log text"}`;
-  const payload = {
-    lockedDiagnosis: session.lock,
-    patient: session.patient,
-    activity: ensureArray(session.activity).slice(-30),
-    orderHistory: ensureArray(session.orderHistory).slice(-50),
-    learnerRequest: request
-  };
-  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0, max_output_tokens: 1600, reasoning_effort: "low" });
-}
-
-async function aiApplyOrders({ session, newOrders }) {
-  const system = `You are the hidden backend engine for a Canadian EMR medical case simulator.
-Apply the learner's orders to the locked patient case and update the public EMR state.
-Rules:
-- The locked diagnosis must remain stable. Do not let user orders change the diagnosis, but let them alter physiology/outcomes if medically plausible.
-- Do not reveal the locked diagnosis.
-- No hints, no interpretation, no suggested next steps, no teaching.
-- For labs ordered, add realistic values using Canadian/SI units and reference ranges.
-- For imaging/ECG/micro/pathology ordered, add a realistic report only if the test could plausibly result at this time. Otherwise add/order as pending or mention pending.
-- For meds/fluids/procedures, update MAR/vitals/nursing notes as appropriate. Harmful orders may worsen the case realistically.
-- Order results shown to user must be administrative only: Entered, pending, completed, discontinued, unclear, not available.
-Return strict JSON only: {"patient": <full updated public patient object>, "orderResults":[{"order":"","status":"entered|pending|completed|discontinued|unclear|not available","comment":"terse non-interpretive administrative comment"}], "visibleEvent":"optional nurse/lab/radiology event text"}`;
-  const payload = {
-    lockedDiagnosis: session.lock,
-    patient: session.patient,
-    priorActivity: ensureArray(session.activity).slice(-30),
-    priorOrders: ensureArray(session.orderHistory).slice(-80),
-    newOrders: newOrders
-  };
-  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0, max_output_tokens: 3500, reasoning_effort: "low" });
-}
-
-async function aiAdvanceCase({ session }) {
-  const system = `You are the hidden backend engine for a Canadian EMR medical case simulator.
-Advance the case to the next clinically plausible event. This may be a nurse page, new vitals, lab result, imaging result, medication effect, deterioration, stabilization, or no major change.
-Rules:
-- Never reveal the locked diagnosis.
-- No hints, no interpretation, no suggested next steps, no teaching.
-- Reflect the user's prior orders and actions.
-- If the user made harmful or delayed decisions, deterioration can occur.
-- If the user made effective decisions, improvement can occur.
-- Canadian/SI units only.
-- Do NOT echo the whole EMR back. Return only new/changed vitals, labs, investigations, nursing notes, MAR entries, notes, or orders in patientPatch.
-- If nothing changed in a section, omit that section entirely rather than returning an empty array.
-Return strict JSON only: {"patientPatch": <partial patient object containing ONLY changed/new public EMR fields, or null>, "event":"short objective event/page text", "urgency":"routine|urgent|critical|none", "currentTime":"YYYY-MM-DD HH:mm"}`;
-  const payload = {
-    lockedDiagnosis: session.lock,
-    currentTime: session.currentTime || latestPatientDateTime(session.patient),
-    patient: session.patient,
-    activity: ensureArray(session.activity).slice(-50),
-    orderHistory: ensureArray(session.orderHistory).slice(-80)
-  };
-  return await caseAiJSON({ system, payload, model: CASE_FAST_MODEL, temperature: 0.15, max_output_tokens: 3500, reasoning_effort: "low" });
-}
-
-async function aiConcludeCase({ session, finalNoteText, finalOrdersText }) {
-  const system = `You are a strict attending physician debriefing a Canadian medical trainee after a medical case simulator.
-At this point you MAY reveal the locked diagnosis.
-Provide detailed, critical, educational feedback. Do not be overly permissive.
-Assess diagnostic reasoning, investigations, management, safety, documentation, and missed opportunities.
-Return strict JSON only:
-{
-  "diagnosis":"locked primary diagnosis",
-  "secondaryDiagnoses":["..."],
-  "caseSummary":"short case summary",
-  "diagnosticFeedback":["..."],
-  "managementFeedback":["..."],
-  "documentationFeedback":["..."],
-  "safetyIssues":["..."],
-  "whatGoodLookedLike":["..."],
-  "overallRating":"Easy|Medium|Hard|Expert|Brutal",
-  "exclusionEntry":"copy-pasteable one-line exclusion list entry with diagnosis and distinctive features"
-}`;
-  const payload = {
-    lockedDiagnosis: session.lock,
-    patient: session.patient,
-    activity: ensureArray(session.activity),
-    orderHistory: ensureArray(session.orderHistory),
-    finalNoteText: finalNoteText || "",
-    finalOrdersText: finalOrdersText || ""
-  };
-  return await caseAiJSON({ system, payload, model: CASE_MODEL, temperature: 0, max_output_tokens: 6000, reasoning_effort: "medium" });
-}
-
-app.get('/case/exclusions/count', async (req, res) => {
-  try {
-    const count = await caseExclusionsCount(req.auth.username);
-    res.json({ count });
-  } catch (e) {
-    res.status(500).json({ error: 'Failed to get case exclusion count', detail: String(e) });
-  }
-});
-
-app.get('/case/exclusions', async (req, res) => {
-  try {
-    const entries = await getCaseExclusions(req.auth.username);
-    res.json({ entries });
-  } catch (e) {
-    res.status(500).json({ error: 'Failed to get case exclusions', detail: String(e) });
-  }
+app.get('/case/sessions', async (req, res) => {
+  try { res.json({ sessions: await caseStore.listForUser(req.auth.username, 30) }); }
+  catch (e) { sendErr(res, e, 'Failed to list cases'); }
 });
 
 app.post('/case/sessions', async (req, res) => {
-  try {
-    const body = req.body || {};
-    const userId = req.auth.username;
-    const modeRaw = String(body.mode || "regular").toLowerCase();
-    const mode = modeRaw === "zebra" ? "zebra" : "regular";
-    const specialty = String(body.specialty || "").trim();
-    const difficulty = normalizeDifficulty(body.difficulty || "Hard");
-    const savedExclusions = await getCaseExclusions(userId);
-    const adHocExclusionText = String(body.exclusionText || "").trim();
-    const exclusionText = [...savedExclusions, adHocExclusionText].filter(Boolean).join('\n');
-    const session = await aiGenerateCaseSession({ mode, specialty, difficulty, exclusionText, userId });
-    await saveCaseSession(session);
-    res.json({ ...publicCasePayload(session), caseExclusionCount: savedExclusions.length });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to start case session", detail: String(e) });
-  }
+  const userId = req.auth.username;
+  const requestId = String(req.body?.requestId || '').slice(0, 80);
+  await withLock(`case-create:${userId}`, async () => {
+    try {
+      if (requestId) {
+        const existingId = await redis.get(kCaseReq(userId, requestId));
+        if (existingId) { const s = await caseStore.load(String(existingId)); if (s) return res.json({ ...publicCasePayload(s), duplicate: true }); }
+      }
+      const body = req.body || {};
+      const mode = String(body.mode || 'regular').toLowerCase() === 'zebra' ? 'zebra' : 'regular';
+      const specialty = String(body.specialty || '').trim().slice(0, 120);
+      const difficulty = normalizeDifficulty(body.difficulty || 'Hard');
+      const saved = await getCaseExclusions(userId);
+      const exclusionText = [...saved, String(body.exclusionText || '').trim()].filter(Boolean).join('\n');
+      const id = uuid();
+      const gen = await generateCase({ mode, specialty, difficulty, exclusionText, userId, meta: { sessionId: id, userId } });
+      const session = {
+        id, userId, mode, specialty, difficulty, createdAt: new Date().toISOString(),
+        caseTitle: String(gen.caseTitle || 'Medical case').slice(0, 120),
+        lock: gen.lock,
+        patient: sanitizeGeneratedPatient(gen.patient),
+        activity: [], orderHistory: [], concluded: false
+      };
+      removePrematureConsultNotes(session.patient, specialty);
+      initEngine(session, gen);
+      session.simStartTime = session.sim.now;
+      session.activity.push({ at: session.sim.now, type: 'system', text: 'Case opened.' });
+      await caseStore.create(session);
+      if (requestId) await redis.set(kCaseReq(userId, requestId), id, { ex: 3600 });
+      res.json({ ...publicCasePayload(session), caseExclusionCount: saved.length });
+    } catch (e) {
+      sendErr(res, e, 'Failed to start case session');
+    }
+  });
 });
 
 app.get('/case/sessions/:id', async (req, res) => {
   try {
-    const session = await loadOwnedCaseSession(req, res);
-    if (!session) return;
-    res.json(publicCasePayload(session));
-  } catch (e) {
-    res.status(500).json({ error: "Failed to load case session", detail: String(e) });
-  }
+    const s = await caseStore.load(req.params.id);
+    if (!s) return res.status(404).json({ error: 'Case session not found' });
+    if (s.userId && s.userId !== req.auth.username) return res.status(403).json({ error: "Cannot access another user's case session" });
+    res.json(publicCasePayload(s));
+  } catch (e) { sendErr(res, e, 'Failed to load case session'); }
 });
 
+// The answer file is only available after the case is concluded.
 app.get('/case/sessions/:id/lockfile', async (req, res) => {
-  try {
-    const session = await loadCaseSession(req.params.id);
-    if (!session) return res.status(404).type('text/plain').send("Case session not found");
-    if (session.userId && req.auth?.username && session.userId !== req.auth.username) return res.status(403).type('text/plain').send("Forbidden");
-    const lock = session.lock || {};
-    const txt = [
-      `Medical Case Simulator locked diagnosis file`,
-      `Session ID: ${session.id}`,
-      `Created: ${session.createdAt}`,
-      `Mode: ${session.mode}`,
-      `Specialty/setting: ${session.specialty || 'unspecified'}`,
-      ``,
-      `PRIMARY DIAGNOSIS: ${lock.primaryDiagnosis || ''}`,
-      `Secondary diagnoses: ${ensureArray(lock.secondaryDiagnoses).join('; ')}`,
-      `Fingerprint: ${lock.caseFingerprint || ''}`,
-      `Expected key actions: ${ensureArray(lock.expectedKeyActions).join('; ')}`,
-      `Dangerous actions: ${ensureArray(lock.dangerousActions).join('; ')}`,
-      ``,
-      `Exclusion entry:`,
-      lock.exclusionEntry || `${lock.primaryDiagnosis || 'Unknown diagnosis'} - ${lock.caseFingerprint || ''}`
-    ].join('\n');
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="case-lock-${session.id}.txt"`);
-    res.send(txt);
-  } catch (e) {
-    res.status(500).type('text/plain').send(String(e));
-  }
+  const s = await caseStore.load(req.params.id).catch(() => null);
+  if (!s) return res.status(404).type('text/plain').send('Case session not found');
+  if (s.userId && s.userId !== req.auth.username) return res.status(403).type('text/plain').send('Forbidden');
+  if (!s.concluded) return res.status(403).type('text/plain').send('Available after the case is concluded.');
+  const lock = s.lock || {};
+  const txt = [
+    'Medical Case Simulator case file', `Session ID: ${s.id}`, `Created: ${s.createdAt}`, `Mode: ${s.mode}`, `Setting: ${s.specialty || 'unspecified'}`, '',
+    `PRIMARY DIAGNOSIS: ${lock.primaryDiagnosis || ''}`, `Secondary diagnoses: ${ensureArray(lock.secondaryDiagnoses).join('; ')}`,
+    `Expected key actions: ${ensureArray(lock.expectedKeyActions).join('; ')}`, `Dangerous actions: ${ensureArray(lock.dangerousActions).join('; ')}`, '',
+    'Exclusion entry:', lock.exclusionEntry || lock.primaryDiagnosis || ''
+  ].join('\n');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="case-${s.id}.txt"`);
+  res.send(txt);
 });
 
-app.post('/case/sessions/:id/interact', async (req, res) => {
-  try {
-    const session = await loadOwnedCaseSession(req, res);
-    if (!session) return;
-    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
-    const request = String(req.body?.request || "").trim();
-    if (!request) return res.status(400).json({ error: "request required" });
-    const out = await aiInteractWithCase({ session, request });
-    const patientPatch = out.patientPatch || out.patient || out.patch || null;
-    if (patientPatch) session.patient = postProcessCasePatient(patientPatch, session.specialty, session.patient);
-    const response = String(out.response || "No information returned.");
-    session.activity = ensureArray(session.activity);
-    session.activity.push({ at: nowIso(), type: "learner_request", text: request });
-    session.activity.push({ at: nowIso(), type: "case_response", text: response });
-    await saveCaseSession(session);
-    res.json({ ...publicCasePayload(session), response });
-  } catch (e) {
-    res.status(500).json({ error: "Interaction failed", detail: String(e) });
-  }
+app.post('/case/sessions/:id/interact', (req, res) => {
+  const request = String(req.body?.request || '').trim().slice(0, 1500);
+  if (!request) return res.status(400).json({ error: 'request required' });
+  return withCase(req, res, {}, async (session) => {
+    const out = await engineInteract(session, request, caseAiAdapter({ sessionId: session.id, userId: session.userId }));
+    return { response: out.response };
+  });
 });
 
-app.post('/case/sessions/:id/orders', async (req, res) => {
-  try {
-    const session = await loadOwnedCaseSession(req, res);
-    if (!session) return;
-    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
-    const orders = ensureArray(req.body?.orders).map(x => String(x || '').trim()).filter(Boolean);
-    if (!orders.length) return res.status(400).json({ error: "orders required" });
-    session.patient = postProcessCasePatient(session.patient, session.specialty);
-    const simTime = session.currentTime || latestPatientDateTime(session.patient) || formatSimDateTime(new Date());
-    session.patient.orders = ensureArray(session.patient.orders);
-    session.orderHistory = ensureArray(session.orderHistory);
-    const results = orders.map(administrativeOrderResult);
-    orders.forEach((order, i) => {
-      const r = results[i];
-      const orderEntry = { id: uuid(), datetime: simTime, order, status: r.status, comment: r.comment };
-      session.patient.orders.push(orderEntry);
-      session.orderHistory.push({ at: simTime, order, status: r.status, comment: r.comment });
-      maybeAddMedicationFromOrder(session.patient, order, simTime);
+app.post('/case/sessions/:id/orders', (req, res) => {
+  const orders = ensureArray(req.body?.orders).map(x => String(x || '').trim().slice(0, 300)).filter(Boolean).slice(0, 25);
+  if (!orders.length) return res.status(400).json({ error: 'orders required' });
+  return withCase(req, res, {}, async (session) => {
+    const orderResults = await placeOrders(session, orders, caseAiAdapter({ sessionId: session.id, userId: session.userId }));
+    return { orderResults, visibleEvent: 'RN: Orders acknowledged.' };
+  });
+});
+
+app.post('/case/sessions/:id/advance', (req, res) => {
+  const mode = req.body?.mode === 'minutes' ? 'minutes' : 'next';
+  const minutes = Number(req.body?.minutes || 60);
+  return withCase(req, res, {}, async (session) => {
+    const out = await engineAdvance(session, { mode, minutes }, caseAiAdapter({ sessionId: session.id, userId: session.userId }));
+    return { event: out.event, notices: out.notices, urgency: out.urgency };
+  });
+});
+
+app.post('/case/sessions/:id/note', (req, res) => {
+  const text = String(req.body?.text || '').trim().slice(0, 20000);
+  if (!text) return res.status(400).json({ error: 'note text required' });
+  return withCase(req, res, { allowLegacy: true }, async (session) => {
+    const now = session.sim?.now || session.currentTime || '';
+    const note = normalizeNote({
+      id: uuid(), datetime: now, service: String(req.body?.service || 'Internal Medicine').slice(0, 80),
+      providerName: String(req.body?.providerName || req.body?.author || 'Learner').slice(0, 80), noteType: String(req.body?.noteType || 'Progress note').slice(0, 60),
+      title: String(req.body?.title || 'Learner note').slice(0, 120), text
     });
-    session.patient.nursingNotes = ensureArray(session.patient.nursingNotes);
-    session.patient.nursingNotes.push({ datetime: simTime, author: "RN", text: `Orders received and acknowledged: ${orders.join('; ')}` });
+    note.authoredByLearner = true;
+    session.patient.notes = ensureArray(session.patient.notes);
+    session.patient.notes.push(note);
     session.activity = ensureArray(session.activity);
-    session.activity.push({ at: simTime, type: "orders", text: orders.join('\n') });
-    const visibleEvent = "RN: Orders acknowledged.";
-    await saveCaseSession(session);
-    res.json({ ...publicCasePayload(session), orderResults: results, visibleEvent });
-  } catch (e) {
-    res.status(500).json({ error: "Order entry failed", detail: String(e) });
-  }
+    session.activity.push({ at: now, type: 'user_note', text: note.title });
+    return { savedNoteId: note.id };
+  });
 });
 
-app.post('/case/sessions/:id/advance', async (req, res) => {
-  try {
-    const session = await loadOwnedCaseSession(req, res);
-    if (!session) return;
-    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
-    const priorTime = session.currentTime || latestPatientDateTime(session.patient) || formatSimDateTime(new Date());
-    const out = await aiAdvanceCase({ session });
-    const patientPatch = out.patientPatch || out.patient || out.patch || null;
-    if (patientPatch) session.patient = postProcessCasePatient(patientPatch, session.specialty, session.patient);
-    const latestTime = latestPatientDateTime(session.patient);
-    const aiTime = String(out.currentTime || "").trim();
-    session.currentTime = aiTime || (latestTime && latestTime > priorTime ? latestTime : addSimMinutes(priorTime, 60));
-    const event = String(out.event || "No new events.");
-    session.activity = ensureArray(session.activity);
-    session.activity.push({ at: session.currentTime, type: "advance", text: event, urgency: String(out.urgency || "routine") });
-    await saveCaseSession(session);
-    res.json({ ...publicCasePayload(session), event, urgency: out.urgency || "routine" });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to advance case", detail: String(e) });
-  }
-});
-
-app.post('/case/sessions/:id/note', async (req, res) => {
-  try {
-    const session = await loadOwnedCaseSession(req, res);
-    if (!session) return;
-    if (session.concluded) return res.status(400).json({ error: "Case already concluded" });
-    const title = String(req.body?.title || "User note").trim();
-    const type = String(req.body?.noteType || req.body?.type || "User note").trim();
-    const service = String(req.body?.service || "Internal Medicine").trim();
-    const providerName = String(req.body?.providerName || req.body?.author || "Learner").trim();
-    const datetime = String(req.body?.datetime || session.currentTime || latestPatientDateTime(session.patient) || formatSimDateTime(new Date())).trim();
-    const text = String(req.body?.text || "").trim();
-    if (!text) return res.status(400).json({ error: "note text required" });
-    session.patient = postProcessCasePatient(session.patient, session.specialty);
-    session.patient.notes.push(normalizeNoteObject({ id: uuid(), datetime, service, providerName, noteType: type, type, author: providerName, title, text }));
-    session.activity = ensureArray(session.activity);
-    session.activity.push({ at: datetime, type: "user_note", text: `${title}
-${text}` });
-    await saveCaseSession(session);
-    res.json(publicCasePayload(session));
-  } catch (e) {
-    res.status(500).json({ error: "Failed to save note", detail: String(e) });
-  }
-});
-
-app.post('/case/sessions/:id/conclude', async (req, res) => {
-  try {
-    const session = await loadOwnedCaseSession(req, res);
-    if (!session) return;
-    const finalNoteText = String(req.body?.finalNoteText || "");
-    const finalOrdersText = String(req.body?.finalOrdersText || "");
-    const out = await aiConcludeCase({ session, finalNoteText, finalOrdersText });
+app.post('/case/sessions/:id/conclude', (req, res) => {
+  return withCase(req, res, { allowConcluded: true, allowLegacy: true }, async (session) => {
+    if (session.concluded && session.conclusion) return { conclusion: session.conclusion };
+    const out = await concludeCase(session, { finalNoteText: String(req.body?.finalNoteText || '').slice(0, 20000), finalOrdersText: String(req.body?.finalOrdersText || '').slice(0, 5000) }, { sessionId: session.id, userId: session.userId });
     session.concluded = true;
-    session.concludedAt = nowIso();
+    session.concludedAt = new Date().toISOString();
     session.conclusion = out;
-    const caseExclusionAdded = await pushUniqueCaseExclusion(session.userId || req.auth.username, out.exclusionEntry || session.lock?.exclusionEntry || '');
-    await saveCaseSession(session);
-    res.json({ ...publicCasePayload(session), conclusion: out, caseExclusionAdded });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to conclude case", detail: String(e) });
-  }
+    const caseExclusionAdded = await pushUniqueCaseExclusion(session.userId, out.exclusionEntry || session.lock?.exclusionEntry || '');
+    return { conclusion: out, caseExclusionAdded };
+  });
+});
+
+////////////////////////////////////////////////////////////////////////////////
+// ADMIN (requires X-Admin-Secret header or ADMIN_USERS login)
+////////////////////////////////////////////////////////////////////////////////
+app.use('/admin', requireAdmin);
+
+app.get('/admin/usage', async (req, res) => {
+  try {
+    const days = clamp(Number(req.query.days || 7), 1, 90);
+    const sessionId = req.query.session ? String(req.query.session) : null;
+    let records;
+    if (hasPg()) {
+      const r = sessionId
+        ? await q('SELECT * FROM ai_usage WHERE session_id = $1 ORDER BY at', [sessionId])
+        : await q(`SELECT * FROM ai_usage WHERE at > now() - ($1 || ' days')::interval ORDER BY at`, [String(days)]);
+      records = r.rows.map(x => ({ ...x, cost_usd: x.cost_usd == null ? null : Number(x.cost_usd), sessionId: x.session_id }));
+    } else {
+      const raw = (await redis.lrange('ai:usage', 0, -1)).map(parseMaybeJSON).filter(Boolean);
+      const cutoff = Date.now() - days * 86400000;
+      records = raw.filter(r => (sessionId ? r.sessionId === sessionId : Date.parse(r.at) >= cutoff));
+      if (!records.length && !sessionId) records = recentUsage();
+    }
+    const perCase = {};
+    for (const r of records) if (r.sessionId && String(r.tag || '').startsWith('case.')) {
+      const c = perCase[r.sessionId] ||= { sessionId: r.sessionId, calls: 0, input_tokens: 0, output_tokens: 0 };
+      c.calls++; c.input_tokens += Number(r.input_tokens || 0); c.output_tokens += Number(r.output_tokens || 0);
+    }
+    const cases = Object.values(perCase);
+    res.json({
+      window: sessionId ? { session: sessionId } : { days },
+      models: { case: CASE_MODEL, caseFast: CASE_FAST_MODEL, pimp: PIMP_MODEL, grader: PIMP_GRADER_MODEL, discussion: PIMP_DISCUSSION_MODEL, strict: STRICT_MODEL },
+      ...summarizeUsage(records),
+      cases: { count: cases.length, avg_input_tokens: cases.length ? Math.round(cases.reduce((s, c) => s + c.input_tokens, 0) / cases.length) : 0, recent: cases.slice(-20) }
+    });
+  } catch (e) { sendErr(res, e, 'Usage query failed'); }
+});
+
+app.delete('/admin/wipe', async (req, res) => {
+  try {
+    if (String(req.query.confirm || '') !== 'WIPE') return res.status(400).json({ error: 'Add ?confirm=WIPE to proceed.' });
+    const dry = String(req.query.dry || '0') === '1';
+    const patterns = ['user:*', 'username_index:*', 'auth:token:*', 'sess:*', 'excl:*', 'concepts:*', 'history:*', 'leaderboard:*', 'casesim:*'];
+    let deleted = 0;
+    for (const p of patterns) {
+      const keys = await redis.keys(p);
+      for (let i = 0; i < keys.length; i += 100) { const slice = keys.slice(i, i + 100); if (!dry && slice.length) await redis.del(...slice); deleted += slice.length; }
+    }
+    if (hasPg() && !dry) await q('TRUNCATE case_sessions');
+    res.json({ ok: true, dry, deleted_keys_estimate: deleted });
+  } catch (e) { sendErr(res, e, 'wipe failed'); }
+});
+
+app.get('/admin/peek-session', async (req, res) => {
+  const id = String(req.query.sessionId || '');
+  if (!id) return res.status(400).json({ error: 'sessionId required' });
+  const items = await getSessionItems(id);
+  res.json({ meta: await getSessionMeta(id), items_count: items.length, last_item: items[items.length - 1] || null });
+});
+
+app.delete('/admin/pdfs/by-label', async (req, res) => {
+  const label = String(req.query.label || '');
+  if (!label) return res.status(400).json({ error: 'label required' });
+  res.json({ ok: true, deleted: await learnerStore.deletePdfByLabel(label), label });
 });
 
 ////////////////////////////////////////////////////////////////////////////////
 // START
 ////////////////////////////////////////////////////////////////////////////////
-app.listen(PORT, () => {
-  console.log(`Server listening on :${PORT}`);
+app.use((err, _req, res, _next) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'File too large (max 25 MB).' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large.' });
+  console.error('[unhandled]', err);
+  res.status(500).json({ error: 'Server error' });
 });
+
+async function start() {
+  if (hasPg()) {
+    // If the database is configured but unreachable, fail the deploy so Render
+    // keeps the previous version live instead of serving a broken one.
+    await migrate();
+    console.log('[storage] Postgres ready.');
+  }
+  app.listen(PORT, () => console.log(`Server listening on :${PORT}`));
+  ensureStandardPdfIndexed();
+}
+
+if (process.env.NO_LISTEN !== '1') {
+  start().catch(err => { console.error('[startup] failed:', err); process.exit(1); });
+}
+
+export { app };
