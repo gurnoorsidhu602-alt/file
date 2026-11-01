@@ -37,6 +37,7 @@ import {
   dayLabel, ensureArray, sortLabCategories, ENGINE_VERSION
 } from './lib/caseEngine.js';
 import { generateCase, caseAiAdapter, concludeCase } from './lib/caseAi.js';
+import { createTextbook } from './lib/textbook.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,7 +53,9 @@ app.use(express.json({ limit: '256kb' }));
 
 const page = (file) => (_req, res) => res.sendFile(path.join(__dirname, file));
 app.get(['/', '/index.html'], page('index.html'));
-app.get(['/learner', '/learner.html', '/medlearner'], page('learner.html'));
+app.get(['/textbook', '/textbook.html'], page('textbook.html'));
+// Med Learner was replaced by the textbook.
+app.get(['/learner', '/learner.html', '/medlearner'], (_req, res) => res.redirect(301, '/textbook'));
 app.get(['/casesim', '/casesim.html'], page('casesim.html'));
 app.use('/assets', express.static(path.join(__dirname, 'assets'), { maxAge: '1h' }));
 
@@ -63,6 +66,7 @@ if (process.env.REDIS_MEMORY === '1' || !process.env.UPSTASH_REDIS_REST_URL) con
 if (process.env.DISABLE_AUTH === '1') console.warn('[auth] DISABLE_AUTH=1: authentication is OFF. Never use this in production.');
 
 const caseStore = makeCaseStore(redis);
+const textbook = createTextbook();
 
 // AI usage persistence: Postgres table if available, else a capped Redis list.
 setUsageSink(async (rec) => {
@@ -310,7 +314,8 @@ app.post('/auth/signup', async (req, res) => {
     }
     res.json({ ok: true, token: await createAuthToken(u), username: u });
   } catch (e) {
-    res.status(500).json({ error: 'Signup failed' });
+    console.error('[auth] signup failed:', e?.message || e);
+    res.status(500).json({ error: 'Signup failed. The server could not reach its database; try again shortly.' });
   }
 });
 
@@ -330,7 +335,8 @@ app.post('/auth/login', async (req, res) => {
     loginFailures.delete(throttleKey);
     res.json({ ok: true, token: await createAuthToken(actual), username: actual });
   } catch (e) {
-    res.status(500).json({ error: 'Login failed' });
+    console.error('[auth] login failed:', e?.message || e);
+    res.status(500).json({ error: 'Login failed. The server could not reach its database; try again shortly.' });
   }
 });
 
@@ -353,7 +359,7 @@ app.get('/auth/check-username', async (req, res) => {
   res.json({ available: !exists, reason: exists ? 'Username taken' : '' });
 });
 
-app.use(['/api', '/case', '/med'], requireAuth);
+app.use(['/api', '/case', '/med', '/textbook/api'], requireAuth);
 
 ////////////////////////////////////////////////////////////////////////////////
 // ONE LINE PIMP + MCCQE
@@ -1211,6 +1217,31 @@ app.post('/case/sessions/:id/conclude', (req, res) => {
 });
 
 ////////////////////////////////////////////////////////////////////////////////
+// TEXTBOOK (Google Drive "IM Textbook Project")
+////////////////////////////////////////////////////////////////////////////////
+app.get('/textbook/api/tree', (_req, res) => res.json({ status: textbook.status(), specialties: textbook.tree() }));
+app.get('/textbook/api/article', (req, res) => {
+  const a = textbook.article(String(req.query.id || ''));
+  if (!a) return res.status(404).json({ error: 'Article not found. It may have been renamed in the source document.' });
+  res.json(a);
+});
+app.get('/textbook/api/search', (req, res) => {
+  const qtext = String(req.query.q || '').slice(0, 200);
+  res.json(textbook.search(qtext, { limit: clamp(Number(req.query.limit || 30), 1, 60), specialty: String(req.query.specialty || '') }));
+});
+// Images are served without login because <img> cannot send a bearer token;
+// keys are unguessable hashes.
+app.get('/textbook/img/:key', async (req, res) => {
+  try {
+    const img = await textbook.getImage(String(req.params.key));
+    if (!img) return res.status(404).end();
+    res.setHeader('Content-Type', img.type || 'image/png');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.send(img.data);
+  } catch { res.status(500).end(); }
+});
+
+////////////////////////////////////////////////////////////////////////////////
 // ADMIN (requires X-Admin-Secret header or ADMIN_USERS login)
 ////////////////////////////////////////////////////////////////////////////////
 app.use('/admin', requireAdmin);
@@ -1268,6 +1299,11 @@ app.get('/admin/peek-session', async (req, res) => {
   res.json({ meta: await getSessionMeta(id), items_count: items.length, last_item: items[items.length - 1] || null });
 });
 
+app.post('/admin/textbook/sync', async (req, res) => {
+  res.json(await textbook.sync({ force: String(req.query.force || '') === '1' }));
+});
+app.get('/admin/textbook/status', (_req, res) => res.json(textbook.status()));
+
 app.delete('/admin/pdfs/by-label', async (req, res) => {
   const label = String(req.query.label || '');
   if (!label) return res.status(400).json({ error: 'label required' });
@@ -1292,7 +1328,7 @@ async function start() {
     console.log('[storage] Postgres ready.');
   }
   app.listen(PORT, () => console.log(`Server listening on :${PORT}`));
-  ensureStandardPdfIndexed();
+  textbook.start().catch(err => console.error('[textbook] start failed:', err?.message || err));
 }
 
 if (process.env.NO_LISTEN !== '1') {
