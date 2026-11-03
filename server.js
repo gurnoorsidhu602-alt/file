@@ -23,8 +23,8 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 
 import {
-  responsesCall, aiJSON, parseResponsesJSON, extractOutputText, setUsageSink, recentUsage, summarizeUsage,
-  BASE_MODEL, STRICT_MODEL, PIMP_MODEL, PIMP_GRADER_MODEL, PIMP_DISCUSSION_MODEL, CASE_MODEL, CASE_FAST_MODEL
+  responsesCall, aiJSON, parseResponsesJSON, extractOutputText, extractCanadianText, setUsageSink, recentUsage, summarizeUsage,
+  BASE_MODEL, STRICT_MODEL, PIMP_MODEL, PIMP_GENERATOR_MODEL, PIMP_GRADER_MODEL, PIMP_DISCUSSION_MODEL, CASE_MODEL, CASE_FAST_MODEL
 } from './lib/ai.js';
 import { hasPg, migrate, q } from './lib/db.js';
 import { createMemoryRedis } from './lib/memoryRedis.js';
@@ -439,7 +439,7 @@ Rules:
 - No physiologically contradictory or internally inconsistent stems. Canadian/SI units.
 - ${conceptRule}`;
   const payload = { topic: topic || 'random', difficulty: normalizeDifficulty(difficulty), avoid_questions: avoidQuestions.slice(-120), avoid_concepts: avoidConcepts.slice(-200) };
-  const parsed = await aiJSON({ tag: mode === 'mccqe' ? 'pimp.generate.mcq' : 'pimp.generate', meta: { userId }, system, payload, model: PIMP_MODEL, temperature: mode === 'mccqe' ? 0.45 : 0.7, max_output_tokens: mode === 'mccqe' ? 1100 : 700, reasoning_effort: 'low' });
+  const parsed = await aiJSON({ tag: mode === 'mccqe' ? 'pimp.generate.mcq' : 'pimp.generate', meta: { userId }, system, payload, model: PIMP_GENERATOR_MODEL, temperature: mode === 'mccqe' ? 0.45 : 0.7, max_output_tokens: mode === 'mccqe' ? 3000 : 2000, reasoning_effort: 'low' });
   return parsed;
 }
 
@@ -480,7 +480,7 @@ If the original grading, credit, or explanation was wrong, say so plainly and gi
     { role: 'system', content: system },
     { role: 'user', content: JSON.stringify({ question, userAnswer, grading, priorDialogue: ensureArray(dialogue).slice(-8), learnerMessage: message }) }
   ] });
-  return extractOutputText(resp) || 'I could not generate a clarification.';
+  return extractCanadianText(resp) || 'I could not generate a clarification.';
 }
 
 async function aiSummarizeSession({ transcript, startDifficulty, userId }) {
@@ -1270,7 +1270,7 @@ app.get('/admin/usage', async (req, res) => {
     const cases = Object.values(perCase);
     res.json({
       window: sessionId ? { session: sessionId } : { days },
-      models: { case: CASE_MODEL, caseFast: CASE_FAST_MODEL, pimp: PIMP_MODEL, grader: PIMP_GRADER_MODEL, discussion: PIMP_DISCUSSION_MODEL, strict: STRICT_MODEL },
+      models: { case: CASE_MODEL, caseFast: CASE_FAST_MODEL, pimp: PIMP_MODEL, pimpGenerator: PIMP_GENERATOR_MODEL, grader: PIMP_GRADER_MODEL, discussion: PIMP_DISCUSSION_MODEL, strict: STRICT_MODEL },
       ...summarizeUsage(records),
       cases: { count: cases.length, avg_input_tokens: cases.length ? Math.round(cases.reduce((s, c) => s + c.input_tokens, 0) / cases.length) : 0, recent: cases.slice(-20) }
     });
