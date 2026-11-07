@@ -57,6 +57,9 @@ app.get(['/textbook', '/textbook.html'], page('textbook.html'));
 // Med Learner was replaced by the textbook.
 app.get(['/learner', '/learner.html', '/medlearner'], (_req, res) => res.redirect(301, '/textbook'));
 app.get(['/casesim', '/casesim.html'], page('casesim.html'));
+// Punjabi patient-education site: standalone static pages, public (no login), not linked from the other pages.
+app.get(['/punjabi', '/patient-education'], (_req, res) => res.redirect(302, '/sehat/'));
+app.use('/sehat', express.static(path.join(__dirname, 'sehat'), { maxAge: '1h' }));
 app.use('/assets', express.static(path.join(__dirname, 'assets'), { maxAge: '1h' }));
 
 const redis = (process.env.REDIS_MEMORY === '1' || !process.env.UPSTASH_REDIS_REST_URL)
