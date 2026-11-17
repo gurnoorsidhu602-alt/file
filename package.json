@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "REDIS_MEMORY=1 MOCK_AI=1 node server.js"
+    "dev": "REDIS_MEMORY=1 MOCK_AI=1 node server.js",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@upstash/redis": "^1.28.3",

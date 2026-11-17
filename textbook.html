@@ -26,6 +26,13 @@
   .art-link:hover { background: var(--surface-2); color: var(--ink); }
   .art-link[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 500; }
   .art-link .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--line-strong); flex: none; }
+  .grp { margin: 2px 0; }
+  .grp > summary { font-weight: 600; font-size: 12.5px; color: var(--muted); padding: 6px 8px 4px 34px; text-transform: none; }
+  .grp > summary a { color: inherit; text-decoration: none; }
+  .grp > summary a:hover { color: var(--accent); }
+  .grp .art-link { padding-left: 46px; }
+  .grp .grp > summary { padding-left: 46px; }
+  .grp .grp .art-link { padding-left: 58px; }
   .art-link.read .dot { background: var(--accent); border-color: var(--accent); }
 
   .main { overflow: auto; scroll-behavior: smooth; }
@@ -87,6 +94,19 @@
   .result .rp { color: var(--muted); font-size: 12.5px; }
   .result .rt { font-weight: 600; margin: 2px 0 4px; }
   .snip { color: var(--ink-2); font-size: 13.5px; line-height: 1.55; }
+  .hit-section { margin: 22px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .topic-hit { display: block; padding: 14px 16px; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); text-decoration: none; color: var(--ink); max-width: 80ch; }
+  .topic-hit:hover { border-color: var(--accent); }
+  .topic-hit.first { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .topic-hit .rt { font-family: var(--serif); font-size: 19px; font-weight: 600; }
+  .topic-hit .rp { color: var(--muted); font-size: 12.5px; }
+  .topic-hit .tag { display: inline-block; margin-left: 8px; font-size: 11.5px; font-family: var(--sans); font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; vertical-align: middle; }
+  .children { margin: 0 0 22px; padding: 14px 18px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+  .children h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
+  .children ul { columns: 2 260px; margin: 0; padding-left: 18px; }
+  .children li { margin: 3px 0; break-inside: avoid; }
+  .children a { color: var(--ink); text-decoration: none; }
+  .children a:hover { color: var(--accent); }
   .notice { padding: 16px; border-radius: var(--r); background: var(--warn-soft); color: var(--ink); max-width: 70ch; line-height: 1.6; }
   .empty { color: var(--muted); padding: 40px 0; }
 
@@ -124,7 +144,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TOKEN = localStorage.getItem('authToken') || '';
-const S = { specs: [], status: {}, read: new Set(), current: null, openSpec: null };
+const S = { specs: [], status: {}, read: new Set(), current: null, openSpec: null, openGroups: new Set() };
 const readKey = (id) => 'tb:' + id;
 
 function toast(m, bad) { const t = $('toast'); t.textContent = m; t.className = 'toast' + (bad ? ' bad' : ''); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), 3500); }
@@ -143,13 +163,19 @@ function renderTree() {
   const done = all.filter(a => S.read.has(a.id)).length;
   $('progress').textContent = all.length ? `${done} of ${all.length} read` : '';
   $('synced').textContent = S.status.lastSync ? 'Updated ' + new Date(S.status.lastSync).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '';
+  const link = (a) => `<a class="art-link ${S.read.has(a.id) ? 'read' : ''}" href="${artHref(a.id)}" ${a.id === S.current ? 'aria-current="page"' : ''}><span class="dot" aria-hidden="true"></span><span>${esc(a.title)}</span></a>`;
+  const contains = (it) => it.id === S.current || (it.items || []).some(contains);
+  const items = (list) => list.map(it => it.type === 'group'
+    ? `<details class="grp" ${contains(it) || S.openGroups.has(it.id) ? 'open' : ''} data-group="${esc(it.id)}"><summary><a href="${artHref(it.id)}" ${it.id === S.current ? 'aria-current="page"' : ''}>${esc(it.title)}</a></summary>${items(it.items)}</details>`
+    : link(it)).join('');
   $('tree').innerHTML = S.specs.map(s => {
     const r = s.articles.filter(a => S.read.has(a.id)).length;
-    const open = S.openSpec === s.specialty || s.articles.some(a => a.id === S.current);
+    const open = S.openSpec === s.specialty || (s.outline || []).some(contains);
     return `<details ${open ? 'open' : ''} data-spec="${esc(s.specialty)}"><summary><span class="num">${String(s.order).padStart(2, '0')}</span><span class="name">${esc(s.specialty)}</span><span class="count">${r}/${s.articles.length}</span></summary>
-      ${s.articles.map(a => `<a class="art-link ${S.read.has(a.id) ? 'read' : ''}" href="${artHref(a.id)}" ${a.id === S.current ? 'aria-current="page"' : ''}><span class="dot" aria-hidden="true"></span><span>${esc(a.title)}</span></a>`).join('')}</details>`;
+      ${items(s.outline || s.articles.map(a => ({ type: 'article', ...a })))}</details>`;
   }).join('') || '<p class="muted" style="padding:12px">No articles yet.</p>';
-  $('tree').querySelectorAll('details').forEach(d => d.addEventListener('toggle', () => { if (d.open) S.openSpec = d.dataset.spec; }));
+  $('tree').querySelectorAll('details.grp').forEach(d => d.addEventListener('toggle', () => { d.open ? S.openGroups.add(d.dataset.group) : S.openGroups.delete(d.dataset.group); }));
+  $('tree').querySelectorAll('details[data-spec]').forEach(d => d.addEventListener('toggle', () => { if (d.open) S.openSpec = d.dataset.spec; }));
   const cur = $('tree').querySelector('[aria-current="page"]');
   if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
@@ -158,7 +184,7 @@ function renderTree() {
 function renderHome() {
   S.current = null;
   const st = S.status;
-  let html = `<div class="home"><h1>Internal Medicine textbook</h1><p class="lede">Your CTU clinical manual, organized by subspecialty. Search across every topic, or open a subspecialty on the left. The text comes from the IM Textbook Project documents in Google Drive and refreshes automatically when they change.</p>`;
+  let html = `<div class="home"><h1>Internal Medicine textbook</h1><p class="lede">Your CTU clinical manual, organized by subspecialty and topic. Search for a condition, abbreviation or finding: matching topics come first, then sections within topics, then passages that mention it. The text comes from the IM Textbook Project documents in Google Drive and refreshes automatically when they change.</p>`;
   if (!st.configured) html += `<div class="notice"><b>The textbook isn't connected to Google Drive yet.</b><br>Add a Google service account key to the server as <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> and share the "IM Textbook Project" folder with that account. Articles appear after the first sync.</div>`;
   else if (!S.specs.length) html += `<div class="notice">${st.syncing ? 'Loading the textbook from Google Drive. This takes a minute or two the first time; refresh shortly.' : `No articles yet.${st.lastError ? ' Last sync error: ' + esc(st.lastError) : ''}`}</div>`;
   html += `<div class="spec-list">${S.specs.map(s => {
@@ -181,9 +207,10 @@ async function renderArticle(id, anchor) {
   const minutes = Math.max(1, Math.round((a.words || 0) / 200));
   const toc = (a.toc || []).filter(t => t.depth <= 2);
   $('page').innerHTML = `<div class="article-grid"><article>
-      <div class="art-head"><div class="crumbs"><a href="#/">Textbook</a> / <a href="#/" data-open="${esc(a.specialty)}">${esc(a.specialty)}</a></div><h1>${esc(a.title)}</h1></div>
-      <div class="art-meta"><span>${minutes} min read</span>${a.updated ? `<span>Source updated ${esc(new Date(a.updated).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }))}</span>` : ''}<span class="spacer"></span>
-        <button class="btn ${isRead ? '' : 'primary'} sm" id="btnRead" aria-pressed="${isRead}">${isRead ? 'Read' : 'Mark as read'}</button></div>
+      <div class="art-head"><div class="crumbs"><a href="#/">Textbook</a> / <a href="#/" data-open="${esc(a.specialty)}">${esc(a.specialty)}</a>${(a.crumbs || []).map(c => ` / <a href="${artHref(c.id)}">${esc(c.title)}</a>`).join('')}</div><h1>${esc(a.title)}</h1>${(a.aliases || []).length ? `<p class="muted" style="margin-top:4px">Also: ${a.aliases.map(esc).join(' · ')}</p>` : ''}</div>
+      <div class="art-meta">${a.hub ? `<span>${a.children.length} topics</span>` : `<span>${minutes} min read</span>`}${a.updated ? `<span>Source updated ${esc(new Date(a.updated).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }))}</span>` : ''}<span class="spacer"></span>
+        ${a.hub ? '' : `<button class="btn ${isRead ? '' : 'primary'} sm" id="btnRead" aria-pressed="${isRead}">${isRead ? 'Read' : 'Mark as read'}</button>`}</div>
+      ${(a.children || []).length ? `<nav class="children" aria-label="Topics in this section"><h2>Topics in ${esc(a.title)}</h2><ul>${a.children.map(c => `<li><a href="${artHref(c.id)}">${esc(c.title)}</a></li>`).join('')}</ul></nav>` : ''}
       <div class="prose" id="prose">${a.html}</div>
       <nav class="pager" aria-label="Previous and next topic">${a.prev ? `<a href="${artHref(a.prev.id)}"><span class="lbl">Previous</span>${esc(a.prev.title)}</a>` : '<span></span>'}${a.next ? `<a class="next" href="${artHref(a.next.id)}"><span class="lbl">Next${a.next.specialty !== a.specialty ? ', ' + esc(a.next.specialty) : ''}</span>${esc(a.next.title)}</a>` : '<span></span>'}</nav>
     </article>
@@ -191,7 +218,7 @@ async function renderArticle(id, anchor) {
   document.title = `${a.title}, IM Textbook`;
   $('page').querySelectorAll('[data-open]').forEach(l => l.onclick = () => { S.openSpec = l.dataset.open; });
   $('page').querySelectorAll('.toc a').forEach(l => l.onclick = (e) => { e.preventDefault(); jumpTo(l.dataset.anchor); });
-  $('btnRead').onclick = toggleRead;
+  if ($('btnRead')) $('btnRead').onclick = toggleRead;
   if (anchor) jumpTo(anchor, true); else $('main').scrollTop = 0;
   // Scroll-spy for the contents list.
   if (tocObserver) tocObserver.disconnect();
@@ -226,9 +253,20 @@ async function renderSearch(qtext) {
   if (!qtext.trim()) return renderHome();
   $('page').innerHTML = '<p class="empty">Searching…</p>';
   try {
-    const { results, total } = await api('/textbook/api/search?q=' + encodeURIComponent(qtext));
-    $('page').innerHTML = `<div class="results"><h1>Results for “${esc(qtext)}”</h1><p class="muted" style="margin-bottom:10px">${total ? `${total} matching section${total === 1 ? '' : 's'}` : ''}</p>
-      ${results.length ? results.map(r => `<a class="result" href="${artHref(r.articleId, r.anchor)}"><div class="rp">${esc(r.specialty)} / ${esc(r.articleTitle)}</div><div class="rt">${esc(r.sectionTitle || r.articleTitle)}</div><div class="snip">${r.snippet}</div></a>`).join('') : '<p class="empty">Nothing matched. Try fewer or different words, or an abbreviation spelled out.</p>'}</div>`;
+    const r = await api('/textbook/api/search?q=' + encodeURIComponent(qtext));
+    const where = (x, extra) => esc([x.specialty, ...(x.path || []), ...(extra ? [extra] : [])].join(' › '));
+    const topics = r.topics || [], sections = r.sections || [], results = r.results || [];
+    let html = `<div class="results"><h1>Results for “${esc(qtext)}”</h1>`;
+    if (r.corrected) html += `<p class="muted">Showing results for <b>${esc(r.corrected)}</b></p>`;
+    if (topics.length) {
+      html += `<div class="hit-section">Topics</div>` + topics.map((t, i) => `<a class="topic-hit ${i === 0 ? 'first' : ''}" href="${artHref(t.articleId)}"><div class="rp">${where(t)}</div><div class="rt">${esc(t.title)}${t.kind === 'overview' ? '<span class="tag">section overview</span>' : ''}${t.via === 'alias' && t.matched.toLowerCase() !== t.title.toLowerCase() ? `<span class="tag">${esc(t.matched)}</span>` : ''}</div></a>`).join('');
+    } else if (sections.length || results.length) {
+      html += `<p class="notice" style="margin:14px 0">There's no dedicated topic for “${esc(qtext)}” in the textbook yet.${sections.length ? ' The closest matches are sections within other topics.' : ' It is mentioned in the passages below.'}</p>`;
+    }
+    if (sections.length) html += `<div class="hit-section">Sections</div>` + sections.map(x => `<a class="result" href="${artHref(x.articleId, x.anchor)}"><div class="rp">${where(x, x.articleTitle)}</div><div class="rt">${esc(x.sectionTitle)}</div></a>`).join('');
+    if (results.length) html += `<div class="hit-section">Mentioned in${r.total > results.length ? ` (${r.total} passages)` : ''}</div>` + results.map(x => `<a class="result" href="${artHref(x.articleId, x.anchor)}"><div class="rp">${where(x, x.articleTitle)}</div><div class="rt">${esc(x.sectionTitle || x.articleTitle)}</div><div class="snip">${x.snippet}</div></a>`).join('');
+    if (!topics.length && !sections.length && !results.length) html += '<p class="empty">Nothing matched. Try fewer or different words, or an abbreviation spelled out.</p>';
+    $('page').innerHTML = html + '</div>';
     $('main').scrollTop = 0;
   } catch (e) { $('page').innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
 }
