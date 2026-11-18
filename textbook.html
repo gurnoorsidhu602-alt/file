@@ -13,7 +13,9 @@
   .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: calc(100vh - 52px); }
   .side { display: grid; grid-template-rows: auto minmax(0, 1fr); border-right: 1px solid var(--line); background: var(--surface); min-height: 0; }
   .side-top { padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
-  .side-top input { padding: 9px 12px; }
+  .side-top form { display: flex; gap: 6px; }
+  .side-top input { padding: 9px 12px; flex: 1; min-width: 0; }
+  .side-top form .btn { flex: none; }
   .side-top .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
   .tree { overflow: auto; padding: 6px 8px 32px; }
   details > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 8px; padding: 7px 8px; border-radius: var(--r-sm); font-weight: 600; }
@@ -131,7 +133,7 @@
 <div class="layout">
   <aside class="side" aria-label="Textbook contents">
     <div class="side-top">
-      <form id="searchForm" role="search"><input id="q" type="search" placeholder="Search the textbook" aria-label="Search the textbook" autocomplete="off"></form>
+      <form id="searchForm" role="search"><input id="q" type="search" placeholder="Search the textbook" aria-label="Search the textbook" autocomplete="off"><button class="btn primary" type="submit">Search</button></form>
       <div class="meta"><span id="progress"></span><span id="synced"></span></div>
     </div>
     <nav class="tree" id="tree" aria-label="Subspecialties"></nav>
@@ -282,9 +284,14 @@ function route() {
   renderHome();
 }
 window.addEventListener('hashchange', route);
-$('searchForm').addEventListener('submit', (e) => { e.preventDefault(); location.hash = '#/search?q=' + encodeURIComponent($('q').value.trim()); });
-let typing;
-$('q').addEventListener('input', () => { clearTimeout(typing); const v = $('q').value.trim(); if (v.length >= 3) typing = setTimeout(() => { history.replaceState(null, '', '#/search?q=' + encodeURIComponent(v)); renderSearch(v); }, 300); });
+// Searches run only when the user presses Enter or clicks Search.
+$('searchForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const v = $('q').value.trim();
+  if (!v) return;
+  const h = '#/search?q=' + encodeURIComponent(v);
+  if (location.hash === h) renderSearch(v); else location.hash = h;
+});
 document.addEventListener('keydown', (e) => { if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); $('q').focus(); } });
 
 (async () => {
