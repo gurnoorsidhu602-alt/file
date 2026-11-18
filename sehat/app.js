@@ -31,12 +31,42 @@
     .replace(/[਼ੱੰਂਁਃ੍]/g, '')
     .replace(/[\s.,;:!?'"()\-–—/*]+/g, '');
 
+  // Urgency tiers for "when to get help" lists, most urgent first. Each tier
+  // gets its own heading so "call 911", "go to emergency", "get checked today"
+  // and "book a visit" are never mixed under one label. `fallback` is printed
+  // under the list on every page that uses the tier.
+  const TIERS = [
+    { key: 'call911', cls: 'red', h: 'ਹੁਣੇ 911 ਉੱਤੇ ਫ਼ੋਨ ਕਰੋ ਜੇ:', fallback: '' },
+    { key: 'poison', cls: 'red', h: 'ਹੁਣੇ ਜ਼ਹਿਰ ਅਤੇ ਦਵਾਈ ਜਾਣਕਾਰੀ ਕੇਂਦਰ (Poison Control) ਨੂੰ ਫ਼ੋਨ ਕਰੋ ਜੇ:',
+      fallback: 'ਬੀ.ਸੀ. ਵਿੱਚ: **1-800-567-8911**, ਦਿਨ-ਰਾਤ। ਹੋਰ ਸੂਬਿਆਂ ਵਿੱਚ ਆਪਣੇ ਸੂਬੇ ਦਾ ਜ਼ਹਿਰ ਕੇਂਦਰ। ਠੀਕ ਮਹਿਸੂਸ ਹੋਵੇ ਤਾਂ ਵੀ ਫ਼ੋਨ ਕਰੋ — ਲੱਛਣਾਂ ਦੀ ਉਡੀਕ ਨਾ ਕਰੋ। ਜਗਾਉਣਾ ਔਖਾ ਹੋਵੇ, ਦੌਰਾ ਪਵੇ ਜਾਂ ਸਾਹ ਠੀਕ ਨਾ ਹੋਵੇ ਤਾਂ 911।' },
+    { key: 'goED', cls: 'orange', h: 'ਹੁਣੇ ਹਸਪਤਾਲ ਦੇ ਐਮਰਜੈਂਸੀ ਵਿਭਾਗ ਜਾਓ ਜੇ:',
+      fallback: 'ਹਾਲਤ ਵਿਗੜੇ, ਜਾਂ ਸੁਰੱਖਿਅਤ ਢੰਗ ਨਾਲ ਹਸਪਤਾਲ ਪਹੁੰਚਣਾ ਔਖਾ ਹੋਵੇ, ਤਾਂ 911 ਉੱਤੇ ਫ਼ੋਨ ਕਰੋ।' },
+    { key: 'today', cls: 'amber', h: 'ਅੱਜ ਹੀ ਡਾਕਟਰੀ ਜਾਂਚ ਕਰਵਾਓ ਜੇ:',
+      fallback: 'ਅੱਜ ਆਪਣੇ ਡਾਕਟਰ ਜਾਂ ਇਲਾਜ ਟੀਮ ਨਾਲ ਗੱਲ ਨਾ ਹੋ ਸਕੇ ਤਾਂ ਵਾਕ-ਇਨ ਜਾਂ ਅਰਜੈਂਟ ਕੇਅਰ ਕਲੀਨਿਕ ਜਾਓ, ਜਾਂ 811 ਉੱਤੇ ਫ਼ੋਨ ਕਰੋ। ਹਾਲਤ ਵਿਗੜੇ ਤਾਂ ਐਮਰਜੈਂਸੀ ਜਾਓ।' },
+    { key: 'book', cls: 'blue', h: 'ਆਪਣੇ ਡਾਕਟਰ ਨਾਲ ਮੁਲਾਕਾਤ ਲਵੋ ਜੇ:', fallback: '' },
+  ];
+  const TIER_KEYS = TIERS.map((t) => t.key);
+  const tierOf = (b) => b && typeof b === 'object' && TIER_KEYS.find((k) => Array.isArray(b[k]));
+
+  // { use: 'name' } pulls a shared block list from data/shared.js.
+  function expand(blocks) {
+    return (blocks || []).flatMap((b) => {
+      if (b && b.use) {
+        const s = (S.shared || {})[b.use];
+        if (!s) { console.warn('sehat: unknown shared block', b.use); return []; }
+        return expand(s);
+      }
+      return [b];
+    });
+  }
+
   function blockText(b) {
     if (typeof b === 'string') return b;
     if (b.ul) return b.ul.join(' ');
+    if (b.ol) return b.ol.join(' ');
     if (b.meds) return b.meds.map((m) => [m.name, m.ex, m.why, m.tip].filter(Boolean).join(' ')).join(' ');
-    if (b.call911) return b.call911.join(' ');
-    if (b.callDoc) return b.callDoc.join(' ');
+    const t = tierOf(b);
+    if (t) return [...b[t], b.act || ''].join(' ');
     return b.like || b.note || b.h || '';
   }
 
@@ -52,10 +82,10 @@
     a._terms = [a.title, a.short, a.en, ...(a.aka || []), ...(a.keywords || [])].filter(Boolean).map(norm);
     a._key = a._terms.join('|');
     a._units = [];
-    const intro = [a.summary, ...(a.key || [])].join(' ');
+    const intro = [a.summary, ...(a.key || []), ...(a.action ? [a.action.h, ...(a.action.steps || []), ...expand(a.action.blocks).map(blockText)] : [])].join(' ');
     a._units.push({ sec: '', title: a.title, raw: plain(intro), n: norm(intro) });
     SECTIONS.forEach(([k, t]) => {
-      const raw = plain((a.sections[k] || []).map(blockText).join(' '));
+      const raw = plain(expand(a.sections[k]).map(blockText).join(' '));
       if (raw) a._units.push({ sec: k, title: t, raw, n: norm(raw) });
     });
     a._chars = a._units.reduce((n, u) => n + u.raw.length, 0);
@@ -122,9 +152,10 @@
     if (cur) cur.scrollIntoView({ block: 'nearest' });
   }
 
+  // Region: written for patients in British Columbia, Canada.
   const FOOT = `<footer class="foot">
-    <p><strong>ਜ਼ਰੂਰੀ:</strong> ਇਹ ਜਾਣਕਾਰੀ ਸਿਰਫ਼ ਸਮਝਣ ਲਈ ਹੈ। ਇਹ ਤੁਹਾਡੇ ਡਾਕਟਰ, ਨਰਸ ਜਾਂ ਫਾਰਮਾਸਿਸਟ ਦੀ ਸਲਾਹ ਦੀ ਥਾਂ ਨਹੀਂ ਲੈਂਦੀ। ਕੋਈ ਵੀ ਦਵਾਈ ਆਪਣੇ ਆਪ ਬੰਦ, ਸ਼ੁਰੂ ਜਾਂ ਘੱਟ-ਵੱਧ ਨਾ ਕਰੋ। ਦੇਸੀ ਦਵਾਈਆਂ, ਜੜੀ-ਬੂਟੀਆਂ ਅਤੇ ਤਾਕਤ ਦੀਆਂ ਗੋਲੀਆਂ ਬਾਰੇ ਵੀ ਆਪਣੇ ਡਾਕਟਰ ਨੂੰ ਦੱਸੋ।</p>
-    <p><strong>ਐਮਰਜੈਂਸੀ ਵਿੱਚ 911 ਉੱਤੇ ਫ਼ੋਨ ਕਰੋ।</strong> ਬਹੁਤੇ ਸੂਬਿਆਂ ਵਿੱਚ 811 ਉੱਤੇ ਨਰਸ ਨਾਲ ਗੱਲ ਹੋ ਸਕਦੀ ਹੈ — ਤੁਸੀਂ ਪੰਜਾਬੀ ਦੁਭਾਸ਼ੀਏ ਦੀ ਮੰਗ ਕਰ ਸਕਦੇ ਹੋ।</p>
+    <p><strong>ਐਮਰਜੈਂਸੀ ਵਿੱਚ 911 ਉੱਤੇ ਫ਼ੋਨ ਕਰੋ।</strong> ਬੀ.ਸੀ. ਵਿੱਚ, ਜੇ ਜਾਨ ਨੂੰ ਫ਼ੌਰੀ ਖ਼ਤਰਾ ਨਹੀਂ, ਤਾਂ 811 ਉੱਤੇ ਫ਼ੋਨ ਕਰਕੇ ਆਖੋ, «ਮੈਨੂੰ ਪੰਜਾਬੀ ਦੁਭਾਸ਼ੀਆ ਚਾਹੀਦਾ ਹੈ।» ਜ਼ਹਿਰ ਜਾਂ ਦਵਾਈ ਦੀ ਵੱਧ ਮਾਤਰਾ: ਬੀ.ਸੀ. ਜ਼ਹਿਰ ਕੇਂਦਰ 1-800-567-8911।</p>
+    <p><strong>ਜ਼ਰੂਰੀ:</strong> ਇਹ ਲੇਖ ਬ੍ਰਿਟਿਸ਼ ਕੋਲੰਬੀਆ (ਕੈਨੇਡਾ) ਦੇ ਮਰੀਜ਼ਾਂ ਲਈ ਲਿਖੇ ਗਏ ਹਨ। ਹੋਰ ਸੂਬਿਆਂ ਵਿੱਚ ਆਪਣੇ ਸੂਬੇ ਦੀ ਸਿਹਤ ਲਾਈਨ ਅਤੇ ਜ਼ਹਿਰ ਕੇਂਦਰ ਵਰਤੋ। ਇਹ ਜਾਣਕਾਰੀ ਸਿਰਫ਼ ਸਮਝਣ ਲਈ ਹੈ ਅਤੇ ਤੁਹਾਡੇ ਡਾਕਟਰ, ਨਰਸ ਜਾਂ ਫਾਰਮਾਸਿਸਟ ਦੀ ਸਲਾਹ ਦੀ ਥਾਂ ਨਹੀਂ ਲੈਂਦੀ। ਤੁਹਾਡੀ ਟੀਮ ਦੀ ਲਿਖਤੀ ਯੋਜਨਾ ਇਸ ਸਫ਼ੇ ਨਾਲੋਂ ਪਹਿਲਾਂ ਹੈ। ਕੋਈ ਵੀ ਦਵਾਈ ਆਪਣੇ ਆਪ ਬੰਦ, ਸ਼ੁਰੂ ਜਾਂ ਘੱਟ-ਵੱਧ ਨਾ ਕਰੋ। ਦੇਸੀ ਦਵਾਈਆਂ, ਜੜੀ-ਬੂਟੀਆਂ ਅਤੇ ਤਾਕਤ ਦੀਆਂ ਗੋਲੀਆਂ ਬਾਰੇ ਵੀ ਆਪਣੇ ਡਾਕਟਰ ਨੂੰ ਦੱਸੋ।</p>
   </footer>`;
 
   // ---------- views ----------
@@ -141,7 +172,7 @@
       <div class="how">
         <div><b>ਮਿਸਾਲ ਨਾਲ ਸਮਝੋ</b>ਜਾਮਨੀ ਡੱਬਿਆਂ ਵਿੱਚ ਰੋਜ਼ ਦੀ ਜ਼ਿੰਦਗੀ ਦੀਆਂ ਮਿਸਾਲਾਂ ਹਨ — ਖਾਲ਼, ਪਾਈਪ, ਚਾਬੀ-ਜਿੰਦਾ।</div>
         <div><b>ਦਵਾਈ ਕਿਵੇਂ ਕੰਮ ਕਰਦੀ ਹੈ</b>ਹਰੀ ਲਕੀਰ ਵਾਲੇ ਡੱਬੇ ਦੱਸਦੇ ਹਨ ਕਿ ਹਰ ਦਵਾਈ ਕਿਉਂ ਦਿੱਤੀ ਜਾਂਦੀ ਹੈ ਅਤੇ ਕਿਵੇਂ ਲੈਣੀ ਹੈ।</div>
-        <div><b>ਮਦਦ ਕਦੋਂ ਲਵੋ</b>ਲਾਲ ਡੱਬਾ: ਤੁਰੰਤ 911। ਪੀਲਾ ਡੱਬਾ: ਛੇਤੀ ਡਾਕਟਰ ਨਾਲ ਗੱਲ ਕਰੋ।</div>
+        <div><b>ਮਦਦ ਕਦੋਂ ਲਵੋ</b>ਲਾਲ ਡੱਬਾ: ਹੁਣੇ 911। ਸੰਤਰੀ: ਹੁਣੇ ਐਮਰਜੈਂਸੀ ਜਾਓ। ਪੀਲਾ: ਅੱਜ ਹੀ ਜਾਂਚ ਕਰਵਾਓ। ਨੀਲਾ: ਮੁਲਾਕਾਤ ਲਵੋ।</div>
       </div>
       ${FOOT}</div>`;
     $('page').querySelectorAll('[data-open]').forEach((l) => (l.onclick = () => { openSpec = l.dataset.open; }));
@@ -157,9 +188,66 @@
     if (b.meds) {
       return b.meds.map((m) => `<div class="med"><h4>${fmt(m.name)}${m.ex ? `<span class="ex">${esc(m.ex)}</span>` : ''}</h4><p>${fmt(m.why)}</p>${m.tip ? `<p class="tip">${fmt(m.tip)}</p>` : ''}</div>`).join('');
     }
-    if (b.call911) return `<div class="alert red"><h3>ਤੁਰੰਤ 911 ਉੱਤੇ ਫ਼ੋਨ ਕਰੋ ਜੇ:</h3><ul>${b.call911.map((x) => `<li>${fmt(x)}</li>`).join('')}</ul></div>`;
-    if (b.callDoc) return `<div class="alert amber"><h3>ਛੇਤੀ ਆਪਣੇ ਡਾਕਟਰ ਜਾਂ ਨਰਸ ਨਾਲ ਗੱਲ ਕਰੋ ਜੇ:</h3><ul>${b.callDoc.map((x) => `<li>${fmt(x)}</li>`).join('')}</ul></div>`;
+    if (b.ol) return `<ol>${b.ol.map((x) => `<li>${fmt(x)}</li>`).join('')}</ol>`;
     return '';
+  }
+  function renderTier(t, items, acts) {
+    return `<div class="alert ${t.cls}" data-tier="${t.key}"><h3>${esc(t.h)}</h3><ul>${items.map((x) => `<li>${fmt(x)}</li>`).join('')}</ul>`
+      + acts.map((x) => `<p class="act">${fmt(x)}</p>`).join('')
+      + (t.fallback ? `<p class="fallback">${fmt(t.fallback)}</p>` : '') + '</div>';
+  }
+  // Renders a block list. Shared blocks are expanded; every urgency-tier block
+  // is merged into one box per tier and the boxes are sorted most urgent first,
+  // placed where the first tier block was. Other blocks keep their order.
+  function renderBlocks(blocks) {
+    const list = expand(blocks);
+    const merged = new Map();
+    let at = -1;
+    const out = [];
+    list.forEach((b) => {
+      const k = tierOf(b);
+      if (!k) { out.push(renderBlock(b)); return; }
+      if (at < 0) { at = out.length; out.push(''); }
+      const m = merged.get(k) || { items: [], acts: [] };
+      b[k].forEach((x) => { if (!m.items.includes(x)) m.items.push(x); });
+      if (b.act && !m.acts.includes(b.act)) m.acts.push(b.act);
+      merged.set(k, m);
+    });
+    if (at >= 0) out[at] = TIERS.filter((t) => merged.has(t.key)).map((t) => renderTier(t, merged.get(t.key).items, merged.get(t.key).acts)).join('');
+    return out.join('');
+  }
+  // Short emergency box shown under the title on time-critical pages, so the
+  // first screen (and a printed or shared page) carries the urgent action.
+  function renderAction(a) {
+    const x = a.action;
+    if (!x) return '';
+    return `<section class="action" aria-label="${esc(x.h)}"><h2>${esc(x.h)}</h2>`
+      + (x.steps ? `<ol>${x.steps.map((s) => `<li>${fmt(s)}</li>`).join('')}</ol>` : '')
+      + (x.blocks ? renderBlocks(x.blocks) : '')
+      + (a.sections.help ? `<p class="more"><a href="${artHref(a.id, 'help')}" data-anchor="sec-help">ਮਦਦ ਕਦੋਂ ਲਵੋ — ਪੂਰੀ ਸੂਚੀ ↓</a></p>` : '')
+      + '</section>';
+  }
+  function renderSources(a) {
+    const ids = [...new Set([...((S.refs || {})[a.id] || []), ...(a.refs || [])])];
+    const src = S.sources || {};
+    const items = ids.flatMap((id) => src[id] || []);
+    const site = (S.siteRefs || []).flatMap((id) => src[id] || []).filter((s) => !items.includes(s));
+    const li = (s) => `<li><a href="${esc(s.u)}" target="_blank" rel="noopener">${esc(s.t)}</a></li>`;
+    return `<section class="sources" id="sec-sources"><h2>ਸਰੋਤ <span class="en">Sources</span></h2>`
+      + (items.length ? `<ul>${items.map(li).join('')}</ul>` : '<p class="muted">ਇਸ ਲੇਖ ਦੇ ਸਰੋਤ ਹਾਲੇ ਜੋੜਨੇ ਬਾਕੀ ਹਨ।</p>')
+      + (site.length ? `<p class="muted">ਬੀ.ਸੀ. ਵਿੱਚ ਮਦਦ ਅਤੇ ਪੰਜਾਬੀ ਪਰਚੇ:</p><ul>${site.map(li).join('')}</ul>` : '')
+      + '</section>';
+  }
+  // Named clinical and Punjabi-language review with a date. Until both are
+  // filled in, the page says plainly that review is pending.
+  function renderReview(a) {
+    const r = a.review || {};
+    const row = (pa, en, v) => `<li><span>${pa}</span> ${v ? esc(v) : `<em>ਬਾਕੀ ਹੈ · pending (${en})</em>`}</li>`;
+    return `<section class="reviewed"><ul>
+      ${row('ਡਾਕਟਰੀ ਪੜਤਾਲ:', 'clinical review', r.clinical || a.reviewed)}
+      ${row('ਪੰਜਾਬੀ ਬੋਲੀ ਦੀ ਪੜਤਾਲ:', 'Punjabi language review', r.language)}
+      ${row('ਪੜਤਾਲ ਦੀ ਮਿਤੀ:', 'review date', r.date)}
+    </ul></section>`;
   }
 
   let tocObserver = null;
@@ -182,10 +270,12 @@
           <button class="btn" id="btnLink" type="button">ਲਿੰਕ ਕਾਪੀ ਕਰੋ</button>
           <button class="btn ${isRead ? '' : 'primary'}" id="btnRead" type="button" aria-pressed="${isRead}">${isRead ? '✓ ਪੜ੍ਹ ਲਿਆ' : 'ਪੜ੍ਹ ਲਿਆ'}</button></div>
         <div class="prose" id="prose">
+          ${renderAction(a)}
           <p class="lead">${fmt(a.summary)}</p>
           ${a.key && a.key.length ? `<section class="key"><h2>ਮੁੱਖ ਗੱਲਾਂ</h2><ul>${a.key.map((k) => `<li>${fmt(k)}</li>`).join('')}</ul></section>` : ''}
-          ${present.map(([k, t], j) => `<h2 id="sec-${k}"><span class="n">${paNum(j + 1)}</span>${esc(t)}</h2>${a.sections[k].map(renderBlock).join('')}`).join('')}
-          <p class="reviewed">${a.reviewed ? 'ਪੜਤਾਲ: ' + esc(a.reviewed) : 'ਡਾਕਟਰੀ ਪੜਤਾਲ ਬਾਕੀ ਹੈ · pending clinical review'}</p>
+          ${present.map(([k, t], j) => `<h2 id="sec-${k}"><span class="n">${paNum(j + 1)}</span>${esc(t)}</h2>${renderBlocks(a.sections[k])}`).join('')}
+          ${renderSources(a)}
+          ${renderReview(a)}
         </div>
         <nav class="pager" aria-label="ਪਿਛਲਾ ਅਤੇ ਅਗਲਾ ਲੇਖ">${prev ? `<a href="${artHref(prev.id)}"><span class="lbl">← ਪਿਛਲਾ</span>${esc(prev.short || prev.title)}</a>` : '<span></span>'}${next ? `<a class="next" href="${artHref(next.id)}"><span class="lbl">ਅਗਲਾ${next.specialty !== a.specialty ? ', ' + esc(specOf(next.specialty).pa) : ''} →</span>${esc(next.short || next.title)}</a>` : '<span></span>'}</nav>
         ${FOOT}
@@ -206,7 +296,7 @@
       const b = $('btnRead'); b.textContent = on ? '✓ ਪੜ੍ਹ ਲਿਆ' : 'ਪੜ੍ਹ ਲਿਆ'; b.className = 'btn ' + (on ? '' : 'primary'); b.setAttribute('aria-pressed', String(on));
       renderTree();
     };
-    $('page').querySelectorAll('.toc a').forEach((l) => (l.onclick = (e) => { e.preventDefault(); history.replaceState(null, '', l.getAttribute('href')); jumpTo(l.dataset.anchor); }));
+    $('page').querySelectorAll('.toc a, .action .more a').forEach((l) => (l.onclick = (e) => { e.preventDefault(); history.replaceState(null, '', l.getAttribute('href')); jumpTo(l.dataset.anchor); }));
 
     if (sec) jumpTo('sec-' + sec, true); else { $('main').scrollTop = 0; window.scrollTo(0, 0); }
 
