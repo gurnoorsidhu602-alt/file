@@ -238,16 +238,17 @@
       + (site.length ? `<p class="muted">ਬੀ.ਸੀ. ਵਿੱਚ ਮਦਦ ਅਤੇ ਪੰਜਾਬੀ ਪਰਚੇ:</p><ul>${site.map(li).join('')}</ul>` : '')
       + '</section>';
   }
-  // Named clinical and Punjabi-language review with a date. Until both are
-  // filled in, the page says plainly that review is pending.
+  // Named clinical and Punjabi-language review with a date. Shown only for
+  // the fields that are filled in; nothing appears until a reviewer is recorded.
   function renderReview(a) {
     const r = a.review || {};
-    const row = (pa, en, v) => `<li><span>${pa}</span> ${v ? esc(v) : `<em>ਬਾਕੀ ਹੈ · pending (${en})</em>`}</li>`;
-    return `<section class="reviewed"><ul>
-      ${row('ਡਾਕਟਰੀ ਪੜਤਾਲ:', 'clinical review', r.clinical || a.reviewed)}
-      ${row('ਪੰਜਾਬੀ ਬੋਲੀ ਦੀ ਪੜਤਾਲ:', 'Punjabi language review', r.language)}
-      ${row('ਪੜਤਾਲ ਦੀ ਮਿਤੀ:', 'review date', r.date)}
-    </ul></section>`;
+    const rows = [
+      ['ਡਾਕਟਰੀ ਪੜਤਾਲ:', r.clinical || a.reviewed],
+      ['ਪੰਜਾਬੀ ਬੋਲੀ ਦੀ ਪੜਤਾਲ:', r.language],
+      ['ਪੜਤਾਲ ਦੀ ਮਿਤੀ:', r.date],
+    ].filter(([, v]) => v);
+    if (!rows.length) return '';
+    return `<section class="reviewed"><ul>${rows.map(([pa, v]) => `<li><span>${pa}</span> ${esc(v)}</li>`).join('')}</ul></section>`;
   }
 
   let tocObserver = null;

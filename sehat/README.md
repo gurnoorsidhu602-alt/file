@@ -26,7 +26,7 @@ Push an object into `SEHAT.articles` in the matching `data/*.js` file (add a new
   summary: 'one or two sentences', key: ['take-home points'],
   action: { h: 'heading', steps: ['numbered first-aid steps'] }, // optional red box under the title for time-critical pages; or blocks: [tier blocks / { use }]
   sections: { what: [], why: [], symptoms: [], diagnosis: [], treatment: [], help: [] },
-  review: { clinical: 'Dr X (specialty)', language: 'Name', date: '2026-12' }, // shown as "pending" until filled
+  review: { clinical: 'Dr X (specialty)', language: 'Name', date: '2026-12' }, // review lines appear only once filled; nothing shows before that
   refs: ['S99'] // optional extra source ids; the main mapping is in data/sources.js
 }
 ```
@@ -58,4 +58,4 @@ Each tier block may carry `act: '…'` — an instruction sentence (e.g. "do not
 - Every article has at least one `{ like }` analogy from everyday life (ਖਾਲ਼, ਪਾਈਪ, ਚਾਬੀ-ਜਿੰਦਾ, ਖੇਤ).
 - Every treatment explains *why* it works in plain terms, with practical tips that support adherence.
 - Canadian framing: SI units, 911/811, Canadian brand names.
-- Keep `draft: true` until each article has clinician and native-speaker review (fill `review` per article).
+- `draft: true` in `data/specialties.js` shows a "pending review" banner site-wide; it is currently off. Record reviewers per article in `review`.
