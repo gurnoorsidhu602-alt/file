@@ -1,8 +1,8 @@
 /* Chapters follow the IM textbook's numbering (/textbook). Article files push
    into SEHAT.articles; within a chapter, articles show in the order pushed.
-   Set draft:false once the articles have had clinician + native-speaker review. */
+   draft:true shows a site-wide "pending review" banner (currently off). */
 window.SEHAT = {
-  draft: true,
+  draft: false,
   specialties: [
     { id: 'cardiology', n: 1, pa: 'ਦਿਲ ਦੇ ਰੋਗ', en: 'Cardiology' },
     { id: 'respirology', n: 2, pa: 'ਫੇਫੜੇ ਅਤੇ ਸਾਹ', en: 'Respirology' },
