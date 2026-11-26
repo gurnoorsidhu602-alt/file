@@ -160,3 +160,42 @@ test('tagged articles: groups, depth, placeholders and cross-references', () => 
   assert.equal(tb.search('paroxysmal nocturnal').topics[0].title, 'Paroxysmal Nocturnal Hemoglobinuria (PNH)');
   assert.equal(tb.search('PNH').topics[0].title, 'Paroxysmal Nocturnal Hemoglobinuria (PNH)');
 });
+
+// Folder per chapter, one doc per section: "08 Hematology/02 Red Cell Disorders".
+test('section docs in a chapter folder merge into one chapter', () => {
+  const p = (text, style) => ({ paragraph: { elements: [{ textRun: { content: text + '\n' } }], paragraphStyle: { namedStyleType: style } } });
+  const mk = (rows) => ({ body: { content: rows.map(([s, t]) => p(t, s)) } });
+  const filler = 'Detailed clinical text with enough words to be a real article rather than a placeholder entry.';
+  const sec1 = parseDocument(mk([
+    ['HEADING_1', 'Foundations and Laboratory Hematology'],
+    ['HEADING_3', 'Viscoelastic Hemostatic Testing (TEG/ROTEM)'], ['NORMAL_TEXT', 'HEM-003 · Investigation'], ['HEADING_4', 'Key points'], ['NORMAL_TEXT', filler]
+  ]), { id: 's1', name: '01 Foundations and Laboratory Hematology', modifiedTime: '2026-11-01', path: ['08 Hematology'] });
+  const sec2 = parseDocument(mk([
+    ['HEADING_1', 'Red Cell Disorders'], ['HEADING_2', 'Approach'],
+    ['HEADING_3', 'Approach to Anemia'], ['NORMAL_TEXT', 'HEM-005 · Diagnostic'], ['HEADING_4', 'Key points'], ['NORMAL_TEXT', filler]
+  ]), { id: 's2', name: '02 Red Cell Disorders', modifiedTime: '2026-11-02', path: ['08 Hematology'] });
+  const sec3 = parseDocument(mk([
+    ['HEADING_1', 'Platelet Disorders'], ['HEADING_2', 'Approach'],
+    ['HEADING_3', 'Approach to Thrombocytopenia'], ['NORMAL_TEXT', 'HEM-052 · Diagnostic'], ['HEADING_4', 'Key points'], ['NORMAL_TEXT', filler]
+  ]), { id: 's3', name: '04 Platelet Disorders', modifiedTime: '2026-11-03', path: ['08 Hematology'] });
+  assert.equal(sec2.specialty, 'Hematology');
+  assert.equal(sec2.order, 8);
+  assert.equal(sec2.sectionOrder, 2);
+  const tb = createTextbook({ log: { log() {}, error() {}, warn() {} } });
+  tb._load([sec3, sec1, sec2]); // load order must not matter
+  const t = tb.tree();
+  assert.equal(t.length, 1);
+  assert.equal(t[0].specialty, 'Hematology');
+  assert.deepEqual(t[0].outline.map(g => g.title), ['Foundations and Laboratory Hematology', 'Red Cell Disorders', 'Platelet Disorders']);
+  assert.equal(t[0].updated, '2026-11-03');
+  // "Approach" groups in different sections get different ids.
+  const ids = [...t[0].outline[1].items, ...t[0].outline[2].items].map(i => i.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.includes('hematology/red-cell-disorders/approach') && ids.includes('hematology/platelet-disorders/approach'));
+  // Previous/next runs across section docs in order.
+  assert.equal(tb.article('hem-005').prev.id, 'hem-003');
+  assert.equal(tb.article('hem-005').next.id, 'hem-052');
+  // An old-style single chapter doc is unaffected.
+  assert.equal(heme.specialty, 'Hematology');
+  assert.equal(heme.section, '');
+});

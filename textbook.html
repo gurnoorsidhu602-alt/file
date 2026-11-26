@@ -36,6 +36,8 @@
   .grp .grp > summary { padding-left: 46px; }
   .grp .grp .art-link { padding-left: 58px; }
   .art-link.read .dot { background: var(--accent); border-color: var(--accent); }
+  .art-link.stub { color: var(--muted); font-style: italic; }
+  .art-link.stub .dot { border-style: dashed; }
 
   .main { overflow: auto; scroll-behavior: smooth; }
   .page { max-width: 1120px; margin: 0 auto; padding: 32px 28px 80px; }
@@ -165,7 +167,7 @@ function renderTree() {
   const done = all.filter(a => S.read.has(a.id)).length;
   $('progress').textContent = all.length ? `${done} of ${all.length} read` : '';
   $('synced').textContent = S.status.lastSync ? 'Updated ' + new Date(S.status.lastSync).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '';
-  const link = (a) => `<a class="art-link ${S.read.has(a.id) ? 'read' : ''}" href="${artHref(a.id)}" ${a.id === S.current ? 'aria-current="page"' : ''}><span class="dot" aria-hidden="true"></span><span>${esc(a.title)}</span></a>`;
+  const link = (a) => `<a class="art-link ${S.read.has(a.id) ? 'read' : ''} ${a.stub ? 'stub' : ''}" ${a.stub ? 'title="Not written yet"' : ''} href="${artHref(a.id)}" ${a.id === S.current ? 'aria-current="page"' : ''}><span class="dot" aria-hidden="true"></span><span>${esc(a.title)}</span></a>`;
   const contains = (it) => it.id === S.current || (it.items || []).some(contains);
   const items = (list) => list.map(it => it.type === 'group'
     ? `<details class="grp" ${contains(it) || S.openGroups.has(it.id) ? 'open' : ''} data-group="${esc(it.id)}"><summary><a href="${artHref(it.id)}" ${it.id === S.current ? 'aria-current="page"' : ''}>${esc(it.title)}</a></summary>${items(it.items)}</details>`
@@ -190,8 +192,10 @@ function renderHome() {
   if (!st.configured) html += `<div class="notice"><b>The textbook isn't connected to Google Drive yet.</b><br>Add a Google service account key to the server as <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> and share the "IM Textbook Project" folder with that account. Articles appear after the first sync.</div>`;
   else if (!S.specs.length) html += `<div class="notice">${st.syncing ? 'Loading the textbook from Google Drive. This takes a minute or two the first time; refresh shortly.' : `No articles yet.${st.lastError ? ' Last sync error: ' + esc(st.lastError) : ''}`}</div>`;
   html += `<div class="spec-list">${S.specs.map(s => {
-    const r = s.articles.filter(a => S.read.has(a.id)).length;
-    return `<a class="spec" href="${s.articles[0] ? artHref(s.articles[0].id) : '#/'}"><span class="n">${String(s.order).padStart(2, '0')}</span><span class="t">${esc(s.specialty)}</span><span class="c">${s.articles.length} topics</span><span class="bar"><span style="width:${s.articles.length ? r / s.articles.length * 100 : 0}%"></span></span></a>`;
+    // Placeholder articles (not written yet) are listed in the tree but not counted.
+    const written = s.articles.filter(a => !a.stub);
+    const r = written.filter(a => S.read.has(a.id)).length;
+    return `<a class="spec" href="${s.articles[0] ? artHref(s.articles[0].id) : '#/'}"><span class="n">${String(s.order).padStart(2, '0')}</span><span class="t">${esc(s.specialty)}</span><span class="c">${written.length} topics</span><span class="bar"><span style="width:${written.length ? r / written.length * 100 : 0}%"></span></span></a>`;
   }).join('')}</div></div>`;
   $('page').innerHTML = html;
   renderTree();
