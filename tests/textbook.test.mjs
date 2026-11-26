@@ -109,3 +109,54 @@ test('documents cached by the previous parser still load', () => {
   assert.equal(tb.article('old/a').title, 'A');
   assert.equal(tb.search('gamma').results.length, 1);
 });
+
+// Restructured docs: Title chapter, H1 section, H2 subsection, H3 article + tag line.
+test('tagged articles: groups, depth, placeholders and cross-references', () => {
+  const p = (text, style) => ({ paragraph: { elements: [{ textRun: { content: text + '\n' } }], paragraphStyle: { namedStyleType: style } } });
+  const rows = [
+    ['TITLE', '08 Hematology'],
+    ['HEADING_1', 'Red Cell Disorders'],
+    ['HEADING_2', 'Approach'],
+    ['HEADING_3', 'Approach to Hemolysis'], ['NORMAL_TEXT', 'HEM-009 · Diagnostic'],
+    ['HEADING_4', 'Key points'], ['NORMAL_TEXT', 'Check LDH, haptoglobin and bilirubin; consider PNH [HEM-027] and unknown [HEM-999].'],
+    ['HEADING_5', 'Immune'], ['NORMAL_TEXT', 'Direct antiglobulin test first in every patient with hemolysis.'],
+    ['HEADING_2', 'Hemolytic Anemias'],
+    ['HEADING_3', 'Paroxysmal Nocturnal Hemoglobinuria (PNH)'], ['NORMAL_TEXT', 'HEM-027 · Pathology'],
+    ['HEADING_4', 'Key points'], ['NORMAL_TEXT', 'Complement-mediated intravascular hemolysis with thrombosis; flow cytometry confirms the diagnosis.'],
+    ['HEADING_3', 'Paroxysmal Cold Hemoglobinuria'], ['NORMAL_TEXT', 'HEM-025 · Pathology'],
+    ['HEADING_4', 'Key points'], ['NORMAL_TEXT', 'To be written.'],
+    ['HEADING_1', 'Transfusion Medicine'],
+    ['HEADING_3', 'Transfusion Reactions'], ['NORMAL_TEXT', 'HEM-130 · Pathology + Diagnostic'],
+    ['HEADING_4', 'Suspected acute reaction'], ['NORMAL_TEXT', 'Stop the transfusion, keep the line open with saline, and check the patient and product identity.']
+  ];
+  const d = parseDocument({ title: '08 Hematology', body: { content: rows.map(([s, t]) => p(t, s)) } }, { id: 'v2', name: '08 Hematology', modifiedTime: 't' });
+  assert.deepEqual(titles(d), [
+    'overview:Red Cell Disorders', 'overview:Approach', 'topic:Approach to Hemolysis', 'overview:Hemolytic Anemias',
+    'topic:Paroxysmal Nocturnal Hemoglobinuria (PNH)', 'topic:Paroxysmal Cold Hemoglobinuria', 'overview:Transfusion Medicine', 'topic:Transfusion Reactions'
+  ]);
+  const hem = d.articles.find(a => a.code === 'HEM-009');
+  assert.equal(hem.id, 'hem-009');
+  assert.equal(hem.type, 'Diagnostic');
+  assert.deepEqual(hem.path, ['Red Cell Disorders', 'Approach']);
+  assert.equal(hem.parentId, 'hematology/approach');
+  assert.match(hem.html, /<h2 id="key-points">Key points<\/h2>/);
+  assert.match(hem.html, /<h3 id="immune">Immune<\/h3>/);
+  assert.ok(!/HEM-009 · Diagnostic/.test(hem.html), 'tag line is not rendered');
+  assert.equal(d.articles.find(a => a.code === 'HEM-025').stub, true);
+  assert.equal(d.articles.find(a => a.code === 'HEM-027').stub, false);
+  const tr = d.articles.find(a => a.code === 'HEM-130');
+  assert.equal(tr.type, 'Pathology + Diagnostic');
+  assert.deepEqual(tr.path, ['Transfusion Medicine']);
+  // Outline nests articles under their groups.
+  assert.equal(d.outline[0].title, 'Red Cell Disorders');
+  assert.equal(d.outline[0].items[0].items[0].code, 'HEM-009');
+
+  const tb = createTextbook({ log: { log() {}, error() {}, warn() {} } });
+  tb._load([d]);
+  const view = tb.article('hem-009');
+  assert.match(view.html, /<a class="xref" href="#\/a\/hem-027"[^>]*>\[HEM-027\]<\/a>/);
+  assert.match(view.html, /\[HEM-999\]/);
+  assert.ok(!/href="#\/a\/hem-999"/.test(view.html));
+  assert.equal(tb.search('paroxysmal nocturnal').topics[0].title, 'Paroxysmal Nocturnal Hemoglobinuria (PNH)');
+  assert.equal(tb.search('PNH').topics[0].title, 'Paroxysmal Nocturnal Hemoglobinuria (PNH)');
+});
